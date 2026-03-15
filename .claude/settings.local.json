@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:anara.com)",
+      "WebFetch(domain:localhost)",
+      "Bash(npm install:*)"
+    ]
+  }
+}
