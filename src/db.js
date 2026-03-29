@@ -17,6 +17,18 @@ db.version(3).stores({
   annotations: 'id, paperId, pageNum, createdAt',
 });
 
+db.version(4).stores({
+  chats: 'id, paperId, updatedAt',
+  folderHandles: 'id',
+  annotations: 'id, paperId, pageNum, createdAt',
+  paperTextCache: 'paperId, updatedAt',
+  ocrPages: 'id, paperId, pageNum, scale, updatedAt',
+});
+
+function makeOcrPageId(paperId, pageNum, scale) {
+  return `${paperId}:${pageNum}:${scale}`;
+}
+
 export async function loadAllChats() {
   return db.chats.orderBy('updatedAt').reverse().toArray();
 }
@@ -63,4 +75,35 @@ export async function deleteAnnotationsByPaperIds(paperIds) {
 
 export async function loadAllAnnotations() {
   return db.annotations.toArray();
+}
+
+export async function loadPaperTextCache(paperId) {
+  return db.paperTextCache.get(paperId);
+}
+
+export async function savePaperTextCache(entry) {
+  return db.paperTextCache.put(entry);
+}
+
+export async function deletePaperTextCache(paperId) {
+  return db.paperTextCache.delete(paperId);
+}
+
+export async function loadOcrPage({ paperId, pageNum, scale }) {
+  return db.ocrPages.get(makeOcrPageId(paperId, pageNum, scale));
+}
+
+export async function saveOcrPage(entry) {
+  return db.ocrPages.put({
+    ...entry,
+    id: makeOcrPageId(entry.paperId, entry.pageNum, entry.scale),
+  });
+}
+
+export async function deletePaperCachesByPaperIds(paperIds) {
+  if (!paperIds?.length) return;
+  await Promise.all([
+    db.paperTextCache.where('paperId').anyOf(paperIds).delete(),
+    db.ocrPages.where('paperId').anyOf(paperIds).delete(),
+  ]);
 }

@@ -3,7 +3,9 @@
     "allow": [
       "WebFetch(domain:anara.com)",
       "WebFetch(domain:localhost)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:platform.openai.com)"
     ]
   }
 }
