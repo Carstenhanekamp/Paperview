@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 const FONT_URL =
-  "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap";
+  "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Spectral:ital,wght@0,400;0,600;1,400&display=swap";
 
 const colors = {
   bg: "#f6f5f1",
@@ -12,6 +12,7 @@ const colors = {
   text3: "#8a867c",
   border: "#e8e4db",
   border2: "#d8d2c6",
+  accent: "#2563eb",
 };
 
 const s = {
@@ -73,10 +74,11 @@ const s = {
     marginBottom: 28,
   },
   h1: {
-    fontSize: "clamp(36px, 5vw, 58px)",
-    fontWeight: 800,
-    lineHeight: 1.1,
-    letterSpacing: "-1.5px",
+    fontFamily: "'Spectral', Georgia, serif",
+    fontSize: "clamp(38px, 5.5vw, 62px)",
+    fontWeight: 600,
+    lineHeight: 1.08,
+    letterSpacing: "-0.5px",
     color: colors.text,
     marginBottom: 20,
   },
@@ -176,8 +178,8 @@ const s = {
     fontWeight: 500,
   },
   mockupFileActive: {
-    background: "#e8f2ff",
-    color: "#0f4ea6",
+    background: "rgba(37,99,235,0.10)",
+    color: "#2563eb",
   },
   mockupPdf: {
     flex: 1,
@@ -246,8 +248,8 @@ const s = {
   },
   citChip: {
     display: "inline",
-    background: "#e8f2ff",
-    color: "#0f4ea6",
+    background: "rgba(37,99,235,0.10)",
+    color: "#2563eb",
     borderRadius: 4,
     padding: "1px 4px",
     fontSize: 10,
@@ -267,10 +269,11 @@ const s = {
     marginBottom: 12,
   },
   h2: {
+    fontFamily: "'Spectral', Georgia, serif",
     fontSize: "clamp(26px, 3.5vw, 38px)",
-    fontWeight: 800,
-    letterSpacing: "-0.8px",
-    lineHeight: 1.15,
+    fontWeight: 600,
+    letterSpacing: "-0.3px",
+    lineHeight: 1.12,
     marginBottom: 16,
   },
   sectionSub: {
