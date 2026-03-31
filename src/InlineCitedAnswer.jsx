@@ -18,6 +18,61 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
       .replace(/\s+/g, " ")
       .trim(), []);
 
+  const markerSegments = useMemo(() => {
+    const raw = String(text || "");
+    if (!/\[\d+\]/.test(raw)) return null;
+
+    const lines = raw.split("\n");
+    const out = [];
+
+    lines.forEach((line, lineIndex) => {
+      if (!line.length) {
+        out.push({ type: "br", id: `marker-br-${lineIndex}` });
+      } else {
+        const markerRegex = /\[(\d+)\]/g;
+        let lastIndex = 0;
+        let markerMatch = markerRegex.exec(line);
+        let partIndex = 0;
+
+        while (markerMatch) {
+          if (markerMatch.index > lastIndex) {
+            out.push({
+              type: "text",
+              id: `marker-text-${lineIndex}-${partIndex}`,
+              text: line.slice(lastIndex, markerMatch.index),
+            });
+            partIndex += 1;
+          }
+
+          out.push({
+            type: "marker",
+            id: `marker-${lineIndex}-${partIndex}`,
+            citationIndex: Number(markerMatch[1]) - 1,
+          });
+          partIndex += 1;
+          lastIndex = markerMatch.index + markerMatch[0].length;
+          markerMatch = markerRegex.exec(line);
+        }
+
+        if (lastIndex < line.length) {
+          out.push({
+            type: "text",
+            id: `marker-text-${lineIndex}-${partIndex}`,
+            text: line.slice(lastIndex),
+          });
+        }
+      }
+
+      if (lineIndex < lines.length - 1) {
+        out.push({ type: "br", id: `marker-newline-${lineIndex}` });
+      }
+    });
+
+    return out;
+  }, [text]);
+
+  const usesExplicitMarkers = Boolean(markerSegments);
+
   const segments = useMemo(() => {
     const lines = String(text || "").split("\n");
     const out = [];
@@ -38,6 +93,8 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
   }, [text]);
 
   const placement = useMemo(() => {
+    if (usesExplicitMarkers) return new Map();
+
     const sentenceIdxs = [];
     const sentenceNorm = [];
     segments.forEach((seg, idx) => {
@@ -89,7 +146,7 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
     });
 
     return map;
-  }, [segments, citations, normalize]);
+  }, [usesExplicitMarkers, segments, citations, normalize]);
 
   useEffect(() => () => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -123,8 +180,8 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
     }
 
     const updatePopoverPosition = () => {
-      const wrap = citationWrapRefs.current.get(hoveredCitation);
-      const panel = wrap?.closest(".chat-panel");
+      const wrap = citationWrapRefs.current.get(hoveredCitation.anchorKey);
+      const panel = wrap?.closest(".citation-popover-boundary") || wrap?.closest(".chat-panel");
       if (!wrap || !panel) {
         setPopoverStyle(null);
         return;
@@ -149,9 +206,9 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
     return () => window.removeEventListener("resize", updatePopoverPosition);
   }, [hoveredCitation]);
 
-  const showPopover = (ci) => {
+  const showPopover = (anchorKey, citationIndex) => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-    setHoveredCitation(ci);
+    setHoveredCitation({ anchorKey, citationIndex });
   };
 
   const scheduleHide = () => {
@@ -166,65 +223,102 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
     );
   };
 
+  const renderCitationAnchor = (ci, key) => {
+    const c = citations[ci];
+    if (!c) return null;
+    const anchorKey = `anchor-${key}`;
+
+    const isWebCitation = c?.kind === "web" || Boolean(c?.url);
+    const title = isWebCitation
+      ? `Source ${ci + 1}`
+      : `Source ${ci + 1}${c?.page ? `, page ${c.page}` : ""}`;
+
+    return (
+      <span
+        key={key}
+        className="inline-cit-wrap"
+        ref={(node) => {
+          if (node) citationWrapRefs.current.set(anchorKey, node);
+          else citationWrapRefs.current.delete(anchorKey);
+        }}
+        onMouseEnter={() => showPopover(anchorKey, ci)}
+        onMouseLeave={scheduleHide}
+      >
+        <button
+          className={`inline-cit-anchor${hoveredCitation?.anchorKey === anchorKey ? " active" : ""}`}
+          type="button"
+          aria-label={`Show citation ${ci + 1}`}
+          aria-expanded={hoveredCitation?.anchorKey === anchorKey}
+          aria-haspopup="dialog"
+          title={title}
+          onMouseEnter={() => showPopover(anchorKey, ci)}
+          onClick={() => setHoveredCitation((prev) => (prev?.anchorKey === anchorKey ? null : { anchorKey, citationIndex: ci }))}
+        >
+          <span className="inline-cit-anchor-index">{ci + 1}</span>
+        </button>
+        {hoveredCitation?.anchorKey === anchorKey && (
+          <div
+            className="inline-cit-popover"
+            style={popoverStyle || undefined}
+            onMouseEnter={() => showPopover(anchorKey, ci)}
+            onMouseLeave={scheduleHide}
+          >
+            <div
+              className="source-card"
+              role="button"
+              tabIndex={0}
+              onClick={() => onCitationClick?.(c)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onCitationClick?.(c);
+                }
+              }}
+            >
+              <div className="source-card-top">
+                <IFile size={12} style={{ color: "#6f7786", flexShrink: 0 }} />
+                <span className="source-card-file">{c.title || c.fileName || fileName || `Source ${ci + 1}`}</span>
+                {isWebCitation ? (
+                  <span className="source-card-page">{c.source || "Web"}</span>
+                ) : c.page ? (
+                  <span className="source-card-page">p.{c.page}</span>
+                ) : null}
+                <span className="source-card-jump">{isWebCitation ? "Open" : "Jump"}</span>
+              </div>
+              {c.section ? <div className="source-card-section">{c.section}</div> : null}
+              {c.note ? <div className="source-card-note">{c.note}</div> : null}
+              {c.text ? (
+                <div className="source-card-text">
+                  {isWebCitation ? c.text : `"${c.text}"`}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </span>
+    );
+  };
+
   return (
     <>
-      {segments.map((seg, idx) => {
-        if (seg.type === "br") return <br key={seg.id} />;
-        const attached = placement.get(idx) || [];
-        return (
-          <React.Fragment key={seg.id}>
-            {renderRich(seg.text, seg.id)}
-            {attached.map((ci) => {
-              const c = citations[ci];
-              if (!c) return null;
-              return (
-                <span
-                  key={`cit-${seg.id}-${ci}`}
-                  className="inline-cit-wrap"
-                  ref={(node) => {
-                    if (node) citationWrapRefs.current.set(ci, node);
-                    else citationWrapRefs.current.delete(ci);
-                  }}
-                  onMouseEnter={() => showPopover(ci)}
-                  onMouseLeave={scheduleHide}
-                >
-                  <button
-                    className={`inline-cit-anchor${hoveredCitation === ci ? " active" : ""}`}
-                    type="button"
-                    aria-label={`Show citation ${ci + 1}`}
-                    aria-expanded={hoveredCitation === ci}
-                    aria-haspopup="dialog"
-                    title={`Source ${ci + 1}${c?.page ? `, page ${c.page}` : ""}`}
-                    onMouseEnter={() => showPopover(ci)}
-                    onClick={() => setHoveredCitation((prev) => (prev === ci ? null : ci))}
-                  >
-                    <span className="inline-cit-anchor-index">{ci + 1}</span>
-                  </button>
-                  {hoveredCitation === ci && (
-                    <div
-                      className="inline-cit-popover"
-                      style={popoverStyle || undefined}
-                      onMouseEnter={() => showPopover(ci)}
-                      onMouseLeave={scheduleHide}
-                    >
-                      <div className="source-card" onClick={() => onCitationClick?.(c)}>
-                        <div className="source-card-top">
-                          <IFile size={12} style={{ color: "#6f7786", flexShrink: 0 }} />
-                          <span className="source-card-file">{c.fileName || fileName}</span>
-                          <span className="source-card-page">p.{c.page}</span>
-                          <span className="source-card-jump">Jump</span>
-                        </div>
-                        {c.section && <div className="source-card-section">{c.section}</div>}
-                        <div className="source-card-text">"{c.text}"</div>
-                      </div>
-                    </div>
-                  )}
-                </span>
-              );
-            })}
-          </React.Fragment>
-        );
-      })}
+      {usesExplicitMarkers
+        ? markerSegments.map((seg) => {
+            if (seg.type === "br") return <br key={seg.id} />;
+            if (seg.type === "marker") {
+              return renderCitationAnchor(seg.citationIndex, seg.id);
+            }
+            return <React.Fragment key={seg.id}>{renderRich(seg.text, seg.id)}</React.Fragment>;
+          })
+        : segments.map((seg, idx) => {
+            if (seg.type === "br") return <br key={seg.id} />;
+            const attached = placement.get(idx) || [];
+            return (
+              <React.Fragment key={seg.id}>
+                {renderRich(seg.text, seg.id)}
+                {attached.map((ci) => renderCitationAnchor(ci, `cit-${seg.id}-${ci}`))}
+              </React.Fragment>
+            );
+          })}
     </>
   );
 }

@@ -10,6 +10,16 @@ export function createChatThreadRecord(paperId) {
   };
 }
 
+export function createAgentChatThreadRecord(rootFolderId) {
+  return {
+    id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    rootFolderId,
+    title: CHAT_TITLE_FALLBACK,
+    messages: [],
+    updatedAt: Date.now(),
+  };
+}
+
 export function deriveChatTitle(text) {
   const cleaned = String(text || "").replace(/\s+/g, " ").trim();
   if (!cleaned) return CHAT_TITLE_FALLBACK;

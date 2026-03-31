@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   loadAllChats,
+  loadAllAgentChats,
   saveChat,
+  saveAgentChat,
   deleteChat,
+  deleteAgentChat,
   deleteChatsByPaperIds,
   saveFolderHandle,
   loadFolderHandles,
@@ -18,7 +21,7 @@ import {
 import { extractPdfText, terminateTesseractWorkerNow } from './pdfUtils';
 import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, ICopy, IZoomIn, IZoomOut, IPanel, IGrid, IChat, IMore, ILeft, IRight, ISpark, IPaperclip, IChevronDown, IArrowUp, IArrowDown, IChevronLeftDouble, IChevronRightDouble, ITrash, IGear, IHighlight, INotes } from './icons';
 import { CSS } from './styles';
-import { CHAT_TITLE_FALLBACK, createChatThreadRecord, deriveChatTitle, formatChatTimestamp, formatChatMessageCount, derivePageTexts } from './chatUtils';
+import { CHAT_TITLE_FALLBACK, createAgentChatThreadRecord, createChatThreadRecord, deriveChatTitle, formatChatTimestamp, formatChatMessageCount, derivePageTexts } from './chatUtils';
 import TextFallback from './TextFallback';
 import InlineCitedAnswer from './InlineCitedAnswer';
 import PdfViewer from './PdfViewer';
@@ -31,6 +34,30 @@ const OPENAI_MODELS = (import.meta.env.VITE_OPENAI_MODELS || "gpt-5.4-nano,gpt-5
   .split(",")
   .map((m) => m.trim())
   .filter(Boolean);
+
+const AGENT_IMPORTS_FOLDER_NAME = "Imported Papers";
+const AGENT_WEB_SEARCH_DOMAINS = [
+  "arxiv.org",
+  "biorxiv.org",
+  "doi.org",
+  "europepmc.org",
+  "frontiersin.org",
+  "jamanetwork.com",
+  "link.springer.com",
+  "medrxiv.org",
+  "nature.com",
+  "nejm.org",
+  "onlinelibrary.wiley.com",
+  "openalex.org",
+  "paperswithcode.com",
+  "pmc.ncbi.nlm.nih.gov",
+  "proceedings.mlr.press",
+  "pubmed.ncbi.nlm.nih.gov",
+  "sciencedirect.com",
+  "science.org",
+  "semanticscholar.org",
+  "thelancet.com",
+];
 
 const CHAT_SYSTEM_PROMPT = `You are an expert research assistant analyzing one or more academic PDFs.
 
@@ -78,7 +105,7 @@ Respond ONLY with a raw JSON object (no markdown fences, no extra text) using th
 const SEARCH_DOCUMENT_TOOL = {
   type: "function",
   name: "search_document",
-  description: "Search the currently selected academic PDFs for passages relevant to a query before answering.",
+  description: "Search the currently available local or hydrated remote academic PDFs for passages relevant to a query before answering.",
   parameters: {
     type: "object",
     properties: {
@@ -101,10 +128,126 @@ const SEARCH_DOCUMENT_TOOL = {
   strict: true,
 };
 
+const FETCH_REMOTE_PAPER_TOOL = {
+  type: "function",
+  name: "fetch_remote_paper",
+  description: "Fetch and hydrate a remote paper PDF into a transient searchable document for this Agent thread. Use this before citing a found paper when a direct PDF URL is available.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "Paper title.",
+      },
+      source_url: {
+        type: "string",
+        description: "Landing or source URL for the paper.",
+      },
+      pdf_url: {
+        type: "string",
+        description: "Direct PDF URL for the paper.",
+      },
+      doi: {
+        type: "string",
+        description: "Optional DOI if known.",
+      },
+    },
+    required: ["title", "source_url", "pdf_url", "doi"],
+    additionalProperties: false,
+  },
+  strict: true,
+};
+
+const AGENT_WEB_SEARCH_TOOL = {
+  type: "web_search",
+  filters: {
+    allowed_domains: AGENT_WEB_SEARCH_DOMAINS,
+  },
+  external_web_access: true,
+};
+
+const AGENT_SYSTEM_PROMPT = `You are Paperview Agent, a research assistant that helps users discover papers online and connect them with papers already stored in Paperview.
+
+## Available tools
+- You can use the built-in web_search tool to find papers and recent research sources online.
+- You can use the fetch_remote_paper tool to hydrate a discovered paper PDF into a transient searchable document for this thread.
+- You can use the search_document tool to search locally attached PDFs and hydrated remote PDFs from the user's workspace.
+
+## Core behavior
+- Use web_search whenever the user asks to find papers, discover literature, compare external work, or answer questions that need current web information.
+- Use fetch_remote_paper for a found paper before relying on it in the answer when a direct PDF URL is available.
+- Use search_document when the user explicitly attached local PDFs or when local workspace papers are relevant to the question.
+- You may combine both tools in the same answer.
+- Never invent papers, URLs, DOIs, authors, years, or PDFs.
+- If a direct PDF URL is unavailable, leave it empty instead of guessing.
+
+## Response format
+Respond ONLY with a raw JSON object using this schema:
+{
+  "answer": "Markdown answer with inline citation markers like [1] or [2].",
+  "citations": [
+    {
+      "kind": "web" | "local",
+      "title": "source title",
+      "url": "https://example.com",
+      "pdf_url": "https://example.com/paper.pdf",
+      "source": "journal, website, or publisher",
+      "file": "exact local document name when kind is local",
+      "page": 1,
+      "section": "section name",
+      "text": "verbatim local quote or short supporting snippet",
+      "note": "optional short explanation"
+    }
+  ],
+  "paper_results": [
+    {
+      "title": "paper title",
+      "authors": ["Author One", "Author Two"],
+      "year": 2025,
+      "venue": "journal or conference",
+      "abstract": "short abstract or summary snippet",
+      "source_url": "https://landing-page",
+      "pdf_url": "https://direct-pdf-link",
+      "doi": "10.xxxx/xxxxx"
+    }
+  ]
+}
+
+## Citation rules
+- Every substantive claim in "answer" must include at least one marker like [1].
+- Citation markers must map to the 1-based index of the item in the citations array.
+- For web citations, include a real URL and title.
+- For web citations grounded in a fetched PDF, include the page number and short supporting snippet from that paper.
+- For local citations, include the exact local file name and the best page number you can support.
+- Prefer 2-8 citations total. Reuse citation numbers instead of duplicating the same source.
+
+## Paper result rules
+- Return up to 6 highly relevant papers when the user is searching for papers.
+- Include paper_results only when the user is looking for papers or when discovered papers materially help the answer.
+- Use empty strings or empty arrays for unknown fields; do not fabricate.
+- Prefer direct PDF links in pdf_url only when you are confident the URL points to a PDF.
+- Include a one-sentence summary in abstract or summary form so the client can render a short subtitle.
+
+## Answer style
+- Be concise but useful.
+- When local PDFs were attached, explicitly connect external findings back to the local workspace where relevant.
+- When a found paper has a usable PDF URL and you want to rely on it, fetch it and search it before citing it.`;
+
 const MAX_SEARCH_TOOL_ROUNDS = 20;
+const MAX_AGENT_RESEARCH_PASSES = 3;
+const TARGET_FOUND_SOURCES = 24;
+const MAX_FOUND_SOURCES_SHOWN = 8;
 
 function createChatMessageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function makeStableId(prefix, path) {
+  let h = 0;
+  for (let i = 0; i < path.length; i += 1) {
+    h = ((h << 5) - h + path.charCodeAt(i)) | 0;
+  }
+  return `${prefix}-${(h >>> 0).toString(36)}`;
 }
 
 function hasExtractedPaperText(paper) {
@@ -130,8 +273,279 @@ function setStoredApiKey(key) {
   try { localStorage.setItem('pv-api-key', key); } catch { /* ignore */ }
 }
 
+function stripPdfExtension(name) {
+  return String(name || "").replace(/\.pdf$/i, "");
+}
+
+function sanitizeFileStem(value) {
+  const cleaned = String(value || "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "");
+  return cleaned || "Imported paper";
+}
+
+function ensurePdfFileName(value) {
+  const stem = sanitizeFileStem(stripPdfExtension(value));
+  return `${stem}.pdf`;
+}
+
+function buildFolderPath(rootName, relativePath = "") {
+  const normalizedRelative = String(relativePath || "")
+    .split("/")
+    .filter(Boolean)
+    .join("/");
+  return normalizedRelative ? `/${rootName}/${normalizedRelative}` : `/${rootName}`;
+}
+
+function getRootFolderNameFromPath(folderPath) {
+  return String(folderPath || "").split("/").filter(Boolean)[0] || "";
+}
+
+function isPdfUrl(url) {
+  return /\.pdf(?:[?#].*)?$/i.test(String(url || ""));
+}
+
+function normalizeAgentSourceUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  return `https://${value}`;
+}
+
+function getUrlHost(url) {
+  try {
+    return new URL(normalizeAgentSourceUrl(url)).hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
+
+function buildAgentImportKey(messageId, result) {
+  return `${messageId}:${result?.id || result?.sourceUrl || result?.title || "result"}`;
+}
+
 function normalizeLookupValue(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function summarizeToWordLimit(value, maxWords = 20) {
+  const words = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  if (!words.length) return "";
+  return words.slice(0, maxWords).join(" ");
+}
+
+function formatSourceAuthors(authors) {
+  if (!Array.isArray(authors) || !authors.length) return "";
+  if (authors.length <= 4) return authors.join(", ");
+  return `${authors.slice(0, 4).join(", ")}, and ${authors.length - 4} more`;
+}
+
+function buildRemotePaperKey(value) {
+  const doi = normalizeLookupValue(value?.doi);
+  if (doi) return `doi:${doi}`;
+  const pdfUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.pdfUrl || value?.pdf_url || ""));
+  if (pdfUrl) return `pdf:${pdfUrl}`;
+  const sourceUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.sourceUrl || value?.source_url || value?.url || ""));
+  if (sourceUrl) return `src:${sourceUrl}`;
+  const title = normalizeLookupValue(value?.title);
+  return title ? `title:${title}` : "";
+}
+
+function getFoundSourceDedupeKey(value) {
+  const doi = normalizeLookupValue(value?.doi);
+  if (doi) return `doi:${doi}`;
+  const pdfUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.pdfUrl || ""));
+  if (pdfUrl) return `pdf:${pdfUrl}`;
+  const sourceUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.sourceUrl || ""));
+  if (sourceUrl) return `src:${sourceUrl}`;
+  const title = normalizeLookupValue(value?.title);
+  return title ? `title:${title}` : "";
+}
+
+function isScholarlyHost(host) {
+  const normalizedHost = normalizeLookupValue(host);
+  if (!normalizedHost) return false;
+  return AGENT_WEB_SEARCH_DOMAINS.some((domain) => (
+    normalizedHost === domain || normalizedHost.endsWith(`.${domain}`)
+  ));
+}
+
+function buildFoundSources({ paperResults = [], webSources = [], remotePapers = [] }) {
+  const candidates = [];
+  const remoteByKey = new Map(
+    remotePapers.map((paper) => [buildRemotePaperKey(paper), paper]).filter(([key]) => key)
+  );
+
+  paperResults.forEach((result, index) => {
+    const sourceUrl = normalizeAgentSourceUrl(result?.sourceUrl || result?.source_url || result?.url || "");
+    const pdfUrl = normalizeAgentSourceUrl(result?.pdfUrl || result?.pdf_url || "");
+    const key = buildRemotePaperKey({
+      title: result?.title,
+      sourceUrl,
+      pdfUrl,
+      doi: result?.doi,
+    });
+    const remotePaper = key ? remoteByKey.get(key) : null;
+    candidates.push({
+      id: result?.id || `found-source-model-${index}`,
+      title: String(result?.title || "").trim(),
+      authors: Array.isArray(result?.authors) ? result.authors.filter(Boolean) : [],
+      year: String(result?.year || "").trim(),
+      venue: String(result?.venue || "").trim(),
+      summary: summarizeToWordLimit(result?.summary || result?.abstract || ""),
+      sourceUrl,
+      pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
+      doi: String(result?.doi || "").trim(),
+      sourceHost: getUrlHost(sourceUrl || pdfUrl),
+      remotePaperId: remotePaper?.id || null,
+      hydrationStatus: remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
+      hasPdf: Boolean(pdfUrl),
+      modelRank: index,
+      sourceRank: Number.POSITIVE_INFINITY,
+    });
+  });
+
+  webSources.forEach((source, index) => {
+    const sourceUrl = normalizeAgentSourceUrl(source?.url || source?.site || "");
+    const pdfUrl = normalizeAgentSourceUrl(source?.pdf_url || source?.pdfUrl || "");
+    const key = buildRemotePaperKey({
+      title: source?.title,
+      sourceUrl,
+      pdfUrl,
+      doi: source?.doi,
+    });
+    const remotePaper = key ? remoteByKey.get(key) : null;
+    candidates.push({
+      id: `found-source-web-${index}`,
+      title: String(source?.title || "").trim(),
+      authors: [],
+      year: "",
+      venue: "",
+      summary: summarizeToWordLimit(source?.summary || source?.snippet || source?.description || ""),
+      sourceUrl,
+      pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
+      doi: String(source?.doi || "").trim(),
+      sourceHost: getUrlHost(sourceUrl || pdfUrl),
+      remotePaperId: remotePaper?.id || null,
+      hydrationStatus: remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
+      hasPdf: Boolean(pdfUrl),
+      modelRank: Number.POSITIVE_INFINITY,
+      sourceRank: index,
+    });
+  });
+
+  const deduped = [];
+  const seen = new Set();
+  candidates.forEach((candidate) => {
+    const key = getFoundSourceDedupeKey(candidate);
+    if (!candidate.title && !candidate.sourceUrl) return;
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    deduped.push(candidate);
+  });
+
+  deduped.sort((a, b) => {
+    if (a.modelRank !== b.modelRank) return a.modelRank - b.modelRank;
+    const aScore = (a.hasPdf ? 4 : 0) + (a.doi ? 3 : 0) + (a.venue ? 2 : 0) + (a.year ? 1 : 0) + (isScholarlyHost(a.sourceHost) ? 2 : 0);
+    const bScore = (b.hasPdf ? 4 : 0) + (b.doi ? 3 : 0) + (b.venue ? 2 : 0) + (b.year ? 1 : 0) + (isScholarlyHost(b.sourceHost) ? 2 : 0);
+    if (aScore !== bScore) return bScore - aScore;
+    if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
+
+  return {
+    total: deduped.length,
+    shown: deduped.slice(0, MAX_FOUND_SOURCES_SHOWN),
+    all: deduped,
+  };
+}
+
+function normalizeFoundSourceRecord(source, index = 0, remotePapers = []) {
+  const sourceUrl = normalizeAgentSourceUrl(source?.sourceUrl || source?.source_url || source?.url || "");
+  const pdfUrl = normalizeAgentSourceUrl(source?.pdfUrl || source?.pdf_url || "");
+  const remoteKey = buildRemotePaperKey({
+    title: source?.title,
+    sourceUrl,
+    pdfUrl,
+    doi: source?.doi,
+  });
+  const remotePaper = remoteKey
+    ? remotePapers.find((paper) => buildRemotePaperKey(paper) === remoteKey) || null
+    : null;
+
+  return {
+    id: source?.id || `found-source-${index}`,
+    title: String(source?.title || "").trim(),
+    authors: Array.isArray(source?.authors) ? source.authors.filter(Boolean) : [],
+    year: String(source?.year || "").trim(),
+    venue: String(source?.venue || "").trim(),
+    summary: summarizeToWordLimit(source?.summary || source?.abstract || source?.snippet || ""),
+    sourceUrl,
+    pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
+    doi: String(source?.doi || "").trim(),
+    sourceHost: String(source?.sourceHost || getUrlHost(sourceUrl || pdfUrl)).trim(),
+    remotePaperId: source?.remotePaperId || remotePaper?.id || null,
+    hydrationStatus: source?.hydrationStatus || remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
+    hasPdf: Boolean(source?.hasPdf || pdfUrl),
+  };
+}
+
+function getMessageFoundSources(message, remotePapers = []) {
+  if (Array.isArray(message?.foundSources) && message.foundSources.length) {
+    const normalized = message.foundSources
+      .map((source, index) => normalizeFoundSourceRecord(source, index, remotePapers))
+      .filter((source) => source.title || source.sourceUrl);
+    const shownCount = Number.isFinite(message?.foundSourcesShown)
+      ? Math.max(0, Math.min(normalized.length, Number(message.foundSourcesShown)))
+      : Math.min(normalized.length, MAX_FOUND_SOURCES_SHOWN);
+    return {
+      total: Number.isFinite(message?.foundSourcesTotal) ? Number(message.foundSourcesTotal) : normalized.length,
+      shown: normalized.slice(0, shownCount),
+      all: normalized,
+    };
+  }
+
+  const citationWebSources = Array.isArray(message?.citations)
+    ? message.citations
+        .filter((citation) => citation?.kind === "web" || citation?.url)
+        .map((citation) => ({
+          title: citation?.title || citation?.source || "",
+          url: citation?.url || "",
+          pdf_url: citation?.pdfUrl || citation?.pdf_url || "",
+          summary: citation?.note || citation?.text || "",
+        }))
+    : [];
+
+  return buildFoundSources({
+    paperResults: message?.paperResults || [],
+    webSources: citationWebSources,
+    remotePapers,
+  });
+}
+
+function findMatchingRemotePaper(remotePapers, descriptor) {
+  if (!Array.isArray(remotePapers) || !remotePapers.length) return null;
+  const remoteKey = buildRemotePaperKey(descriptor);
+  if (remoteKey) {
+    const exact = remotePapers.find((paper) => buildRemotePaperKey(paper) === remoteKey);
+    if (exact) return exact;
+  }
+  const targetId = String(descriptor?.remotePaperId || "").trim();
+  if (targetId) {
+    const byId = remotePapers.find((paper) => paper.id === targetId);
+    if (byId) return byId;
+  }
+  const title = normalizeLookupValue(descriptor?.title);
+  if (title) {
+    return remotePapers.find((paper) => normalizeLookupValue(paper?.title || paper?.name) === title) || null;
+  }
+  return null;
 }
 
 function findPaperByName(papers, requestedName) {
@@ -187,6 +601,18 @@ function formatSearchToolResult(paper, query, passages) {
     "Retrieved passages:",
     ...passages.map(({ page, text }) => `--- Page ${page} ---\n${text}`),
   ].join("\n\n");
+}
+
+function extractWebSearchSources(data) {
+  const sources = [];
+  for (const item of data?.output || []) {
+    if (item?.type !== "web_search_call") continue;
+    const nextSources = item?.action?.sources;
+    if (Array.isArray(nextSources)) {
+      sources.push(...nextSources);
+    }
+  }
+  return sources;
 }
 
 function extractReasoningSummary(data) {
@@ -287,12 +713,20 @@ export default function PaperviewApp() {
   const [openTabs, setOpenTabs] = useState([]);
   const [activeTabId, setActiveTabId] = useState(null);
   const [chatThreads, setChatThreads] = useState([]);
+  const [agentThreads, setAgentThreads] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
+  const [activeAgentChatId, setActiveAgentChatId] = useState(null);
   const [input, setInput] = useState("");
+  const [agentInput, setAgentInput] = useState("");
   const [chatLoadingState, setChatLoadingState] = useState(null);
+  const [agentLoadingState, setAgentLoadingState] = useState(null);
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const thinkingStepsRef = React.useRef([]);
+  const [agentThinkingSteps, setAgentThinkingSteps] = useState([]);
+  const agentThinkingStepsRef = React.useRef([]);
+  const [agentRemotePapersByThread, setAgentRemotePapersByThread] = useState({});
   const [thinkingExpanded, setThinkingExpanded] = useState({});
+  const [agentThinkingExpanded, setAgentThinkingExpanded] = useState({});
   const [paperScanStates, setPaperScanStates] = useState({});
   const [popup, setPopup] = useState(null);
   const [chip, setChip] = useState(null);
@@ -314,7 +748,15 @@ export default function PaperviewApp() {
   const [selectedModel, setSelectedModel] = useState(OPENAI_MODEL);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [agentAttachMenuOpen, setAgentAttachMenuOpen] = useState(false);
+  const [agentToolMenuOpen, setAgentToolMenuOpen] = useState(false);
+  const [selectedAgentToolId, setSelectedAgentToolId] = useState(null);
   const [selectedChatPaperIds, setSelectedChatPaperIds] = useState([]);
+  const [selectedAgentPaperIds, setSelectedAgentPaperIds] = useState([]);
+  const [agentImportStates, setAgentImportStates] = useState({});
+  const [agentPreviewState, setAgentPreviewState] = useState(null);
+  const [agentPreviewScale, setAgentPreviewScale] = useState(1.05);
+  const [agentPreviewPage, setAgentPreviewPage] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
   const [viewerSearchOpen, setViewerSearchOpen] = useState(false);
   const [viewerSearchQuery, setViewerSearchQuery] = useState("");
@@ -344,10 +786,15 @@ export default function PaperviewApp() {
 
   const endRef = useRef(null);
   const taRef = useRef(null);
+  const agentEndRef = useRef(null);
+  const agentTaRef = useRef(null);
+  const agentPreviewScrollFnRef = useRef(null);
   const fileRef = useRef(null);
   const scrollFnRef = useRef(null);
   const modelMenuRef = useRef(null);
   const attachMenuRef = useRef(null);
+  const agentAttachMenuRef = useRef(null);
+  const agentToolMenuRef = useRef(null);
   const viewerSearchInputRef = useRef(null);
   const chatResizeRef = useRef({ active: false, startX: 0, startWidth: 480 });
   const sbResizeRef = useRef({ active: false, startX: 0, startWidth: 260 });
@@ -355,6 +802,8 @@ export default function PaperviewApp() {
   const folderHandlesMapRef = useRef(new Map()); // folderId → root FileSystemDirectoryHandle
   const foldersRef = useRef([]);
   const chatThreadsRef = useRef([]);
+  const agentThreadsRef = useRef([]);
+  const agentRemotePaperJobsRef = useRef(new Map());
   const paperTextJobsRef = useRef(new Map());
 
   useEffect(() => {
@@ -364,10 +813,18 @@ export default function PaperviewApp() {
         setActiveChatId(saved[0]?.id || null);
       }
     }).catch(() => {});
+
+    loadAllAgentChats().then((saved) => {
+      if (saved.length) {
+        setAgentThreads(saved);
+        setActiveAgentChatId(saved[0]?.id || null);
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => { foldersRef.current = folders; }, [folders]);
   useEffect(() => { chatThreadsRef.current = chatThreads; }, [chatThreads]);
+  useEffect(() => { agentThreadsRef.current = agentThreads; }, [agentThreads]);
   useEffect(() => () => { terminateTesseractWorkerNow().catch(() => {}); }, []);
 
   // Restore previously opened folders from IndexedDB (runs after scanDirHandle is defined)
@@ -413,6 +870,7 @@ export default function PaperviewApp() {
   }, []);
 
   const activePaper = openTabs.find((t) => t.id === activeTabId) || null;
+  const selectedFolder = folders.find((f) => f.id === selectedFolderId) || null;
 
   // Load annotations for active paper
   useEffect(() => {
@@ -422,10 +880,22 @@ export default function PaperviewApp() {
 
   const activeFolder =
     folders.find((f) => f.papers.some((p) => p.id === activeTabId)) ||
-    folders.find((f) => f.id === selectedFolderId) ||
+    selectedFolder ||
     null;
   const activeFolderPapers = activeFolder?.papers || [];
   const totalPaperCount = folders.reduce((sum, folder) => sum + folder.papers.length, 0);
+  const selectedRootFolderId = selectedFolder?.rootFolderId || null;
+  const selectedRootFolder = folders.find((folder) => folder.id === selectedRootFolderId) || null;
+  const hasWritableAgentContext = Boolean(selectedRootFolder?.directoryHandle && selectedRootFolder?.rootHandle);
+  const agentWorkspacePapers = useMemo(
+    () =>
+      selectedRootFolderId
+        ? folders
+            .filter((folder) => folder.rootFolderId === selectedRootFolderId)
+            .flatMap((folder) => folder.papers.map((paper) => ({ ...paper, folderId: folder.id })))
+        : [],
+    [folders, selectedRootFolderId]
+  );
   const searchablePageTexts = useMemo(() => derivePageTexts(activePaper), [activePaper]);
   const activePaperTotalPages = Math.max(1, Number(activePaper?.pages) || searchablePageTexts.length || 1);
   const activePaperScanState = activePaper?.id ? paperScanStates[activePaper.id] : null;
@@ -442,19 +912,43 @@ export default function PaperviewApp() {
     () => chatThreads.find((thread) => thread.id === activeChatId) || null,
     [chatThreads, activeChatId]
   );
+  const activeAgentChat = useMemo(
+    () => agentThreads.find((thread) => thread.id === activeAgentChatId && thread.rootFolderId === selectedRootFolderId) || null,
+    [agentThreads, activeAgentChatId, selectedRootFolderId]
+  );
+  const activeAgentRemotePapers = useMemo(
+    () => agentRemotePapersByThread[activeAgentChatId] || [],
+    [agentRemotePapersByThread, activeAgentChatId]
+  );
+  const activeAgentPreviewPaper = useMemo(
+    () => activeAgentRemotePapers.find((paper) => paper.id === agentPreviewState?.paperId) || null,
+    [activeAgentRemotePapers, agentPreviewState?.paperId]
+  );
+  const hasAgentPreview = Boolean(agentPreviewState && activeAgentPreviewPaper?.pdfBytes?.length);
   const currentMessages = activeChat?.messages || [];
+  const currentAgentMessages = activeAgentChat?.messages || [];
   const activePaperThreads = useMemo(() => {
     if (!activePaper?.id) return [];
     return chatThreads
       .filter((thread) => thread.paperId === activePaper.id)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }, [chatThreads, activePaper?.id]);
+  const selectedRootAgentThreads = useMemo(() => {
+    if (!selectedRootFolderId) return [];
+    return agentThreads
+      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [agentThreads, selectedRootFolderId]);
   const chatContextPapers = useMemo(() => {
     const paperPool = (activeFolderPapers.length ? activeFolderPapers : openTabs).filter(Boolean);
     const byId = new Map(paperPool.map((paper) => [paper.id, paper]));
     const explicitlySelected = selectedChatPaperIds.map((id) => byId.get(id)).filter(Boolean);
     return explicitlySelected.length ? explicitlySelected : (activePaper ? [activePaper] : []);
   }, [activeFolderPapers, openTabs, selectedChatPaperIds, activePaper]);
+  const agentContextPapers = useMemo(() => {
+    const byId = new Map(agentWorkspacePapers.map((paper) => [paper.id, paper]));
+    return selectedAgentPaperIds.map((id) => byId.get(id)).filter(Boolean);
+  }, [agentWorkspacePapers, selectedAgentPaperIds]);
   const activePaperMessageCount = useMemo(
     () => activePaperThreads.reduce((sum, thread) => sum + thread.messages.length, 0),
     [activePaperThreads]
@@ -463,17 +957,29 @@ export default function PaperviewApp() {
     () => activePaperThreads.filter((thread) => thread.id !== activeChatId),
     [activePaperThreads, activeChatId]
   );
+  const savedAgentThreads = useMemo(
+    () => selectedRootAgentThreads.filter((thread) => thread.id !== activeAgentChatId),
+    [selectedRootAgentThreads, activeAgentChatId]
+  );
   const lastActiveMessage = currentMessages[currentMessages.length - 1] || null;
+  const lastActiveAgentMessage = currentAgentMessages[currentAgentMessages.length - 1] || null;
   const activeChatLoadingState =
     chatLoadingState?.chatId === activeChatId && lastActiveMessage?.role === "user"
       ? chatLoadingState
       : null;
+  const activeAgentLoadingState =
+    agentLoadingState?.chatId === activeAgentChatId && lastActiveAgentMessage?.role === "user"
+      ? agentLoadingState
+      : null;
   const isChatLoading = Boolean(activeChatLoadingState);
+  const isAgentLoading = Boolean(activeAgentLoadingState);
   const chatLoadingLabel =
     activeChatLoadingState?.phase === "scanning" && isActivePaperScanning
       ? `${activePaperScanLabel} (${activePaperScanPercent}%)`
       : activeChatLoadingState?.label || "Analysing...";
+  const agentLoadingLabel = activeAgentLoadingState?.label || "Researching...";
   const activeChatSummary = activeChat ? `${formatChatMessageCount(currentMessages.length)} · ${formatChatTimestamp(activeChat.updatedAt)}` : "No active chat";
+  const activeAgentSummary = activeAgentChat ? `${formatChatMessageCount(currentAgentMessages.length)} · ${formatChatTimestamp(activeAgentChat.updatedAt)}` : "No active agent chat";
   const chatQuickActions = [
     {
       title: "Summarize the paper's main claim",
@@ -494,10 +1000,112 @@ export default function PaperviewApp() {
       icon: <IChat size={13} />,
     },
   ];
+  const agentTools = [
+    {
+      id: "research",
+      title: "Research",
+      meta: "Deep web + library synthesis",
+      placeholder: "Ask Paperview Agent to research a topic using the web and any selected local papers...",
+      allowWebSearch: true,
+      allowLocalSearch: true,
+      reasoningEffort: "medium",
+      reasoningEffortWithLocal: "high",
+      instruction: "Selected Agent tool: Research. Perform a deeper research pass that synthesizes evidence across web_search and any attached local PDFs. Use web_search for discovery, use search_document for attached local papers, compare findings carefully, and surface nuanced agreements, disagreements, and evidence gaps.",
+      icon: <ISpark size={13} />,
+    },
+    {
+      id: "search-papers",
+      title: "Search for papers",
+      meta: "Discover literature",
+      placeholder: "Ask Paperview Agent to find papers on a topic...",
+      allowWebSearch: true,
+      allowLocalSearch: true,
+      reasoningEffort: "low",
+      instruction: "Selected Agent tool: Search for papers. Prioritize web_search to find relevant literature and return paper_results when useful. Use local PDFs only when they materially help the answer.",
+      icon: <ISearch size={13} />,
+    },
+    {
+      id: "outline-review",
+      title: "Outline literature review",
+      meta: "Structure a review",
+      placeholder: "Describe the topic you want a literature review outline for...",
+      allowWebSearch: true,
+      allowLocalSearch: true,
+      reasoningEffort: "medium",
+      instruction: "Selected Agent tool: Outline literature review. Produce a concise but well-structured review outline with themes, subtopics, and key papers. Use web_search for discovery and weave in attached local PDFs when relevant.",
+      icon: <ISpark size={13} />,
+    },
+    {
+      id: "compare-library",
+      title: "Compare with my library",
+      meta: "Web + local context",
+      placeholder: "Ask for a comparison between current literature and your attached local papers...",
+      allowWebSearch: true,
+      allowLocalSearch: true,
+      reasoningEffort: "medium",
+      instruction: "Selected Agent tool: Compare with my library. Compare discovered web sources with the attached local PDFs. If no local PDFs are attached for this turn, say that clearly and continue with web evidence only.",
+      icon: <IChat size={13} />,
+    },
+    {
+      id: "search-workspace",
+      title: "Search workspace",
+      meta: "Use local PDFs only",
+      placeholder: "Ask Paperview Agent to search only the attached local workspace papers...",
+      allowWebSearch: false,
+      allowLocalSearch: true,
+      reasoningEffort: "low",
+      instruction: "Selected Agent tool: Search workspace. Do not use web_search. Use only attached local PDFs through search_document. If no local PDFs are attached for this turn, say that clearly and ask the user to attach local papers.",
+      icon: <IFolder size={13} />,
+    },
+  ];
+
+  const selectedAgentTool = useMemo(
+    () => agentTools.find((tool) => tool.id === selectedAgentToolId) || null,
+    [agentTools, selectedAgentToolId]
+  );
+
+  const focusAgentComposer = useCallback(() => {
+    requestAnimationFrame(() => {
+      const textarea = agentTaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      const caret = textarea.value.length;
+      try {
+        textarea.setSelectionRange(caret, caret);
+      } catch {
+        // Some browsers do not expose setSelectionRange for every textarea state.
+      }
+      textarea.style.height = "auto";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    });
+  }, []);
+
+  const selectAgentTool = useCallback((toolId) => {
+    setSelectedAgentToolId(toolId);
+    setAgentToolMenuOpen(false);
+    focusAgentComposer();
+  }, [focusAgentComposer]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [currentMessages, activeChatId]);
+
+  useEffect(() => {
+    agentEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [currentAgentMessages, activeAgentChatId]);
+
+  useEffect(() => {
+    if (!agentPreviewState) return;
+    if (agentPreviewState.chatId !== activeAgentChatId) {
+      setAgentPreviewState(null);
+      agentPreviewScrollFnRef.current = null;
+      return;
+    }
+    if (agentPreviewState.paperId && !activeAgentPreviewPaper) {
+      setAgentPreviewState(null);
+      agentPreviewScrollFnRef.current = null;
+    }
+  }, [agentPreviewState, activeAgentChatId, activeAgentPreviewPaper]);
 
   useEffect(() => {
     if (chatLoadingState?.chatId !== activeChatId) return;
@@ -505,6 +1113,13 @@ export default function PaperviewApp() {
       setChatLoadingState(null);
     }
   }, [activeChatId, chatLoadingState, lastActiveMessage]);
+
+  useEffect(() => {
+    if (agentLoadingState?.chatId !== activeAgentChatId) return;
+    if (!lastActiveAgentMessage || lastActiveAgentMessage.role !== "user") {
+      setAgentLoadingState(null);
+    }
+  }, [activeAgentChatId, agentLoadingState, lastActiveAgentMessage]);
 
   const updatePaperEverywhere = useCallback((paperId, transform) => {
     const applyTransform = (paper) => (paper.id === paperId ? transform(paper) : paper);
@@ -721,6 +1336,33 @@ export default function PaperviewApp() {
   }, [activePaper?.id]);
 
   useEffect(() => {
+    if (!selectedRootFolderId || !hasWritableAgentContext) {
+      setActiveAgentChatId(null);
+      return;
+    }
+
+    const rootThreads = agentThreads
+      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    if (rootThreads.some((thread) => thread.id === activeAgentChatId)) {
+      return;
+    }
+
+    if (rootThreads.length) {
+      setActiveAgentChatId(rootThreads[0].id);
+      return;
+    }
+
+    const thread = createAgentChatThreadRecord(selectedRootFolderId);
+    setAgentThreads((prev) => [thread, ...prev]);
+    saveAgentChat(thread)
+      .then(() => syncRootFolderSnapshot(selectedRootFolderId))
+      .catch(() => {});
+    setActiveAgentChatId(thread.id);
+  }, [selectedRootFolderId, hasWritableAgentContext, activeAgentChatId, agentThreads]);
+
+  useEffect(() => {
     const onMouseMove = (event) => {
       if (!chatResizeRef.current.active) return;
       const delta = chatResizeRef.current.startX - event.clientX;
@@ -791,12 +1433,26 @@ export default function PaperviewApp() {
   }, [activeFolderPapers, activePaper, selectedChatPaperIds]);
 
   useEffect(() => {
+    const availableIds = new Set(agentWorkspacePapers.map((p) => p.id));
+    const next = selectedAgentPaperIds.filter((id) => availableIds.has(id));
+    if (next.length !== selectedAgentPaperIds.length) {
+      setSelectedAgentPaperIds(next);
+    }
+  }, [agentWorkspacePapers, selectedAgentPaperIds]);
+
+  useEffect(() => {
     const onDocClick = (e) => {
       if (!modelMenuRef.current?.contains(e.target)) {
         setModelMenuOpen(false);
       }
       if (!attachMenuRef.current?.contains(e.target)) {
         setAttachMenuOpen(false);
+      }
+      if (!agentAttachMenuRef.current?.contains(e.target)) {
+        setAgentAttachMenuOpen(false);
+      }
+      if (!agentToolMenuRef.current?.contains(e.target)) {
+        setAgentToolMenuOpen(false);
       }
       // Dismiss citation highlights on any click (unless clicking a source card)
       if (!e.target.closest(".source-card")) {
@@ -956,6 +1612,336 @@ export default function PaperviewApp() {
     [activeChatId, chatLoadingState]
   );
 
+  const appendMessageToAgentChat = useCallback((chatId, message, options = {}) => {
+    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === chatId)?.rootFolderId;
+    setAgentThreads((prev) => {
+      const next = prev.map((thread) => {
+        if (thread.id !== chatId) return thread;
+        const shouldRename = options.renameFromUser && (thread.title === CHAT_TITLE_FALLBACK || thread.messages.length === 0);
+        return {
+          ...thread,
+          title: shouldRename ? deriveChatTitle(options.renameFromUser) : thread.title,
+          messages: [...thread.messages, message],
+          updatedAt: Date.now(),
+        };
+      });
+      const updated = next.find((thread) => thread.id === chatId);
+      if (updated) {
+        saveAgentChat(updated)
+          .then(() => {
+            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
+          })
+          .catch(() => {});
+      }
+      return next;
+    });
+  }, []);
+
+  const updateMessageInAgentChat = useCallback((chatId, messageId, updater) => {
+    if (!chatId || !messageId || typeof updater !== "function") return;
+    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === chatId)?.rootFolderId;
+    setAgentThreads((prev) => {
+      const next = prev.map((thread) => {
+        if (thread.id !== chatId) return thread;
+        let changed = false;
+        const messages = thread.messages.map((message) => {
+          if (message?.id !== messageId) return message;
+          const updatedMessage = updater(message);
+          if (updatedMessage === message) return message;
+          changed = true;
+          return updatedMessage;
+        });
+        return changed ? { ...thread, messages, updatedAt: Date.now() } : thread;
+      });
+      const updated = next.find((thread) => thread.id === chatId);
+      if (updated) {
+        saveAgentChat(updated)
+          .then(() => {
+            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
+          })
+          .catch(() => {});
+      }
+      return next;
+    });
+  }, []);
+
+  const clearAgentRemotePapersForThread = useCallback((chatId) => {
+    if (!chatId) return;
+    setAgentRemotePapersByThread((prev) => {
+      if (!prev[chatId]) return prev;
+      const next = { ...prev };
+      delete next[chatId];
+      return next;
+    });
+    for (const key of [...agentRemotePaperJobsRef.current.keys()]) {
+      if (key.startsWith(`${chatId}:`)) {
+        agentRemotePaperJobsRef.current.delete(key);
+      }
+    }
+  }, []);
+
+  const startNewAgentChat = useCallback(() => {
+    if (!selectedRootFolderId || !hasWritableAgentContext) return;
+    const thread = createAgentChatThreadRecord(selectedRootFolderId);
+    setAgentThreads((prev) => [thread, ...prev]);
+    saveAgentChat(thread)
+      .then(() => syncRootFolderSnapshot(selectedRootFolderId))
+      .catch(() => {});
+    setActiveAgentChatId(thread.id);
+    setAgentInput("");
+    setSelectedAgentPaperIds([]);
+    setAgentPreviewState(null);
+    agentPreviewScrollFnRef.current = null;
+  }, [selectedRootFolderId, hasWritableAgentContext]);
+
+  const openAgentThread = useCallback((threadId) => {
+    setActiveAgentChatId(threadId);
+    setAgentInput("");
+  }, []);
+
+  const resetActiveAgentHistory = useCallback(() => {
+    if (!activeAgentChatId) return;
+    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === activeAgentChatId)?.rootFolderId;
+    setAgentThreads((prev) => {
+      const next = prev.map((thread) =>
+        thread.id === activeAgentChatId
+          ? { ...thread, title: CHAT_TITLE_FALLBACK, messages: [], updatedAt: Date.now() }
+          : thread
+      );
+      const updated = next.find((thread) => thread.id === activeAgentChatId);
+      if (updated) {
+        saveAgentChat(updated)
+          .then(() => {
+            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
+          })
+          .catch(() => {});
+      }
+      return next;
+    });
+    if (agentLoadingState?.chatId === activeAgentChatId) setAgentLoadingState(null);
+    setAgentInput("");
+    setSelectedAgentPaperIds([]);
+    clearAgentRemotePapersForThread(activeAgentChatId);
+    setAgentPreviewState(null);
+    agentPreviewScrollFnRef.current = null;
+  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread]);
+
+  const resetAgentThreadById = useCallback((threadId) => {
+    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === threadId)?.rootFolderId;
+    setAgentThreads((prev) => {
+      const next = prev.map((thread) =>
+        thread.id === threadId
+          ? { ...thread, title: CHAT_TITLE_FALLBACK, messages: [], updatedAt: Date.now() }
+          : thread
+      );
+      const updated = next.find((thread) => thread.id === threadId);
+      if (updated) {
+        saveAgentChat(updated)
+          .then(() => {
+            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
+          })
+          .catch(() => {});
+      }
+      return next;
+    });
+    if (agentLoadingState?.chatId === threadId) setAgentLoadingState(null);
+    if (activeAgentChatId === threadId) {
+      setAgentInput("");
+      setSelectedAgentPaperIds([]);
+      setAgentPreviewState(null);
+      agentPreviewScrollFnRef.current = null;
+    }
+    clearAgentRemotePapersForThread(threadId);
+  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread]);
+
+  const deleteAgentThread = useCallback((threadId) => {
+    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === threadId)?.rootFolderId;
+    setAgentThreads((prev) => prev.filter((thread) => thread.id !== threadId));
+    deleteAgentChat(threadId)
+      .then(() => {
+        if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
+      })
+      .catch(() => {});
+    if (activeAgentChatId === threadId) {
+      setActiveAgentChatId(null);
+      setAgentInput("");
+      setSelectedAgentPaperIds([]);
+      setAgentPreviewState(null);
+      agentPreviewScrollFnRef.current = null;
+    }
+    if (agentLoadingState?.chatId === threadId) setAgentLoadingState(null);
+    clearAgentRemotePapersForThread(threadId);
+  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread]);
+
+  const upsertAgentRemotePaper = useCallback((chatId, nextPaper) => {
+    if (!chatId || !nextPaper?.id) return;
+    setAgentRemotePapersByThread((prev) => {
+      const existing = prev[chatId] || [];
+      const nextList = existing.some((paper) => paper.id === nextPaper.id)
+        ? existing.map((paper) => (paper.id === nextPaper.id ? { ...paper, ...nextPaper } : paper))
+        : [...existing, nextPaper];
+      return { ...prev, [chatId]: nextList };
+    });
+  }, []);
+
+  const hydrateRemotePaperForAgent = useCallback(async (chatId, descriptor, options = {}) => {
+    if (!chatId) throw new Error("No active Agent thread is available.");
+    const title = String(descriptor?.title || "").trim() || "Remote paper";
+    const sourceUrl = normalizeAgentSourceUrl(descriptor?.sourceUrl || descriptor?.source_url || descriptor?.url || "");
+    const pdfUrl = normalizeAgentSourceUrl(descriptor?.pdfUrl || descriptor?.pdf_url || "");
+    if (!pdfUrl || !isPdfUrl(pdfUrl)) {
+      throw new Error(`No direct PDF URL is available for "${title}".`);
+    }
+
+    const remoteKey = buildRemotePaperKey({ title, sourceUrl, pdfUrl, doi: descriptor?.doi });
+    const jobKey = `${chatId}:${remoteKey}`;
+    const existing = (agentRemotePapersByThread[chatId] || []).find((paper) => buildRemotePaperKey(paper) === remoteKey);
+    if (existing?.hydrationStatus === "ready" || existing?.hydrationStatus === "preview_only") {
+      return existing;
+    }
+    if (agentRemotePaperJobsRef.current.has(jobKey)) {
+      return agentRemotePaperJobsRef.current.get(jobKey);
+    }
+
+    const remotePaperId = existing?.id || makeStableId("rp", `${chatId}:${remoteKey}`);
+    const basePaper = {
+      id: remotePaperId,
+      name: title,
+      title,
+      sourceUrl,
+      pdfUrl,
+      doi: String(descriptor?.doi || "").trim(),
+      authors: Array.isArray(descriptor?.authors) ? descriptor.authors.filter(Boolean) : [],
+      year: String(descriptor?.year || "").trim(),
+      venue: String(descriptor?.venue || "").trim(),
+      summary: summarizeToWordLimit(descriptor?.summary || descriptor?.abstract || descriptor?.note || ""),
+      sourceHost: getUrlHost(sourceUrl || pdfUrl),
+      pageTexts: existing?.pageTexts || [],
+      fullText: existing?.fullText || "",
+      pages: existing?.pages || null,
+      pdfBytes: existing?.pdfBytes || null,
+      fileSize: existing?.fileSize || null,
+      fileLastModified: existing?.fileLastModified || null,
+      hydrationStatus: "loading",
+      hydrationError: "",
+    };
+    upsertAgentRemotePaper(chatId, basePaper);
+    if (options.traceLabel) {
+      pushAgentThinkingStep({
+        id: `ats-${Date.now()}-fetch-${remotePaperId}`,
+        chatId,
+        type: "search",
+        label: options.traceLabel,
+      });
+    }
+
+    const job = (async () => {
+      try {
+        const response = await fetch(pdfUrl);
+        if (!response.ok) {
+          throw new Error(`Remote PDF download failed (${response.status}).`);
+        }
+        const fileBuffer = await response.arrayBuffer();
+        const pdfBytes = new Uint8Array(fileBuffer);
+        let hydratedPaper = {
+          ...basePaper,
+          pdfBytes,
+          fileSize: pdfBytes.byteLength,
+          fileLastModified: Date.now(),
+          hydrationStatus: "preview_only",
+        };
+        upsertAgentRemotePaper(chatId, hydratedPaper);
+
+        try {
+          const { fullText, pageTexts, totalPages } = await extractPdfText({ pdfBytes });
+          hydratedPaper = {
+            ...hydratedPaper,
+            fullText,
+            pageTexts,
+            pages: totalPages,
+            hydrationStatus: "ready",
+            hydrationError: "",
+          };
+          upsertAgentRemotePaper(chatId, hydratedPaper);
+          if (options.resultLabel) {
+            pushAgentThinkingStep({
+              id: `ats-${Date.now()}-fetched-${remotePaperId}`,
+              chatId,
+              type: "result",
+              label: options.resultLabel,
+            });
+          }
+        } catch (extractError) {
+          hydratedPaper = {
+            ...hydratedPaper,
+            hydrationStatus: "preview_only",
+            hydrationError: extractError?.message || "Could not extract text from this PDF.",
+          };
+          upsertAgentRemotePaper(chatId, hydratedPaper);
+          if (options.errorLabel) {
+            pushAgentThinkingStep({
+              id: `ats-${Date.now()}-fetcherr-${remotePaperId}`,
+              chatId,
+              type: "result",
+              label: options.errorLabel,
+              body: hydratedPaper.hydrationError,
+            });
+          }
+        }
+
+        return hydratedPaper;
+      } finally {
+        agentRemotePaperJobsRef.current.delete(jobKey);
+      }
+    })();
+
+    agentRemotePaperJobsRef.current.set(jobKey, job);
+    return job;
+  }, [agentRemotePapersByThread, upsertAgentRemotePaper]);
+
+  const handleAgentPreviewReady = useCallback((fn) => {
+    agentPreviewScrollFnRef.current = fn;
+  }, []);
+
+  const jumpAgentPreviewToLocation = useCallback((page, searchText = "") => {
+    const jump = (tries = 18) => {
+      if (agentPreviewScrollFnRef.current) {
+        agentPreviewScrollFnRef.current(Number(page) || 1, searchText || "");
+        return;
+      }
+      if (tries > 0) setTimeout(() => jump(tries - 1), 120);
+    };
+    jump();
+  }, []);
+
+  const openAgentPreviewPaper = useCallback(async (descriptor, options = {}) => {
+    const targetChatId = options.chatId || activeAgentChatId;
+    if (!targetChatId) return;
+    try {
+      const remotePaper = await hydrateRemotePaperForAgent(targetChatId, descriptor);
+      setAgentPreviewState({
+        chatId: targetChatId,
+        paperId: remotePaper.id,
+        page: Number(options.page) || 1,
+        searchText: options.searchText || "",
+      });
+      setAgentPreviewPage(Number(options.page) || 1);
+      agentPreviewScrollFnRef.current = null;
+      setTimeout(() => {
+        if (options.page || options.searchText) {
+          jumpAgentPreviewToLocation(options.page || 1, options.searchText || "");
+        }
+      }, 120);
+    } catch (error) {
+      const fallbackUrl = normalizeAgentSourceUrl(descriptor?.sourceUrl || descriptor?.source_url || descriptor?.url || "");
+      if (fallbackUrl) {
+        window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+      } else {
+        throw error;
+      }
+    }
+  }, [activeAgentChatId, hydrateRemotePaperForAgent, jumpAgentPreviewToLocation]);
+
   const startChatResize = useCallback(
     (event) => {
       if (!chatOpen) return;
@@ -1013,6 +1999,15 @@ export default function PaperviewApp() {
     if (!hasExtractedPaperText(readyPaper)) {
       startPaperTextExtraction(readyPaper).catch(() => {});
     }
+  };
+
+  const openAgentPaper = (paper) => {
+    if (!paper) return;
+    const ownerFolder =
+      folders.find((folder) => folder.id === paper.folderId) ||
+      folders.find((folder) => folder.papers.some((candidate) => candidate.id === paper.id));
+    if (!ownerFolder) return;
+    openPaper(paper, ownerFolder.id);
   };
 
   const openFolderTabs = (folderId, options = {}) => {
@@ -1247,6 +2242,22 @@ export default function PaperviewApp() {
     });
   };
 
+  const pushAgentThinkingStep = (step) => {
+    setAgentThinkingSteps((prev) => {
+      const next = [...prev, step];
+      agentThinkingStepsRef.current = next;
+      return next;
+    });
+  };
+
+  const clearAgentThinkingSteps = (chatId) => {
+    setAgentThinkingSteps((prev) => {
+      const next = prev.filter((step) => step.chatId !== chatId);
+      agentThinkingStepsRef.current = next;
+      return next;
+    });
+  };
+
   const doSend = async (override) => {
     const text = override || (chip ? `[Regarding: "${chip.substring(0, 80)}..."]\n${input}` : input);
     if (!text.trim() || !activeChatId || chatLoadingState) return;
@@ -1472,6 +2483,599 @@ export default function PaperviewApp() {
     setChatLoadingState(null);
   };
 
+  const doSendAgent = async (override) => {
+    const text = override || agentInput;
+    if (!text.trim() || !activeAgentChatId || agentLoadingState || !selectedRootFolderId) return;
+    const targetChatId = activeAgentChatId;
+    const activeTool = selectedAgentTool;
+    const userMessage = {
+      id: createChatMessageId(),
+      role: "user",
+      content: text,
+      agentToolId: activeTool?.id || null,
+      agentToolTitle: activeTool?.title || "",
+    };
+    appendMessageToAgentChat(targetChatId, userMessage, { renameFromUser: text });
+    setAgentInput("");
+    setAgentLoadingState({
+      chatId: targetChatId,
+      phase: "preparing",
+      label: activeTool ? `${activeTool.title}...` : "Preparing research...",
+    });
+    clearAgentThinkingSteps(targetChatId);
+
+    if (!apiKey) {
+      appendMessageToAgentChat(targetChatId, {
+        id: createChatMessageId(),
+        role: "ai",
+        content: "No API key configured. Please open Settings to add your OpenAI API key.",
+        citations: [],
+        foundSources: [],
+        foundSourcesShown: 0,
+        foundSourcesTotal: 0,
+        paperResults: [],
+      });
+      setAgentLoadingState(null);
+      setShowSettings(true);
+      setSettingsKey('');
+      setSettingsKeyVisible(false);
+      return;
+    }
+
+    try {
+      const usageTotals = createUsageTotals();
+      const conversationHistory = currentAgentMessages.slice(-8);
+      const contextPapers = agentContextPapers;
+      const readyContextPapers = [];
+      let threadRemotePapers = [...(agentRemotePapersByThread[targetChatId] || [])];
+
+      if (contextPapers.some((paper) => !hasExtractedPaperText(paper))) {
+        setAgentLoadingState({
+          chatId: targetChatId,
+          phase: "scanning",
+          label:
+            contextPapers.length === 1
+              ? `Scanning ${contextPapers[0].name} for local context...`
+              : `Scanning ${contextPapers.length} papers for local context...`,
+        });
+      }
+
+      for (const paper of contextPapers) {
+        readyContextPapers.push(hasExtractedPaperText(paper) ? paper : await startPaperTextExtraction(paper));
+      }
+
+      setAgentLoadingState({
+        chatId: targetChatId,
+        phase: "thinking",
+        label:
+          activeTool?.id === "search-workspace"
+            ? "Searching workspace..."
+            : activeTool?.id === "research"
+              ? (readyContextPapers.length ? "Researching across web and local papers..." : "Researching across the web...")
+              : "Searching papers...",
+      });
+
+      pushAgentThinkingStep({
+        id: `ats-${Date.now()}-boot-reason`,
+        chatId: targetChatId,
+        type: "reasoning",
+        label:
+          activeTool?.id === "research"
+            ? "Planning a deeper research strategy..."
+            : activeTool?.id === "outline-review"
+              ? "Planning the review structure and evidence needs..."
+              : "Planning the search strategy...",
+      });
+      if (activeTool?.allowWebSearch !== false) {
+        pushAgentThinkingStep({
+          id: `ats-${Date.now()}-boot-web`,
+          chatId: targetChatId,
+          type: "search",
+          label:
+            activeTool?.id === "research"
+              ? "Searching the web for relevant scholarly sources..."
+              : "Preparing web source discovery...",
+        });
+      }
+      if ((activeTool?.allowLocalSearch ?? true) && readyContextPapers.length) {
+        pushAgentThinkingStep({
+          id: `ats-${Date.now()}-boot-local`,
+          chatId: targetChatId,
+          type: "search",
+          label:
+            readyContextPapers.length === 1
+              ? `Reviewing the attached local paper "${readyContextPapers[0].name}"...`
+              : `Reviewing ${readyContextPapers.length} attached local papers...`,
+        });
+      }
+
+      const availableDocumentNames = readyContextPapers.map((paper) => `"${paper.name}"`).join(", ");
+      const modeInstruction = activeTool?.instruction || "No Agent tool is selected. Use the available tools that best fit the user's request.";
+      const localContextInstruction = readyContextPapers.length
+        ? `Attached local documents for this turn: ${availableDocumentNames}. If you cite a local document, call search_document before citing it.`
+        : "No local PDFs are attached for this turn.";
+      const enabledTools = [];
+      if (activeTool?.allowWebSearch !== false) {
+        enabledTools.push(AGENT_WEB_SEARCH_TOOL);
+        enabledTools.push(FETCH_REMOTE_PAPER_TOOL);
+      }
+      if (activeTool?.allowLocalSearch ?? true) {
+        enabledTools.push(SEARCH_DOCUMENT_TOOL);
+      }
+      const reasoningEffort =
+        readyContextPapers.length > 0 && activeTool?.reasoningEffortWithLocal
+          ? activeTool.reasoningEffortWithLocal
+          : activeTool?.reasoningEffort || "low";
+      const basePayload = {
+        model: selectedModel,
+        max_output_tokens: 4096,
+        instructions: [AGENT_SYSTEM_PROMPT, modeInstruction, localContextInstruction].filter(Boolean).join("\n\n"),
+        include: ["web_search_call.action.sources"],
+        reasoning: { effort: reasoningEffort, summary: "detailed" },
+        ...(enabledTools.length ? { tools: enabledTools, tool_choice: "auto" } : {}),
+      };
+      const normalizeParsedAgentResponse = (responseData) => {
+        const raw = extractResponseOutputText(responseData);
+        const match = raw.match(/\{[\s\S]*\}/);
+        try {
+          const parsed = match ? JSON.parse(match[0]) : null;
+          if (!parsed?.answer) throw new Error("Invalid");
+          return parsed;
+        } catch {
+          return { answer: raw.replace(/```json|```/g, "").trim(), citations: [], paper_results: [] };
+        }
+      };
+
+      const normalizePaperResults = (paperResults = []) =>
+        paperResults
+          .map((result, index) => {
+            const sourceUrl = normalizeAgentSourceUrl(result?.source_url || result?.sourceUrl || result?.url || result?.landing_url || "");
+            const pdfUrl = normalizeAgentSourceUrl(result?.pdf_url || result?.pdfUrl || "");
+            return {
+              id: result?.id || `paper-result-${targetChatId}-${Date.now()}-${index}`,
+              title: String(result?.title || `Paper ${index + 1}`),
+              authors: Array.isArray(result?.authors)
+                ? result.authors.map((author) => String(author || "").trim()).filter(Boolean)
+                : String(result?.authors || "").split(/,\s*/).filter(Boolean),
+              year: result?.year ? String(result.year) : "",
+              venue: String(result?.venue || result?.journal || result?.source || ""),
+              abstract: String(result?.abstract || ""),
+              summary: summarizeToWordLimit(result?.summary || result?.abstract || ""),
+              sourceUrl,
+              pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
+              doi: String(result?.doi || ""),
+            };
+          })
+          .filter((result) => result.title || result.sourceUrl);
+
+      const collectWebSources = (responseData, label, type = "search") => {
+        const passSources = extractWebSearchSources(responseData);
+        if (passSources.length) {
+          collectedWebSources.push(...passSources);
+          pushAgentThinkingStep({
+            id: `ats-${Date.now()}-web-${Math.random().toString(36).slice(2, 7)}`,
+            chatId: targetChatId,
+            type,
+            label,
+          });
+        }
+        return passSources;
+      };
+
+      const upsertThreadRemotePaper = (nextPaper) => {
+        if (!nextPaper?.id) return;
+        threadRemotePapers = threadRemotePapers.some((paper) => paper.id === nextPaper.id)
+          ? threadRemotePapers.map((paper) => (paper.id === nextPaper.id ? { ...paper, ...nextPaper } : paper))
+          : [...threadRemotePapers, nextPaper];
+      };
+
+      const getSearchableDocuments = () => [
+        ...readyContextPapers,
+        ...threadRemotePapers.filter((paper) => hasExtractedPaperText(paper)),
+      ];
+
+      const formatAvailableDocuments = () => {
+        const documents = getSearchableDocuments();
+        return documents.length
+          ? documents.map((paper) => `"${paper.name}"`).join(", ")
+          : "none";
+      };
+
+      const runAgentPass = async ({ input: passInput, previousResponseId = null, passNumber = 1 }) => {
+        let responseData = await requestOpenAIResponse(apiKey, {
+          ...basePayload,
+          ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+          input: passInput,
+        });
+        addUsageTotals(usageTotals, responseData?.usage);
+        collectWebSources(
+          responseData,
+          passNumber === 1
+            ? `Web search discovered ${extractWebSearchSources(responseData).length} candidate source${extractWebSearchSources(responseData).length === 1 ? "" : "s"}.`
+            : `Research pass ${passNumber} discovered ${extractWebSearchSources(responseData).length} more candidate source${extractWebSearchSources(responseData).length === 1 ? "" : "s"}.`
+        );
+        const initialReasoning = extractReasoningSummary(responseData);
+        if (initialReasoning) {
+          pushAgentThinkingStep({
+            id: `ats-${Date.now()}-reason-${passNumber}`,
+            chatId: targetChatId,
+            type: "reasoning",
+            label: passNumber === 1 ? "Reasoning" : `Reasoning pass ${passNumber}`,
+            body: initialReasoning,
+          });
+        }
+
+        let toolCycles = 0;
+        while (toolCycles < MAX_SEARCH_TOOL_ROUNDS) {
+          const toolCalls = extractFunctionCalls(responseData);
+          if (!toolCalls.length) break;
+          toolCycles += 1;
+
+          const toolOutputs = [];
+          for (const call of toolCalls) {
+            let args = {};
+            if (typeof call.arguments === "string") {
+              try {
+                args = JSON.parse(call.arguments || "{}");
+              } catch {
+                args = {};
+              }
+            } else if (call.arguments && typeof call.arguments === "object") {
+              args = call.arguments;
+            }
+
+            if (call.name === FETCH_REMOTE_PAPER_TOOL.name) {
+              const descriptor = {
+                title: String(args.title || "").trim(),
+                sourceUrl: String(args.source_url || "").trim(),
+                pdfUrl: String(args.pdf_url || "").trim(),
+                doi: String(args.doi || "").trim(),
+              };
+              try {
+                const remotePaper = await hydrateRemotePaperForAgent(targetChatId, descriptor, {
+                  traceLabel: `Fetching remote PDF for "${descriptor.title || "paper"}"...`,
+                  resultLabel: `Hydrated "${descriptor.title || "paper"}" for grounded citation search.`,
+                  errorLabel: `Fetched "${descriptor.title || "paper"}", but text extraction was incomplete.`,
+                });
+                upsertThreadRemotePaper(remotePaper);
+                toolOutputs.push({
+                  type: "function_call_output",
+                  call_id: call.call_id,
+                  output: [
+                    `Hydrated remote paper: "${remotePaper.name}"`,
+                    remotePaper.hydrationStatus === "ready"
+                      ? `The paper is now searchable with search_document under the exact document name "${remotePaper.name}".`
+                      : "The PDF is available for preview, but text extraction did not complete, so search_document may not find passages.",
+                    `Available searchable documents: ${formatAvailableDocuments()}.`,
+                  ].join("\n"),
+                });
+              } catch (fetchError) {
+                pushAgentThinkingStep({
+                  id: `ats-${Date.now()}-fetch-fail-${call.call_id}`,
+                  chatId: targetChatId,
+                  type: "result",
+                  label: `Could not hydrate "${descriptor.title || "remote paper"}"`,
+                  body: fetchError?.message || String(fetchError),
+                });
+                toolOutputs.push({
+                  type: "function_call_output",
+                  call_id: call.call_id,
+                  output: `Remote paper hydration failed for "${descriptor.title || "paper"}": ${fetchError?.message || String(fetchError)}`,
+                });
+              }
+              continue;
+            }
+
+            if (call.name !== SEARCH_DOCUMENT_TOOL.name) {
+              toolOutputs.push({
+                type: "function_call_output",
+                call_id: call.call_id,
+                output: `Unsupported tool call "${call.name}".`,
+              });
+              continue;
+            }
+
+            const requestedQuery = String(args.query || "").trim() || text;
+            const requestedDocument = String(args.document_name || "").trim();
+            pushAgentThinkingStep({
+              id: `ats-${Date.now()}-search-${toolCycles}-${call.call_id}`,
+              chatId: targetChatId,
+              type: "search",
+              label: `Searching "${requestedDocument}" for "${requestedQuery.length > 60 ? `${requestedQuery.slice(0, 60)}...` : requestedQuery}"...`,
+            });
+
+            const paper = findPaperByName(getSearchableDocuments(), requestedDocument);
+            if (!paper) {
+              pushAgentThinkingStep({
+                id: `ats-${Date.now()}-search-miss-${toolCycles}-${call.call_id}`,
+                chatId: targetChatId,
+                type: "result",
+                label: `Document not available: "${requestedDocument || "unknown"}"`,
+                body: `Available searchable documents: ${formatAvailableDocuments()}.`,
+              });
+              toolOutputs.push({
+                type: "function_call_output",
+                call_id: call.call_id,
+                output: `Document "${requestedDocument}" was not found. Available searchable documents: ${formatAvailableDocuments()}.`,
+              });
+              continue;
+            }
+
+            const pageTexts = Array.isArray(paper.pageTexts) && paper.pageTexts.length
+              ? paper.pageTexts
+              : derivePageTexts(paper);
+            const passages = selectRelevantPassages(requestedQuery, pageTexts, {
+              topN: 4,
+              minScore: 0.01,
+              maxChars: 12000,
+              maxExcerptChars: 1200,
+              pageHint: Number.isFinite(args.page_hint) ? args.page_hint : null,
+            });
+
+            pushAgentThinkingStep({
+              id: `ats-${Date.now()}-search-hit-${toolCycles}-${call.call_id}`,
+              chatId: targetChatId,
+              type: "result",
+              label: passages.length
+                ? `Found ${passages.length} passage${passages.length === 1 ? "" : "s"} in "${paper.name}".`
+                : `No direct passages found in "${paper.name}".`,
+            });
+            toolOutputs.push({
+              type: "function_call_output",
+              call_id: call.call_id,
+              output: formatSearchToolResult(paper, requestedQuery, passages),
+            });
+          }
+
+          responseData = await requestOpenAIResponse(apiKey, {
+            ...basePayload,
+            previous_response_id: responseData.id,
+            input: toolOutputs,
+          });
+          addUsageTotals(usageTotals, responseData?.usage);
+          collectWebSources(
+            responseData,
+            `Web search now has ${extractWebSearchSources(responseData).length} consulted source${extractWebSearchSources(responseData).length === 1 ? "" : "s"} in play.`,
+            "result"
+          );
+          const continuedReasoning = extractReasoningSummary(responseData);
+          if (continuedReasoning) {
+            pushAgentThinkingStep({
+              id: `ats-${Date.now()}-reason-next-${toolCycles}`,
+              chatId: targetChatId,
+              type: "reasoning",
+              label: "Continued reasoning",
+              body: continuedReasoning,
+            });
+          }
+        }
+
+        return responseData;
+      };
+
+      const collectedWebSources = [];
+      let collectedPaperResults = [];
+      let passNumber = 1;
+      let data = await runAgentPass({
+        passNumber,
+        input: [
+          ...conversationHistory.map((message) => ({
+            role: message.role === "ai" ? "assistant" : message.role,
+            content: message.content,
+          })),
+          {
+            role: "user",
+            content: text,
+          },
+        ],
+      });
+
+      let parsed = normalizeParsedAgentResponse(data);
+      collectedPaperResults = normalizePaperResults(parsed.paper_results || []);
+      let foundSourcesMeta = buildFoundSources({
+        paperResults: collectedPaperResults,
+        webSources: collectedWebSources,
+        remotePapers: threadRemotePapers,
+      });
+
+      while (
+        activeTool?.id === "research" &&
+        passNumber < MAX_AGENT_RESEARCH_PASSES &&
+        foundSourcesMeta.total < TARGET_FOUND_SOURCES
+      ) {
+        const beforeTotal = foundSourcesMeta.total;
+        const nextPassNumber = passNumber + 1;
+        pushAgentThinkingStep({
+          id: `ats-${Date.now()}-deepen-${nextPassNumber}`,
+          chatId: targetChatId,
+          type: "search",
+          label: `Research pass ${nextPassNumber}: broadening for more distinct scholarly sources...`,
+        });
+        data = await runAgentPass({
+          passNumber: nextPassNumber,
+          previousResponseId: data.id,
+          input: [
+            {
+              role: "user",
+              content: "Continue searching for additional distinct scholarly sources. Broaden and refine the search, fetch and ground any high-value PDFs you rely on, then return an updated final JSON answer using the same schema.",
+            },
+          ],
+        });
+        parsed = normalizeParsedAgentResponse(data);
+        collectedPaperResults = [
+          ...collectedPaperResults,
+          ...normalizePaperResults(parsed.paper_results || []),
+        ];
+        foundSourcesMeta = buildFoundSources({
+          paperResults: collectedPaperResults,
+          webSources: collectedWebSources,
+          remotePapers: threadRemotePapers,
+        });
+        if (foundSourcesMeta.total <= beforeTotal) {
+          pushAgentThinkingStep({
+            id: `ats-${Date.now()}-deepen-stop-${nextPassNumber}`,
+            chatId: targetChatId,
+            type: "result",
+            label: `Research pass ${nextPassNumber} did not add new distinct sources.`,
+          });
+          passNumber = nextPassNumber;
+          break;
+        }
+        pushAgentThinkingStep({
+          id: `ats-${Date.now()}-deepen-done-${nextPassNumber}`,
+          chatId: targetChatId,
+          type: "result",
+          label: `Research pass ${nextPassNumber} expanded the source set to ${foundSourcesMeta.total}.`,
+        });
+        passNumber = nextPassNumber;
+      }
+
+      const allPapers = folders.flatMap((folder) =>
+        folder.papers.map((paper) => ({ ...paper, folderId: folder.id }))
+      );
+      const norm = (value) => String(value || "").trim().toLowerCase();
+      const foundSourceMap = new Map(
+        foundSourcesMeta.all
+          .map((source) => [buildRemotePaperKey(source), source])
+          .filter(([key]) => key)
+      );
+      const normalizedCitations = (parsed.citations || [])
+        .map((citation, index) => {
+          const kind = String(citation?.kind || (citation?.file ? "local" : "web")).toLowerCase();
+          if (kind === "local") {
+            const requestedName = String(citation.file || citation.fileName || citation.document || "").trim();
+            const matchPaper = requestedName
+              ? allPapers.find((paper) => norm(paper.name) === norm(requestedName))
+              : null;
+            return {
+              kind: "local",
+              ...citation,
+              fileName: matchPaper?.name || requestedName || "Unknown file",
+              paperId: matchPaper?.id || null,
+              folderId: matchPaper?.folderId || null,
+              page: Number.isFinite(Number(citation?.page)) ? Number(citation.page) : null,
+              section: String(citation?.section || ""),
+              text: String(citation?.text || citation?.note || ""),
+              title: String(citation?.title || matchPaper?.name || requestedName || `Local source ${index + 1}`),
+            };
+          }
+
+          const url = normalizeAgentSourceUrl(citation?.url || citation?.source_url || "");
+          const pdfUrl = normalizeAgentSourceUrl(citation?.pdf_url || citation?.pdfUrl || "");
+          const matchedSource = foundSourceMap.get(buildRemotePaperKey({
+            title: citation?.title,
+            sourceUrl: url,
+            pdfUrl,
+            doi: citation?.doi,
+          })) || null;
+          const remotePaper = findMatchingRemotePaper(threadRemotePapers, {
+            remotePaperId: matchedSource?.remotePaperId,
+            title: citation?.title,
+            sourceUrl: url,
+            pdfUrl,
+            doi: citation?.doi,
+          });
+          if (!url && !pdfUrl && !remotePaper?.pdfUrl) return null;
+          return {
+            kind: "web",
+            title: String(citation?.title || matchedSource?.title || citation?.source || `Web source ${index + 1}`),
+            url: url || matchedSource?.sourceUrl || remotePaper?.sourceUrl || remotePaper?.pdfUrl || "",
+            pdfUrl: pdfUrl || matchedSource?.pdfUrl || remotePaper?.pdfUrl || "",
+            source: String(citation?.source || matchedSource?.venue || matchedSource?.sourceHost || remotePaper?.sourceHost || getUrlHost(url || pdfUrl)),
+            text: String(citation?.text || citation?.note || ""),
+            note: String(citation?.note || ""),
+            page: Number.isFinite(Number(citation?.page)) ? Number(citation.page) : null,
+            section: String(citation?.section || ""),
+            remotePaperId: remotePaper?.id || matchedSource?.remotePaperId || null,
+          };
+        })
+        .filter(Boolean);
+
+      if (!normalizedCitations.length && collectedWebSources.length) {
+        normalizedCitations.push(
+          ...foundSourcesMeta.shown.slice(0, 6).map((source, index) => ({
+            kind: "web",
+            title: String(source?.title || `Web source ${index + 1}`),
+            url: source?.sourceUrl || source?.pdfUrl || "",
+            pdfUrl: source?.pdfUrl || "",
+            source: String(source?.venue || source?.sourceHost || getUrlHost(source?.sourceUrl || source?.pdfUrl || "")),
+            text: "",
+            note: "",
+            page: null,
+            section: "",
+            remotePaperId: source?.remotePaperId || null,
+          })).filter((source) => source.url)
+        );
+      }
+
+      if (!collectedPaperResults.length && collectedWebSources.length) {
+        collectedPaperResults = foundSourcesMeta.shown.map((source, index) => ({
+          id: source.id || `paper-result-${targetChatId}-fallback-${index}`,
+          title: source.title || `Result ${index + 1}`,
+          authors: source.authors || [],
+          year: source.year || "",
+          venue: source.venue || source.sourceHost || "",
+          abstract: source.summary || "",
+          summary: source.summary || "",
+          sourceUrl: source.sourceUrl || "",
+          pdfUrl: source.pdfUrl || "",
+          doi: source.doi || "",
+        }));
+      }
+
+      const usageBreakdown = getUsageBreakdown(selectedModel, usageTotals);
+      const usageMeta = {
+        model: usageBreakdown.model,
+        pricingModel: usageBreakdown.pricingModel,
+        inputTokens: usageBreakdown.inputTokens,
+        cachedInputTokens: usageBreakdown.cachedInputTokens,
+        uncachedInputTokens: usageBreakdown.uncachedInputTokens,
+        outputTokens: usageBreakdown.outputTokens,
+        reasoningTokens: usageBreakdown.reasoningTokens,
+        totalTokens: usageBreakdown.totalTokens,
+        inputCost: usageBreakdown.inputCost,
+        outputCost: usageBreakdown.outputCost,
+        totalCost: usageBreakdown.totalCost,
+      };
+
+      updateMessageInAgentChat(targetChatId, userMessage.id, (message) => ({
+        ...message,
+        usage: usageMeta,
+      }));
+
+      const capturedTrace = agentThinkingStepsRef.current.filter((step) => step.chatId === targetChatId);
+      appendMessageToAgentChat(targetChatId, {
+        id: createChatMessageId(),
+        role: "ai",
+        content: String(parsed.answer || "").replace(/^[,\s]+/, ""),
+        citations: normalizedCitations,
+        foundSources: foundSourcesMeta.all,
+        foundSourcesShown: foundSourcesMeta.shown.length,
+        foundSourcesTotal: foundSourcesMeta.total,
+        paperResults: collectedPaperResults,
+        usage: usageMeta,
+        thinkingTrace: capturedTrace,
+      });
+      clearAgentThinkingSteps(targetChatId);
+    } catch (error) {
+      const rawMessage = error?.message || String(error);
+      const friendlyMessage = /web_search|unsupported|not supported/i.test(rawMessage)
+        ? `The selected model (${selectedModel}) could not use web search. Choose a model with tool support and try again.`
+        : rawMessage;
+      appendMessageToAgentChat(targetChatId, {
+        id: createChatMessageId(),
+        role: "ai",
+        content: `Could not prepare this agent request: ${friendlyMessage}`,
+        citations: [],
+        foundSources: [],
+        foundSourcesShown: 0,
+        foundSourcesTotal: 0,
+        paperResults: [],
+      });
+    }
+    setAgentLoadingState(null);
+  };
+
   const askAI = async () => {
     const t = popup.text;
     setPopup(null);
@@ -1480,6 +3084,33 @@ export default function PaperviewApp() {
   };
 
   const handleCitationClick = (citation) => {
+    if (citation?.kind === "web" || citation?.url) {
+      const remotePaper = findMatchingRemotePaper(activeAgentRemotePapers, {
+        remotePaperId: citation?.remotePaperId,
+        title: citation?.title,
+        sourceUrl: citation?.url,
+        pdfUrl: citation?.pdfUrl,
+      });
+      const pdfUrl = normalizeAgentSourceUrl(citation?.pdfUrl || remotePaper?.pdfUrl || "");
+      const sourceUrl = normalizeAgentSourceUrl(citation?.url || remotePaper?.sourceUrl || "");
+      if ((pdfUrl || remotePaper?.id) && currentView === "agent" && activeAgentChatId) {
+        openAgentPreviewPaper({
+          remotePaperId: remotePaper?.id || citation?.remotePaperId || null,
+          title: citation?.title || remotePaper?.title || remotePaper?.name || "Remote paper",
+          sourceUrl,
+          pdfUrl,
+          doi: citation?.doi || remotePaper?.doi || "",
+        }, {
+          chatId: activeAgentChatId,
+          page: Number(citation?.page) || 1,
+          searchText: citation?.text || citation?.note || "",
+        }).catch(() => {});
+        return;
+      }
+      if (sourceUrl) window.open(sourceUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
     const targetPaperId = citation?.paperId || activePaper?.id;
     const owner = folders.find((f) => f.papers.some((p) => p.id === targetPaperId));
     const targetPaper = owner?.papers.find((p) => p.id === targetPaperId) || activePaper;
@@ -1541,6 +3172,307 @@ export default function PaperviewApp() {
     return null;
   }, []);
 
+  const renderFoundSourcesPanel = useCallback((message) => {
+    const foundSourcesMeta = getMessageFoundSources(message, activeAgentRemotePapers);
+    if (!foundSourcesMeta.shown.length) return null;
+
+    return (
+      <section className="agent-found-sources">
+        <div className="agent-found-sources-head">
+          <div className="agent-found-sources-title">
+            Found {foundSourcesMeta.total} source{foundSourcesMeta.total === 1 ? "" : "s"}
+          </div>
+          <div className="agent-found-sources-subtitle">
+            Showing the top {foundSourcesMeta.shown.length} ranked by relevance
+          </div>
+        </div>
+
+        <div className="agent-found-sources-list">
+          {foundSourcesMeta.shown.map((source, index) => {
+            const authorLine = formatSourceAuthors(source.authors);
+            const venueLine = [source.venue, source.year].filter(Boolean).join(", ");
+            const secondaryLine = venueLine || source.sourceHost || "Source";
+            return (
+              <article key={source.id || `${message.id}-source-${index}`} className="agent-found-source-row">
+                <div className="agent-found-source-copy">
+                  <div className="agent-found-source-title">{source.title || `Source ${index + 1}`}</div>
+                  {authorLine ? (
+                    <div className="agent-found-source-authors">{authorLine}</div>
+                  ) : null}
+                  {secondaryLine ? (
+                    <div className="agent-found-source-meta">{secondaryLine}</div>
+                  ) : null}
+                  {source.summary ? (
+                    <div className="agent-found-source-summary">{source.summary}</div>
+                  ) : null}
+                  <div className="agent-found-source-link">{source.sourceUrl || source.pdfUrl || source.sourceHost}</div>
+                </div>
+
+                <div className="agent-found-source-actions">
+                  {source.hasPdf ? (
+                    <span className="agent-found-source-badge">PDF available</span>
+                  ) : null}
+                  {source.sourceUrl ? (
+                    <button
+                      className="paper-result-btn"
+                      type="button"
+                      onClick={() => window.open(source.sourceUrl, "_blank", "noopener,noreferrer")}
+                    >
+                      Open source
+                    </button>
+                  ) : null}
+                  <button
+                    className="paper-result-btn"
+                    type="button"
+                    disabled={!source.pdfUrl}
+                    onClick={() => {
+                      openAgentPreviewPaper({
+                        remotePaperId: source.remotePaperId,
+                        title: source.title,
+                        sourceUrl: source.sourceUrl,
+                        pdfUrl: source.pdfUrl,
+                        doi: source.doi,
+                      }, { chatId: activeAgentChatId }).catch(() => {});
+                    }}
+                  >
+                    Open PDF
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }, [activeAgentChatId, activeAgentRemotePapers, openAgentPreviewPaper]);
+
+  const renderAgentPreviewDrawer = useCallback(() => {
+    if (!agentPreviewState || !activeAgentPreviewPaper?.pdfBytes?.length) return null;
+    const previewSourceUrl = normalizeAgentSourceUrl(activeAgentPreviewPaper.sourceUrl || activeAgentPreviewPaper.pdfUrl || "");
+    return (
+      <aside className="agent-preview-drawer">
+        <div className="agent-preview-head">
+          <div className="agent-preview-copy">
+            <div className="agent-empty-eyebrow">In-chat PDF preview</div>
+            <div className="agent-preview-title">{activeAgentPreviewPaper.title || activeAgentPreviewPaper.name || "Remote paper"}</div>
+            <div className="agent-preview-subtitle">
+              {activeAgentPreviewPaper.venue || activeAgentPreviewPaper.sourceHost || "Transient remote source"}
+            </div>
+          </div>
+          <button
+            className="chat-topbar-btn"
+            type="button"
+            onClick={() => {
+              setAgentPreviewState(null);
+              agentPreviewScrollFnRef.current = null;
+            }}
+            title="Close preview"
+          >
+            <IClose size={14} />
+          </button>
+        </div>
+
+        <div className="agent-preview-toolbar">
+          <div className="agent-preview-toolbar-meta">Page {Math.max(1, Number(agentPreviewPage) || 1)}</div>
+          <div className="agent-preview-toolbar-actions">
+            <button
+              className="chat-topbar-btn"
+              type="button"
+              onClick={() => setAgentPreviewScale((value) => Math.max(0.7, Number((value - 0.1).toFixed(2))))}
+              title="Zoom out"
+            >
+              <IZoomOut size={14} />
+            </button>
+            <button
+              className="chat-topbar-btn"
+              type="button"
+              onClick={() => setAgentPreviewScale((value) => Math.min(1.8, Number((value + 0.1).toFixed(2))))}
+              title="Zoom in"
+            >
+              <IZoomIn size={14} />
+            </button>
+            {previewSourceUrl ? (
+              <button
+                className="chat-history-btn"
+                type="button"
+                onClick={() => window.open(previewSourceUrl, "_blank", "noopener,noreferrer")}
+              >
+                Open source
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {activeAgentPreviewPaper.hydrationError ? (
+          <div className="agent-preview-note">{activeAgentPreviewPaper.hydrationError}</div>
+        ) : null}
+
+        <div className="agent-preview-viewer">
+          <PdfViewer
+            pdfBytes={activeAgentPreviewPaper.pdfBytes}
+            paperId={activeAgentPreviewPaper.id}
+            fileSize={activeAgentPreviewPaper.fileSize}
+            fileLastModified={activeAgentPreviewPaper.fileLastModified}
+            scale={agentPreviewScale}
+            onReady={handleAgentPreviewReady}
+            onPageChange={setAgentPreviewPage}
+          />
+        </div>
+      </aside>
+    );
+  }, [
+    activeAgentPreviewPaper,
+    agentPreviewPage,
+    agentPreviewScale,
+    agentPreviewState,
+    handleAgentPreviewReady,
+  ]);
+
+  const getAvailablePdfFileName = useCallback(async (dirHandle, desiredFileName) => {
+    const safeFileName = ensurePdfFileName(desiredFileName);
+    const stem = stripPdfExtension(safeFileName);
+    let attempt = 0;
+
+    while (attempt < 1000) {
+      const candidate = attempt === 0 ? safeFileName : `${stem} (${attempt}).pdf`;
+      try {
+        await dirHandle.getFileHandle(candidate);
+        attempt += 1;
+      } catch {
+        return candidate;
+      }
+    }
+
+    throw new Error("Could not find an available filename for this import.");
+  }, []);
+
+  const ensureImportedFolder = useCallback(async (rootFolderId) => {
+    const rootFolder = foldersRef.current.find((folder) => folder.id === rootFolderId && folder.rootFolderId === rootFolderId);
+    if (!rootFolder?.rootHandle) {
+      throw new Error("Open a writable Paperview folder before importing papers.");
+    }
+
+    const selectedWritableFolder = foldersRef.current.find(
+      (folder) => folder.id === selectedFolderId && folder.rootFolderId === rootFolderId && folder.directoryHandle
+    );
+    if (selectedWritableFolder) {
+      return selectedWritableFolder;
+    }
+
+    const existingImportedFolder = foldersRef.current.find(
+      (folder) => folder.rootFolderId === rootFolderId && folder.relativePath === AGENT_IMPORTS_FOLDER_NAME
+    );
+    if (existingImportedFolder?.directoryHandle) {
+      return existingImportedFolder;
+    }
+
+    const directoryHandle = await rootFolder.rootHandle.getDirectoryHandle(AGENT_IMPORTS_FOLDER_NAME, { create: true });
+    const folderPath = buildFolderPath(rootFolder.name, AGENT_IMPORTS_FOLDER_NAME);
+    const nextFolder = {
+      id: makeStableId('f', folderPath),
+      name: AGENT_IMPORTS_FOLDER_NAME,
+      expanded: true,
+      papers: existingImportedFolder?.papers || [],
+      depth: 1,
+      directoryHandle,
+      rootHandle: rootFolder.rootHandle,
+      rootFolderId,
+      relativePath: AGENT_IMPORTS_FOLDER_NAME,
+      folderPath,
+    };
+
+    folderHandlesMapRef.current.set(nextFolder.id, rootFolder.rootHandle);
+    setFolders((prev) => {
+      const existingIndex = prev.findIndex((folder) => folder.id === nextFolder.id);
+      if (existingIndex >= 0) {
+        const next = [...prev];
+        next[existingIndex] = { ...next[existingIndex], ...nextFolder };
+        return next;
+      }
+      const rootIndex = prev.findIndex((folder) => folder.id === rootFolderId);
+      if (rootIndex === -1) return [...prev, nextFolder];
+      const next = [...prev];
+      next.splice(rootIndex + 1, 0, nextFolder);
+      return next;
+    });
+
+    return nextFolder;
+  }, [selectedFolderId]);
+
+  const importPaperResult = useCallback(async (result, messageId) => {
+    const importKey = buildAgentImportKey(messageId, result);
+    setAgentImportStates((prev) => ({ ...prev, [importKey]: { status: "loading", label: "Importing PDF..." } }));
+
+    try {
+      const rootFolderId = activeAgentChat?.rootFolderId || selectedRootFolderId;
+      if (!rootFolderId || !hasWritableAgentContext) {
+        throw new Error("Open a writable Paperview folder before importing papers.");
+      }
+
+      const pdfUrl = normalizeAgentSourceUrl(result?.pdfUrl || "");
+      if (!pdfUrl) {
+        throw new Error("No direct PDF URL is available for this result.");
+      }
+
+      const targetFolder = await ensureImportedFolder(rootFolderId);
+      const response = await fetch(pdfUrl);
+      if (!response.ok) {
+        throw new Error(`PDF download failed (${response.status}).`);
+      }
+
+      const fileBuffer = await response.arrayBuffer();
+      const pdfBytes = new Uint8Array(fileBuffer);
+      const fileName = await getAvailablePdfFileName(targetFolder.directoryHandle, result?.title || "Imported paper");
+      const fileHandle = await targetFolder.directoryHandle.getFileHandle(fileName, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(pdfBytes);
+      await writable.close();
+
+      const savedFile = await fileHandle.getFile();
+      const paper = {
+        id: makeStableId('p', `${targetFolder.folderPath}/${fileName}`),
+        name: stripPdfExtension(fileName),
+        authors: Array.isArray(result?.authors) ? result.authors.join(", ") : "",
+        year: result?.year || "",
+        pages: null,
+        size: `${(savedFile.size / 1024 / 1024).toFixed(1)} MB`,
+        pdfBytes,
+        fileSize: savedFile.size,
+        fileLastModified: savedFile.lastModified,
+        fullText: "",
+        pageTexts: [],
+        textStatus: "idle",
+        textProgress: 0,
+        textError: null,
+        textStatusText: "",
+        fileHandle,
+        folderId: targetFolder.id,
+        rootFolderId,
+      };
+
+      setFolders((prev) => prev.map((folder) => (
+        folder.id === targetFolder.id
+          ? {
+              ...folder,
+              expanded: true,
+              papers: folder.papers.some((existing) => existing.id === paper.id)
+                ? folder.papers
+                : [...folder.papers, paper],
+            }
+          : folder
+      )));
+      setSelectedFolderId(targetFolder.id);
+      setUpFolder(targetFolder.id);
+      setAgentImportStates((prev) => ({ ...prev, [importKey]: { status: "done", label: `Saved to ${targetFolder.name}` } }));
+      openPaper(paper, targetFolder.id);
+    } catch (error) {
+      setAgentImportStates((prev) => ({
+        ...prev,
+        [importKey]: { status: "error", label: error?.message || "Import failed." },
+      }));
+    }
+  }, [activeAgentChat?.rootFolderId, ensureImportedFolder, getAvailablePdfFileName, hasWritableAgentContext, openPaper, selectedRootFolderId]);
+
   const toggleFolder = (id) => setFolders((p) => p.map((f) => (f.id === id ? { ...f, expanded: !f.expanded } : f)));
 
   const createFolder = () => {
@@ -1555,7 +3487,18 @@ export default function PaperviewApp() {
     }
 
     const newId = `f${Date.now()}`;
-    setFolders((p) => [...p, { id: newId, name, expanded: true, papers: [] }]);
+    setFolders((p) => [...p, {
+      id: newId,
+      name,
+      expanded: true,
+      papers: [],
+      depth: 0,
+      directoryHandle: null,
+      rootHandle: null,
+      rootFolderId: newId,
+      relativePath: "",
+      folderPath: buildFolderPath(name),
+    }]);
     setSelectedFolderId(newId);
     setUpFolder(newId);
     setNfName("");
@@ -1576,6 +3519,7 @@ export default function PaperviewApp() {
   };
 
   const deletePaper = (folderId, paperId) => {
+    const ownerFolder = folders.find((folder) => folder.id === folderId);
     setFolders((prev) =>
       prev.map((f) =>
         f.id === folderId
@@ -1595,13 +3539,23 @@ export default function PaperviewApp() {
     setAnnotations((prev) => prev.filter((a) => a.paperId !== paperId));
     deleteAnnotationsByPaperIds([paperId]).catch(() => {});
     deletePaperCachesByPaperIds([paperId]).catch(() => {});
+    if (ownerFolder?.rootFolderId) {
+      syncRootFolderSnapshot(ownerFolder.rootFolderId).catch(() => {});
+    }
   };
 
   const deleteFolder = (folderId) => {
     const folder = folders.find((f) => f.id === folderId);
     if (!folder) return;
-    const ids = new Set(folder.papers.map((p) => p.id));
-    const remainingFolders = folders.filter((f) => f.id !== folderId);
+    const isRootFolder = folder.rootFolderId === folder.id;
+    const foldersToRemove = folders.filter((candidate) => {
+      if (candidate.rootFolderId !== folder.rootFolderId) return false;
+      if (isRootFolder) return true;
+      return candidate.id === folderId || candidate.relativePath.startsWith(`${folder.relativePath}/`);
+    });
+    const folderIdsToRemove = new Set(foldersToRemove.map((item) => item.id));
+    const ids = new Set(foldersToRemove.flatMap((item) => item.papers.map((paper) => paper.id)));
+    const remainingFolders = folders.filter((f) => !folderIdsToRemove.has(f.id));
     setFolders(remainingFolders);
     if (selectedFolderId === folderId) {
       const replacementFolder = remainingFolders[0] || null;
@@ -1617,27 +3571,52 @@ export default function PaperviewApp() {
     });
     setChatThreads((prev) => prev.filter((thread) => !ids.has(thread.paperId)));
     deleteChatsByPaperIds([...ids]).catch(() => {});
+    if (isRootFolder) {
+      const threadsToDelete = agentThreadsRef.current.filter((thread) => thread.rootFolderId === folder.rootFolderId);
+      setAgentThreads((prev) => prev.filter((thread) => thread.rootFolderId !== folder.rootFolderId));
+      threadsToDelete.forEach((thread) => deleteAgentChat(thread.id).catch(() => {}));
+      if (activeAgentChat?.rootFolderId === folder.rootFolderId) {
+        setActiveAgentChatId(null);
+        setAgentInput("");
+        setSelectedAgentPaperIds([]);
+      }
+    }
     setAnnotations((prev) => prev.filter((a) => !ids.has(a.paperId)));
     deleteAnnotationsByPaperIds([...ids]).catch(() => {});
     deletePaperCachesByPaperIds([...ids]).catch(() => {});
     if (!remainingFolders.length) clearFolderHandles().catch(() => {});
-  };
-
-  const stableId = (prefix, path) => {
-    let h = 0;
-    for (let i = 0; i < path.length; i++) { h = ((h << 5) - h + path.charCodeAt(i)) | 0; }
-    return `${prefix}-${(h >>> 0).toString(36)}`;
+    if (!isRootFolder && folder.rootFolderId) {
+      syncRootFolderSnapshot(folder.rootFolderId).catch(() => {});
+    }
   };
 
   const scanDirHandle = async (dirHandle) => {
-    async function scanDir(handle, parentPath) {
-      const folderPath = `${parentPath}/${handle.name}`;
-      const folder = { id: stableId('f', folderPath), name: handle.name, expanded: true, papers: [], children: [] };
+    const rootFolderPath = buildFolderPath(dirHandle.name);
+    const rootFolderId = makeStableId('f', rootFolderPath);
+
+    async function scanDir(handle, relativePath = "", depth = 0) {
+      const folderName = relativePath.split("/").filter(Boolean).pop() || handle.name;
+      const folderPath = buildFolderPath(dirHandle.name, relativePath);
+      const folderId = makeStableId('f', folderPath);
+      const folder = {
+        id: folderId,
+        name: folderName,
+        expanded: true,
+        papers: [],
+        depth,
+        directoryHandle: handle,
+        rootHandle: dirHandle,
+        rootFolderId,
+        relativePath,
+        folderPath,
+      };
+      const nested = [];
+
       for await (const entry of handle.values()) {
         if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.pdf')) {
           folder.papers.push({
-            id: stableId('p', `${folderPath}/${entry.name}`),
-            name: entry.name.replace(/\.pdf$/i, ''),
+            id: makeStableId('p', `${folderPath}/${entry.name}`),
+            name: stripPdfExtension(entry.name),
             authors: '',
             year: '',
             pages: null,
@@ -1651,22 +3630,20 @@ export default function PaperviewApp() {
             textError: null,
             textStatusText: "",
             fileHandle: entry,
+            folderId,
+            rootFolderId,
           });
         } else if (entry.kind === 'directory') {
-          const child = await scanDir(entry, folderPath);
-          if (child.papers.length || child.children.length) folder.children.push(child);
+          const childRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+          const children = await scanDir(entry, childRelativePath, depth + 1);
+          if (children.length) nested.push(...children);
         }
       }
-      return folder;
+
+      return [folder, ...nested];
     }
-    const root = await scanDir(dirHandle, '');
-    const flatFolders = [];
-    function flatten(node, depth) {
-      flatFolders.push({ id: node.id, name: node.name, expanded: node.expanded, papers: node.papers, depth });
-      node.children.forEach(c => flatten(c, depth + 1));
-    }
-    flatten(root, 0);
-    return flatFolders;
+
+    return scanDir(dirHandle, '', 0);
   };
   scanDirHandleRef.current = scanDirHandle;
 
@@ -1682,30 +3659,33 @@ export default function PaperviewApp() {
   };
 
   // Write .paperview.json to a folder's root directory handle
-  const writeFolderSnapshot = async (dirHandle) => {
+  const syncRootFolderSnapshot = async (rootFolderId) => {
+    if (!rootFolderId) return;
+    const rootFolder = foldersRef.current.find((folder) => folder.id === rootFolderId && folder.rootFolderId === rootFolderId);
+    const dirHandle = rootFolder?.rootHandle || rootFolder?.directoryHandle;
     if (!dirHandle) return;
     try {
-      // Find all folder IDs that map to this dirHandle
-      const folderIds = new Set();
-      for (const [fId, dh] of folderHandlesMapRef.current.entries()) {
-        if (dh === dirHandle) folderIds.add(fId);
-      }
-      // Collect all paper IDs in those folders
       const paperIds = new Set();
       for (const folder of foldersRef.current) {
-        if (folderIds.has(folder.id)) {
+        if (folder.rootFolderId === rootFolderId) {
           for (const paper of folder.papers) paperIds.add(paper.id);
         }
       }
-      if (!paperIds.size) return;
-      // Read fresh data from IndexedDB to avoid stale closures
       const allChats = await loadAllChats();
       const chats = allChats.filter((t) => paperIds.has(t.paperId));
+      const allAgentChats = await loadAllAgentChats();
+      const agentChats = allAgentChats.filter((thread) => thread.rootFolderId === rootFolderId);
       const allAnns = await loadAllAnnotations();
       const annotations = allAnns.filter((a) => paperIds.has(a.paperId));
       const fileHandle = await dirHandle.getFileHandle('.paperview.json', { create: true });
       const writable = await fileHandle.createWritable();
-      await writable.write(JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), chats, annotations }, null, 2));
+      await writable.write(JSON.stringify({
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        chats,
+        agentChats,
+        annotations,
+      }, null, 2));
       await writable.close();
     } catch (err) {
       console.warn('Paperview: could not write .paperview.json:', err);
@@ -1723,6 +3703,14 @@ export default function PaperviewApp() {
         return [...incoming, ...prev].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       });
     }
+    if (snapshot.agentChats?.length) {
+      for (const thread of snapshot.agentChats) await saveAgentChat(thread).catch(() => {});
+      setAgentThreads((prev) => {
+        const existingIds = new Set(prev.map((t) => t.id));
+        const incoming = snapshot.agentChats.filter((thread) => !existingIds.has(thread.id));
+        return [...incoming, ...prev].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      });
+    }
     if (snapshot.annotations?.length) {
       // Save to IndexedDB; they'll be loaded per-paper when the paper is opened
       for (const ann of snapshot.annotations) await saveAnnotation(ann).catch(() => {});
@@ -1734,8 +3722,7 @@ export default function PaperviewApp() {
     if (!paperId) return;
     for (const folder of foldersRef.current) {
       if (folder.papers.some((p) => p.id === paperId)) {
-        const dh = folderHandlesMapRef.current.get(folder.id);
-        if (dh) writeFolderSnapshot(dh).catch(() => {});
+        syncRootFolderSnapshot(folder.rootFolderId).catch(() => {});
         return;
       }
     }
@@ -1779,7 +3766,7 @@ export default function PaperviewApp() {
       const uint8 = new Uint8Array(ab);
       const paper = {
         id: `p${Date.now()}`,
-        name: pendingFile.name.replace(/\.pdf$/i, ""),
+        name: stripPdfExtension(pendingFile.name),
         authors: "Uploaded",
         year: new Date().getFullYear(),
         pages: null,
@@ -1800,29 +3787,50 @@ export default function PaperviewApp() {
         // No folder open yet — create an in-memory "Uploads" folder
         const uploadsId = 'f-uploads';
         const existing = folders.find((f) => f.id === uploadsId);
+        const readyPaper = {
+          ...paper,
+          folderId: uploadsId,
+          rootFolderId: existing?.rootFolderId || uploadsId,
+        };
         if (existing) {
-          setFolders((p) => p.map((f) => (f.id === uploadsId ? { ...f, papers: [...f.papers, paper], expanded: true } : f)));
+          setFolders((p) => p.map((f) => (f.id === uploadsId ? { ...f, papers: [...f.papers, readyPaper], expanded: true } : f)));
           setUpFolder(uploadsId);
         } else {
-          const uploadsFolder = { id: uploadsId, name: 'Uploads', expanded: true, papers: [paper], depth: 0 };
+          const uploadsFolder = {
+            id: uploadsId,
+            name: 'Uploads',
+            expanded: true,
+            papers: [readyPaper],
+            depth: 0,
+            directoryHandle: null,
+            rootHandle: null,
+            rootFolderId: uploadsId,
+            relativePath: "",
+            folderPath: buildFolderPath('Uploads'),
+          };
           setFolders([uploadsFolder]);
           setSelectedFolderId(uploadsId);
           setUpFolder(uploadsId);
         }
-        // Open the paper directly without relying on stale folders state
-        setOpenTabs((prev) => (prev.find((t) => t.id === paper.id) ? prev : [...prev, paper]));
-        setActiveTabId(paper.id);
+        setOpenTabs((prev) => (prev.find((t) => t.id === readyPaper.id) ? prev : [...prev, readyPaper]));
+        setActiveTabId(readyPaper.id);
         setCurrentView('reader');
         scrollFnRef.current = null;
-        startPaperTextExtraction(paper).catch(() => {});
+        startPaperTextExtraction(readyPaper).catch(() => {});
         setUpStatus("done");
         setTimeout(() => closeModal(), 600);
       } else {
-        setFolders((p) => p.map((f) => (f.id === upFolder ? { ...f, papers: [...f.papers, paper], expanded: true } : f)));
+        const targetFolder = folders.find((f) => f.id === upFolder);
+        const readyPaper = {
+          ...paper,
+          folderId: upFolder,
+          rootFolderId: targetFolder?.rootFolderId || upFolder,
+        };
+        setFolders((p) => p.map((f) => (f.id === upFolder ? { ...f, papers: [...f.papers, readyPaper], expanded: true } : f)));
         setUpStatus("done");
         setTimeout(() => {
           closeModal();
-          openPaper(paper, upFolder);
+          openPaper(readyPaper, upFolder);
         }, 600);
       }
     } catch (error) {
@@ -1878,6 +3886,9 @@ export default function PaperviewApp() {
               <button className={`sb-nav-item ${currentView === "library" ? "active" : ""}`} onClick={() => setCurrentView("library")}>
                 <IFolder size={14} /> Library
               </button>
+              <button className={`sb-nav-item ${currentView === "agent" ? "active" : ""}`} onClick={() => setCurrentView("agent")}>
+                <ISpark size={14} /> Agent
+              </button>
             </div>
 
             <div className="sb-search-wrap">
@@ -1897,8 +3908,8 @@ export default function PaperviewApp() {
                   <div
                     className={`sb-folder-hd ${selectedFolderId === folder.id ? "active" : ""}`}
                     style={folder.depth ? { paddingLeft: 8 + folder.depth * 14 } : undefined}
-                    onClick={() => openFolderTabs(folder.id)}
-                    title="Open all files from this folder in tabs"
+                    onClick={() => openFolderTabs(folder.id, { forceReader: currentView === "reader" })}
+                    title={currentView === "reader" ? "Open all files from this folder in tabs" : "Select this folder"}
                   >
                     <button
                       className="sb-folder-toggle"
@@ -2004,19 +4015,30 @@ export default function PaperviewApp() {
               )}
               <IFolder size={15} style={{ color: "#777" }} />
               <div className="topbar-title-stack">
-                <span className="topbar-folder-name">{currentView === "library" ? "Library" : activeFolder?.name || "Reader"}</span>
+                <span className="topbar-folder-name">
+                  {currentView === "library"
+                    ? "Library"
+                    : currentView === "agent"
+                      ? (selectedRootFolder?.name ? `Agent · ${selectedRootFolder.name}` : "Agent")
+                      : activeFolder?.name || "Reader"}
+                </span>
                 <span className="topbar-subtitle">
                   {currentView === "library"
                     ? `${totalPaperCount} paper${totalPaperCount === 1 ? "" : "s"} across ${folders.length} folders`
-                    : activePaper?.pdfBytes
-                      ? "Search, annotate, and verify with source-backed answers"
-                      : "Reading from extracted text with chat grounded in the document"}
+                    : currentView === "agent"
+                      ? (hasWritableAgentContext
+                        ? `Research across the web and ${agentWorkspacePapers.length} local paper${agentWorkspacePapers.length === 1 ? "" : "s"} in this workspace`
+                        : "Open a writable folder to enable agent search, imports, and synced chats")
+                      : activePaper?.pdfBytes
+                        ? "Search, annotate, and verify with source-backed answers"
+                        : "Reading from extracted text with chat grounded in the document"}
                 </span>
               </div>
             </div>
 
             <div className="topbar-right">
               {openTabs.length > 0 && <span className="topbar-count">{openTabs.length} file{openTabs.length > 1 ? "s" : ""} open</span>}
+              {currentView === "agent" && selectedRootFolder && <span className="topbar-mode">{selectedRootAgentThreads.length} thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>}
               {currentView === "reader" && activePaper && <span className="topbar-mode">{activePaper.pdfBytes ? "Rendered PDF" : "Text mode"}</span>}
               <div className="tb-divider" />
               {currentView === "reader" && (
@@ -2192,6 +4214,429 @@ export default function PaperviewApp() {
                     </React.Fragment>
                   ))}
                 </div>
+              </div>
+            ) : currentView === "agent" ? (
+              <div className="agent-view">
+                {!hasWritableAgentContext ? (
+                  <div className="agent-gate">
+                    <div className="agent-empty-icon"><ISpark size={18} /></div>
+                    <div className="agent-gate-copy">
+                      <div className="agent-empty-eyebrow">Folder-backed workspace required</div>
+                      <h2>Open a writable folder to use Agent</h2>
+                      <p>Agent chats sync into that folder&apos;s <code>.paperview.json</code>, and imported PDFs are written back to the same workspace on disk.</p>
+                    </div>
+                    <div className="agent-gate-actions">
+                      {typeof window.showDirectoryPicker === 'function' ? (
+                        <button className="lib-btn dark" type="button" onClick={() => setShowFolderPermModal(true)}>
+                          <IFolder size={12} /> Open Folder
+                        </button>
+                      ) : null}
+                      <button className="lib-btn" type="button" onClick={() => setCurrentView("library")}>
+                        <IGrid size={12} /> Go to Library
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <aside className="agent-sidebar">
+                      <div className="agent-sidebar-head">
+                        <div className="agent-sidebar-copy">
+                          <div className="agent-empty-eyebrow">Workspace threads</div>
+                          <div className="agent-sidebar-title">{selectedRootFolder?.name || "Agent"}</div>
+                          <div className="agent-sidebar-subtitle">
+                            {agentWorkspacePapers.length} local paper{agentWorkspacePapers.length === 1 ? "" : "s"} available for grounded comparisons.
+                          </div>
+                        </div>
+                        <button className="lib-btn dark" type="button" onClick={startNewAgentChat}>
+                          <IPlus size={12} /> New thread
+                        </button>
+                      </div>
+
+                      <div className="agent-context-card">
+                        <div className="agent-context-row">
+                          <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
+                          <span className="agent-context-meta">{selectedRootAgentThreads.length} saved thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>
+                        </div>
+                        <p className="agent-context-copy">
+                          Web research, local-paper context, and imported PDFs stay anchored to this writable root so the workspace travels with its <code>.paperview.json</code>.
+                        </p>
+                      </div>
+
+                      <div className="agent-thread-list">
+                        {selectedRootAgentThreads.length === 0 ? (
+                          <div className="chat-overview-empty-state">
+                            <div className="chat-overview-empty-title">No agent threads yet</div>
+                            <div className="chat-overview-empty-copy">Start a thread to search the web, compare papers, and save the conversation with this folder.</div>
+                          </div>
+                        ) : (
+                          selectedRootAgentThreads.map((thread) => (
+                            <div key={thread.id} className={`agent-thread-row ${thread.id === activeAgentChatId ? "active" : ""}`}>
+                              <button className="agent-thread-main" type="button" onClick={() => openAgentThread(thread.id)}>
+                                <div className="agent-thread-title">{thread.title}</div>
+                                <div className="agent-thread-meta">{formatChatMessageCount(thread.messages.length)} - {formatChatTimestamp(thread.updatedAt)}</div>
+                              </button>
+                              <div className="agent-thread-actions">
+                                {thread.id !== activeAgentChatId ? (
+                                  <button className="chat-thread-row-btn" type="button" onClick={() => openAgentThread(thread.id)}>Open</button>
+                                ) : (
+                                  <span className="agent-thread-badge">Open</span>
+                                )}
+                                <button
+                                  className="chat-thread-row-btn"
+                                  type="button"
+                                  onClick={() => resetAgentThreadById(thread.id)}
+                                  disabled={!thread.messages.length}
+                                >
+                                  Reset
+                                </button>
+                                <button
+                                  className="chat-thread-delete"
+                                  type="button"
+                                  onClick={() => deleteAgentThread(thread.id)}
+                                  title="Delete agent thread"
+                                >
+                                  <ITrash size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </aside>
+
+                    <section className="agent-main citation-popover-boundary">
+                      <div className="agent-main-head">
+                        <div className="agent-main-copy">
+                          <div className="agent-empty-eyebrow">Paperview Agent</div>
+                          <div className="agent-main-title">{activeAgentChat?.title || "New thread"}</div>
+                          <div className="agent-main-subtitle">{activeAgentSummary}</div>
+                        </div>
+                        <div className="agent-main-actions">
+                          <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
+                          <button
+                            className="chat-history-btn"
+                            type="button"
+                            onClick={resetActiveAgentHistory}
+                            disabled={!currentAgentMessages.length && !agentInput.trim()}
+                          >
+                            Reset current
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className={`agent-workspace-body ${hasAgentPreview ? "has-preview" : ""}`}>
+                        <div className="agent-conversation-pane">
+                          <div className="agent-msgs">
+                            {currentAgentMessages.length === 0 ? (
+                              <div className="agent-empty">
+                                <div className="agent-empty-hero">
+                                  <div className="agent-empty-icon"><ISpark size={18} /></div>
+                                  <div className="agent-empty-copy">
+                                    <div className="agent-empty-eyebrow">Research across web + local PDFs</div>
+                                    <h2>Search for papers, compare them with your library, and import the best ones to disk.</h2>
+                                    <p>Select an Agent tool below to attach a mode to the composer without adding extra instruction text to your message.</p>
+                                  </div>
+                                </div>
+
+                                <div className="agent-quick-grid">
+                                  {agentTools.map((item) => (
+                                    <button
+                                      key={item.title}
+                                      className={`agent-quick-chip ${selectedAgentToolId === item.id ? "active" : ""}`}
+                                      type="button"
+                                      onClick={() => selectAgentTool(item.id)}
+                                    >
+                                      <span className="chat-suggestion-icon">{item.icon}</span>
+                                      <span className="chat-suggestion-text">
+                                        <span className="chat-suggestion-title">{item.title}</span>
+                                        <span className="chat-suggestion-meta">{item.meta}</span>
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <div className="agent-empty-block">
+                                  <div className="agent-empty-block-title">Local workspace context</div>
+                                  <div className="agent-empty-note">
+                                    {agentWorkspacePapers.length
+                                      ? `${agentWorkspacePapers.length} paper${agentWorkspacePapers.length === 1 ? "" : "s"} are ready in this root. Attach only the ones you want the agent to search locally.`
+                                      : "No local PDFs were found in this root yet. You can still use web search, and imported papers will be saved back into this workspace."}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              currentAgentMessages.map((m) => (
+                                <div key={m.id}>
+                                  {m.role === "user" ? (
+                                    <div className="msg-u">
+                                      <div className="msg-u-bubble-wrap">
+                                        {m.agentToolTitle ? (
+                                          <div className="agent-msg-tool">
+                                            <span className="agent-msg-tool-chip">{m.agentToolTitle}</span>
+                                          </div>
+                                        ) : null}
+                                        <div className="msg-u-bubble">{m.content}</div>
+                                        {renderUsageMeta(m)}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="msg-a">
+                                      <div className="msg-a-row">
+                                        <div className="msg-a-avatar">A</div>
+                                        <div className="msg-a-bubble-wrap">
+                                          {m.thinkingTrace?.length > 0 ? (
+                                            <ThinkingTrace
+                                              steps={m.thinkingTrace}
+                                              isLive={false}
+                                              expanded={!!agentThinkingExpanded[m.id]}
+                                              onToggle={() => setAgentThinkingExpanded((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
+                                            />
+                                          ) : null}
+                                          {renderUsageMeta(m)}
+                                          {renderFoundSourcesPanel(m)}
+                                          {m.content ? (
+                                            <div className="msg-a-bubble">
+                                              <InlineCitedAnswer
+                                                text={m.content}
+                                                citations={m.citations || []}
+                                                onCitationClick={handleCitationClick}
+                                              />
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ))
+                            )}
+
+                            {isAgentLoading ? (
+                              <div className="chat-thinking">
+                                {agentThinkingSteps.filter((step) => step.chatId === activeAgentChatId).length > 0 ? (
+                                  <ThinkingTrace
+                                    steps={agentThinkingSteps.filter((step) => step.chatId === activeAgentChatId)}
+                                    isLive={true}
+                                  />
+                                ) : (
+                                  <>
+                                    <div className="typing"><span /><span /><span /></div>
+                                    <span style={{ fontSize: 13, color: "#888", marginLeft: 4 }}>{agentLoadingLabel}</span>
+                                  </>
+                                )}
+                              </div>
+                            ) : null}
+                            <div ref={agentEndRef} />
+                          </div>
+
+                          <div className="agent-input-area">
+                        {agentWorkspacePapers.length > 0 ? (
+                          <div className="attach-picker attach-picker-inline" ref={agentAttachMenuRef}>
+                            <div className="composer-context-row">
+                              <button
+                                className="composer-context-trigger"
+                                type="button"
+                                onClick={() => setAgentAttachMenuOpen((value) => !value)}
+                                title="Review local paper context"
+                              >
+                                <IPaperclip size={12} />
+                                <span>Local papers</span>
+                              </button>
+                              <div className="composer-context-list">
+                                {agentContextPapers.slice(0, 2).map((paper) => (
+                                  <button
+                                    key={paper.id}
+                                    className="composer-context-pill composer-context-pill-btn"
+                                    type="button"
+                                    title={paper.name}
+                                    onClick={() => openAgentPaper(paper)}
+                                  >
+                                    <IFile size={11} style={{ flexShrink: 0 }} />
+                                    <span className="composer-context-pill-text">{paper.name}</span>
+                                  </button>
+                                ))}
+                                {agentContextPapers.length > 2 ? (
+                                  <span className="composer-context-pill composer-context-pill-more">
+                                    +{agentContextPapers.length - 2} more
+                                  </span>
+                                ) : null}
+                                {agentContextPapers.length === 0 ? (
+                                  <span className="composer-context-pill composer-context-pill-more">No local papers attached</span>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            {agentAttachMenuOpen ? (
+                              <div className="attach-menu">
+                                <div className="attach-head">
+                                  <span className="attach-title">Local paper context</span>
+                                  <div style={{ display: "flex", gap: 4 }}>
+                                    <button
+                                      className="attach-mini-btn"
+                                      type="button"
+                                      onClick={() => setSelectedAgentPaperIds(agentWorkspacePapers.map((paper) => paper.id))}
+                                    >
+                                      All
+                                    </button>
+                                    <button
+                                      className="attach-mini-btn"
+                                      type="button"
+                                      onClick={() => setSelectedAgentPaperIds([])}
+                                    >
+                                      Clear
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="attach-list">
+                                  {agentWorkspacePapers.map((paper) => {
+                                    const checked = selectedAgentPaperIds.includes(paper.id);
+                                    return (
+                                      <label key={paper.id} className="attach-item">
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={() => {
+                                            setSelectedAgentPaperIds((prev) =>
+                                              prev.includes(paper.id)
+                                                ? prev.filter((id) => id !== paper.id)
+                                                : [...prev, paper.id]
+                                            );
+                                          }}
+                                        />
+                                        <IFile size={12} style={{ color: "#888", flexShrink: 0 }} />
+                                        <span className="attach-name">{paper.name}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        <div className="chat-composer agent-composer">
+                          <div className="agent-tool-row" ref={agentToolMenuRef}>
+                            <button
+                              className={`agent-tool-trigger ${agentToolMenuOpen ? "active" : ""}`}
+                              type="button"
+                              onClick={() => setAgentToolMenuOpen((value) => !value)}
+                              title="Select an Agent tool"
+                            >
+                              <IPlus size={12} />
+                              <span>{selectedAgentTool ? "Change tool" : "Add tool"}</span>
+                            </button>
+
+                            {selectedAgentTool ? (
+                              <span className="agent-tool-chip">
+                                <span className="agent-tool-chip-label">
+                                  {selectedAgentTool.icon}
+                                  <span>{selectedAgentTool.title}</span>
+                                </span>
+                                <button
+                                  className="agent-tool-chip-clear"
+                                  type="button"
+                                  onClick={() => setSelectedAgentToolId(null)}
+                                  title="Remove selected Agent tool"
+                                >
+                                  <IClose size={11} />
+                                </button>
+                              </span>
+                            ) : (
+                              <span className="agent-tool-hint">No Agent tool selected</span>
+                            )}
+
+                            {agentToolMenuOpen ? (
+                              <div className="agent-tool-menu">
+                                <div className="agent-tool-menu-title">Agent tools</div>
+                                <div className="agent-tool-menu-list">
+                                  {agentTools.map((tool) => (
+                                    <button
+                                      key={tool.id}
+                                      className={`agent-tool-option ${selectedAgentToolId === tool.id ? "active" : ""}`}
+                                      type="button"
+                                      onClick={() => selectAgentTool(tool.id)}
+                                    >
+                                      <span className="agent-tool-option-icon">{tool.icon}</span>
+                                      <span className="agent-tool-option-copy">
+                                        <span className="agent-tool-option-title">{tool.title}</span>
+                                        <span className="agent-tool-option-meta">{tool.meta}</span>
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <textarea
+                            ref={agentTaRef}
+                            rows={1}
+                            value={agentInput}
+                            onChange={(event) => {
+                              setAgentInput(event.target.value);
+                              event.target.style.height = "auto";
+                              event.target.style.height = `${event.target.scrollHeight}px`;
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && !event.shiftKey) {
+                                event.preventDefault();
+                                doSendAgent();
+                              }
+                            }}
+                            placeholder={selectedAgentTool?.placeholder || "Search for papers, compare them with your workspace, or import a PDF to this folder..."}
+                          />
+
+                          <div className="composer-bottom">
+                            <div className="composer-tools">
+                              <div className="model-picker" ref={modelMenuRef}>
+                                <button
+                                  className="model-chip"
+                                  title="Model"
+                                  onClick={() => setModelMenuOpen((value) => !value)}
+                                  type="button"
+                                >
+                                  {selectedModel} <IChevronDown size={12} />
+                                </button>
+                                {modelMenuOpen ? (
+                                  <div className="model-menu">
+                                    {OPENAI_MODELS.map((modelName) => (
+                                      <button
+                                        key={modelName}
+                                        className={`model-option ${selectedModel === modelName ? "active" : ""}`}
+                                        onClick={() => {
+                                          setSelectedModel(modelName);
+                                          setModelMenuOpen(false);
+                                        }}
+                                        type="button"
+                                      >
+                                        {modelName}
+                                      </button>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <button
+                              className="icon-btn send-btn"
+                              onClick={() => doSendAgent()}
+                              disabled={!agentInput.trim() || Boolean(agentLoadingState)}
+                              title="Send"
+                              type="button"
+                            >
+                              <IArrowUp size={14} />
+                            </button>
+                          </div>
+                        </div>
+                          </div>
+                        </div>
+
+                        {renderAgentPreviewDrawer()}
+                      </div>
+                    </section>
+                  </>
+                )}
               </div>
             ) : activePaper ? (
               <>

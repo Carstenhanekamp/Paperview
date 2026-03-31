@@ -25,6 +25,15 @@ db.version(4).stores({
   ocrPages: 'id, paperId, pageNum, scale, updatedAt',
 });
 
+db.version(5).stores({
+  chats: 'id, paperId, updatedAt',
+  agentChats: 'id, rootFolderId, updatedAt',
+  folderHandles: 'id',
+  annotations: 'id, paperId, pageNum, createdAt',
+  paperTextCache: 'paperId, updatedAt',
+  ocrPages: 'id, paperId, pageNum, scale, updatedAt',
+});
+
 function makeOcrPageId(paperId, pageNum, scale) {
   return `${paperId}:${pageNum}:${scale}`;
 }
@@ -39,6 +48,18 @@ export async function saveChat(thread) {
 
 export async function deleteChat(threadId) {
   return db.chats.delete(threadId);
+}
+
+export async function loadAllAgentChats() {
+  return db.agentChats.orderBy('updatedAt').reverse().toArray();
+}
+
+export async function saveAgentChat(thread) {
+  return db.agentChats.put(thread);
+}
+
+export async function deleteAgentChat(threadId) {
+  return db.agentChats.delete(threadId);
 }
 
 export async function deleteChatsByPaperIds(paperIds) {
