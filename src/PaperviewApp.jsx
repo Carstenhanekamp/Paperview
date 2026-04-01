@@ -757,7 +757,8 @@ function mergeFoldersByRoot(prevFolders, nextFolders, rootFolderId) {
   return merged;
 }
 
-async function requestOpenAIResponse(apiKey, payload) {
+async function requestOpenAIResponse(apiKey, payload, options = {}) {
+  const { signal } = options;
   try {
     const proxyHeaders = {
       "Content-Type": "application/json",
@@ -768,6 +769,7 @@ async function requestOpenAIResponse(apiKey, payload) {
       method: "POST",
       headers: proxyHeaders,
       body: JSON.stringify(payload),
+      signal,
     });
     const proxyContentType = String(proxyResponse.headers.get("content-type") || "").toLowerCase();
     const proxyBody = await proxyResponse.text();
@@ -802,6 +804,7 @@ async function requestOpenAIResponse(apiKey, payload) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(payload),
+    signal,
   });
 
   if (!res.ok) {
@@ -810,6 +813,16 @@ async function requestOpenAIResponse(apiKey, payload) {
   }
 
   return res.json();
+}
+
+function createStoppedError(message = "Request stopped.") {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortLikeError(error) {
+  return error?.name === "AbortError" || /aborted|aborterror|request stopped/i.test(String(error?.message || ""));
 }
 
 function ThinkingTrace({ steps, isLive, expanded, onToggle }) {
@@ -918,6 +931,7 @@ export default function PaperviewApp() {
   const [agentToolMenuOpen, setAgentToolMenuOpen] = useState(false);
   const [selectedAgentToolId, setSelectedAgentToolId] = useState(null);
   const [selectedChatPaperIds, setSelectedChatPaperIds] = useState([]);
+  const [chatContextMode, setChatContextMode] = useState("auto");
   const [selectedAgentPaperIds, setSelectedAgentPaperIds] = useState([]);
   const [agentImportStates, setAgentImportStates] = useState({});
   const [agentPreviewState, setAgentPreviewState] = useState(null);
@@ -976,6 +990,8 @@ export default function PaperviewApp() {
   const agentRemotePaperJobsRef = useRef(new Map());
   const paperTextJobsRef = useRef(new Map());
   const folderRefreshStateRef = useRef({ rootFolderId: null, lastRunAt: 0 });
+  const chatRequestRef = useRef({ controller: null, token: 0, chatId: null });
+  const agentRequestRef = useRef({ controller: null, token: 0, chatId: null });
 
   useEffect(() => {
     loadAllChats().then((saved) => {
@@ -997,6 +1013,10 @@ export default function PaperviewApp() {
   useEffect(() => { chatThreadsRef.current = chatThreads; }, [chatThreads]);
   useEffect(() => { agentThreadsRef.current = agentThreads; }, [agentThreads]);
   useEffect(() => () => { terminateTesseractWorkerNow().catch(() => {}); }, []);
+  useEffect(() => () => {
+    chatRequestRef.current.controller?.abort();
+    agentRequestRef.current.controller?.abort();
+  }, []);
 
   // Restore previously opened folders from IndexedDB (runs after scanDirHandle is defined)
   useEffect(() => {
@@ -1117,8 +1137,11 @@ export default function PaperviewApp() {
     const paperPool = (activeFolderPapers.length ? activeFolderPapers : openTabs).filter(Boolean);
     const byId = new Map(paperPool.map((paper) => [paper.id, paper]));
     const explicitlySelected = selectedChatPaperIds.map((id) => byId.get(id)).filter(Boolean);
-    return explicitlySelected.length ? explicitlySelected : (activePaper ? [activePaper] : []);
-  }, [activeFolderPapers, openTabs, selectedChatPaperIds, activePaper]);
+    if (chatContextMode === "manual") {
+      return explicitlySelected.length ? explicitlySelected : (activePaper ? [activePaper] : []);
+    }
+    return activePaper ? [activePaper] : explicitlySelected;
+  }, [activeFolderPapers, openTabs, selectedChatPaperIds, activePaper, chatContextMode]);
   const agentContextPapers = useMemo(() => {
     const byId = new Map(agentWorkspacePapers.map((paper) => [paper.id, paper]));
     return selectedAgentPaperIds.map((id) => byId.get(id)).filter(Boolean);
@@ -1620,14 +1643,30 @@ export default function PaperviewApp() {
     const availableIds = new Set(activeFolderPapers.map((p) => p.id));
     const next = selectedChatPaperIds.filter((id) => availableIds.has(id));
 
+    if (chatContextMode === "auto") {
+      const desired = activePaper && availableIds.has(activePaper.id) ? [activePaper.id] : next;
+      const unchanged =
+        desired.length === selectedChatPaperIds.length &&
+        desired.every((id, index) => selectedChatPaperIds[index] === id);
+      if (!unchanged) {
+        setSelectedChatPaperIds(desired);
+      }
+      return;
+    }
+
     if (!next.length && activePaper && availableIds.has(activePaper.id)) {
+      setChatContextMode("auto");
       setSelectedChatPaperIds([activePaper.id]);
       return;
     }
-    if (next.length !== selectedChatPaperIds.length) {
+
+    if (
+      next.length !== selectedChatPaperIds.length ||
+      next.some((id, index) => selectedChatPaperIds[index] !== id)
+    ) {
       setSelectedChatPaperIds(next);
     }
-  }, [activeFolderPapers, activePaper, selectedChatPaperIds]);
+  }, [activeFolderPapers, activePaper, selectedChatPaperIds, chatContextMode]);
 
   useEffect(() => {
     const availableIds = new Set(agentWorkspacePapers.map((p) => p.id));
@@ -1738,6 +1777,7 @@ export default function PaperviewApp() {
 
   const startNewChat = useCallback(() => {
     if (!activePaper?.id) return;
+    if (chatLoadingState) stopChatRun();
     const thread = createChatThreadRecord(activePaper.id);
     setChatThreads((prev) => [thread, ...prev]);
     saveChat(thread).catch(() => {});
@@ -1746,12 +1786,13 @@ export default function PaperviewApp() {
     setChatPaneMode("chat");
     setInput("");
     setChip(null);
-  }, [activePaper?.id]);
+  }, [activePaper?.id, chatLoadingState, stopChatRun]);
 
   const openChatThread = useCallback((threadId) => {
+    if (chatLoadingState) stopChatRun();
     setActiveChatId(threadId);
     setChatPaneMode("chat");
-  }, []);
+  }, [chatLoadingState, stopChatRun]);
 
   const resetActiveChatHistory = useCallback(() => {
     if (!activeChatId) return;
@@ -1767,10 +1808,10 @@ export default function PaperviewApp() {
       return next;
     });
     if (paperId) syncFolderForPaper(paperId);
-    if (chatLoadingState?.chatId === activeChatId) setChatLoadingState(null);
+    if (chatLoadingState?.chatId === activeChatId) stopChatRun();
     setInput("");
     setChip(null);
-  }, [activeChatId, chatLoadingState]);
+  }, [activeChatId, chatLoadingState, stopChatRun]);
 
   const resetChatThreadById = useCallback(
     (threadId) => {
@@ -1786,13 +1827,13 @@ export default function PaperviewApp() {
         return next;
       });
       if (paperId) syncFolderForPaper(paperId);
-      if (chatLoadingState?.chatId === threadId) setChatLoadingState(null);
+      if (chatLoadingState?.chatId === threadId) stopChatRun();
       if (activeChatId === threadId) {
         setInput("");
         setChip(null);
       }
     },
-    [activeChatId, chatLoadingState]
+    [activeChatId, chatLoadingState, stopChatRun]
   );
 
   const deleteChatThread = useCallback(
@@ -1804,9 +1845,9 @@ export default function PaperviewApp() {
         setInput("");
         setChip(null);
       }
-      if (chatLoadingState?.chatId === threadId) setChatLoadingState(null);
+      if (chatLoadingState?.chatId === threadId) stopChatRun();
     },
-    [activeChatId, chatLoadingState]
+    [activeChatId, chatLoadingState, stopChatRun]
   );
 
   const appendMessageToAgentChat = useCallback((chatId, message, options = {}) => {
@@ -1879,6 +1920,7 @@ export default function PaperviewApp() {
 
   const startNewAgentChat = useCallback(() => {
     if (!selectedRootFolderId || !hasWritableAgentContext) return;
+    if (agentLoadingState) stopAgentRun();
     const thread = createAgentChatThreadRecord(selectedRootFolderId);
     setAgentThreads((prev) => [thread, ...prev]);
     saveAgentChat(thread)
@@ -1889,12 +1931,13 @@ export default function PaperviewApp() {
     setSelectedAgentPaperIds([]);
     setAgentPreviewState(null);
     agentPreviewScrollFnRef.current = null;
-  }, [selectedRootFolderId, hasWritableAgentContext]);
+  }, [selectedRootFolderId, hasWritableAgentContext, agentLoadingState, stopAgentRun]);
 
   const openAgentThread = useCallback((threadId) => {
+    if (agentLoadingState) stopAgentRun();
     setActiveAgentChatId(threadId);
     setAgentInput("");
-  }, []);
+  }, [agentLoadingState, stopAgentRun]);
 
   const resetActiveAgentHistory = useCallback(() => {
     if (!activeAgentChatId) return;
@@ -1915,13 +1958,13 @@ export default function PaperviewApp() {
       }
       return next;
     });
-    if (agentLoadingState?.chatId === activeAgentChatId) setAgentLoadingState(null);
+    if (agentLoadingState?.chatId === activeAgentChatId) stopAgentRun();
     setAgentInput("");
     setSelectedAgentPaperIds([]);
     clearAgentRemotePapersForThread(activeAgentChatId);
     setAgentPreviewState(null);
     agentPreviewScrollFnRef.current = null;
-  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread]);
+  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread, stopAgentRun]);
 
   const resetAgentThreadById = useCallback((threadId) => {
     const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === threadId)?.rootFolderId;
@@ -1941,7 +1984,7 @@ export default function PaperviewApp() {
       }
       return next;
     });
-    if (agentLoadingState?.chatId === threadId) setAgentLoadingState(null);
+    if (agentLoadingState?.chatId === threadId) stopAgentRun();
     if (activeAgentChatId === threadId) {
       setAgentInput("");
       setSelectedAgentPaperIds([]);
@@ -1949,7 +1992,7 @@ export default function PaperviewApp() {
       agentPreviewScrollFnRef.current = null;
     }
     clearAgentRemotePapersForThread(threadId);
-  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread]);
+  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread, stopAgentRun]);
 
   const deleteAgentThread = useCallback((threadId) => {
     const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === threadId)?.rootFolderId;
@@ -1966,9 +2009,9 @@ export default function PaperviewApp() {
       setAgentPreviewState(null);
       agentPreviewScrollFnRef.current = null;
     }
-    if (agentLoadingState?.chatId === threadId) setAgentLoadingState(null);
+    if (agentLoadingState?.chatId === threadId) stopAgentRun();
     clearAgentRemotePapersForThread(threadId);
-  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread]);
+  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread, stopAgentRun]);
 
   const upsertAgentRemotePaper = useCallback((chatId, nextPaper) => {
     if (!chatId || !nextPaper?.id) return;
@@ -2526,10 +2569,47 @@ export default function PaperviewApp() {
     });
   };
 
+  const beginRequestRun = useCallback((requestRef, chatId) => {
+    requestRef.current.controller?.abort();
+    const controller = new AbortController();
+    const token = Date.now() + Math.random();
+    requestRef.current = { controller, token, chatId };
+    return { controller, token };
+  }, []);
+
+  const ensureRequestRunActive = useCallback((requestRef, token) => {
+    if (requestRef.current.token !== token) {
+      throw createStoppedError();
+    }
+  }, []);
+
+  const finishRequestRun = useCallback((requestRef, token) => {
+    if (requestRef.current.token === token) {
+      requestRef.current = { controller: null, token: 0, chatId: null };
+    }
+  }, []);
+
+  function stopChatRun() {
+    const activeRun = chatRequestRef.current;
+    activeRun.controller?.abort();
+    chatRequestRef.current = { controller: null, token: 0, chatId: null };
+    if (activeRun.chatId) clearThinkingSteps(activeRun.chatId);
+    setChatLoadingState(null);
+  }
+
+  function stopAgentRun() {
+    const activeRun = agentRequestRef.current;
+    activeRun.controller?.abort();
+    agentRequestRef.current = { controller: null, token: 0, chatId: null };
+    if (activeRun.chatId) clearAgentThinkingSteps(activeRun.chatId);
+    setAgentLoadingState(null);
+  }
+
   const doSend = async (override) => {
     const text = override || (chip ? `[Regarding: "${chip.substring(0, 80)}..."]\n${input}` : input);
     if (!text.trim() || !activeChatId || chatLoadingState) return;
     const targetChatId = activeChatId;
+    const { controller, token } = beginRequestRun(chatRequestRef, targetChatId);
     const userMessage = { id: createChatMessageId(), role: "user", content: text };
     appendMessageToChat(targetChatId, userMessage, { renameFromUser: text });
     setInput("");
@@ -2558,6 +2638,7 @@ export default function PaperviewApp() {
       }
       for (const paper of contextPapers) {
         readyContextPapers.push(hasExtractedPaperText(paper) ? paper : await startPaperTextExtraction(paper));
+        ensureRequestRunActive(chatRequestRef, token);
       }
 
       setChatLoadingState({ chatId: targetChatId, phase: "thinking", label: "Analysing..." });
@@ -2584,7 +2665,8 @@ export default function PaperviewApp() {
             content: `Available documents: ${availableDocumentNames}\n\nQuestion: ${text}\n\nUse the search_document tool to retrieve evidence before answering. Respond in JSON format.`,
           },
         ],
-      });
+      }, { signal: controller.signal });
+      ensureRequestRunActive(chatRequestRef, token);
       addUsageTotals(usageTotals, data?.usage);
       console.log("[reasoning debug] first response output:", JSON.stringify(data?.output?.map(o => ({ type: o.type, summary: o.summary })), null, 2));
       const reasoning1 = extractReasoningSummary(data);
@@ -2592,6 +2674,7 @@ export default function PaperviewApp() {
 
       let rounds = 0;
       while (rounds < MAX_SEARCH_TOOL_ROUNDS) {
+        ensureRequestRunActive(chatRequestRef, token);
         const toolCalls = extractFunctionCalls(data);
         if (!toolCalls.length) break;
 
@@ -2663,7 +2746,8 @@ export default function PaperviewApp() {
           ...basePayload,
           previous_response_id: data.id,
           input: toolOutputs,
-        });
+        }, { signal: controller.signal });
+        ensureRequestRunActive(chatRequestRef, token);
         addUsageTotals(usageTotals, data?.usage);
         const reasoningN = extractReasoningSummary(data);
         if (reasoningN) pushThinkingStep({ id: `ts-${Date.now()}-rn${rounds}`, chatId: targetChatId, type: "reasoning", label: "Continued reasoning", body: reasoningN });
@@ -2718,6 +2802,7 @@ export default function PaperviewApp() {
         totalCost: usageBreakdown.totalCost,
       };
 
+      ensureRequestRunActive(chatRequestRef, token);
       updateMessageInChat(targetChatId, userMessage.id, (message) => ({
         ...message,
         usage: usageMeta,
@@ -2733,6 +2818,10 @@ export default function PaperviewApp() {
       });
       clearThinkingSteps(targetChatId);
     } catch (e) {
+      if (isAbortLikeError(e)) {
+        clearThinkingSteps(targetChatId);
+        return;
+      }
       if (/No OpenAI API key is configured/i.test(e?.message || "")) {
         setShowSettings(true);
         setSettingsKey("");
@@ -2744,14 +2833,17 @@ export default function PaperviewApp() {
         content: `Could not prepare this chat request: ${e?.message || String(e)}`,
         citations: [],
       });
+    } finally {
+      finishRequestRun(chatRequestRef, token);
+      setChatLoadingState(null);
     }
-    setChatLoadingState(null);
   };
 
   const doSendAgent = async (override) => {
     const text = override || agentInput;
     if (!text.trim() || !activeAgentChatId || agentLoadingState || !selectedRootFolderId) return;
     const targetChatId = activeAgentChatId;
+    const { controller, token } = beginRequestRun(agentRequestRef, targetChatId);
     const activeTool = selectedAgentTool;
     const userMessage = {
       id: createChatMessageId(),
@@ -2789,6 +2881,7 @@ export default function PaperviewApp() {
 
       for (const paper of contextPapers) {
         readyContextPapers.push(hasExtractedPaperText(paper) ? paper : await startPaperTextExtraction(paper));
+        ensureRequestRunActive(agentRequestRef, token);
       }
 
       setAgentLoadingState({
@@ -2991,7 +3084,8 @@ export default function PaperviewApp() {
                 content: "Return the final answer again from scratch as one complete JSON object only. Keep the citations and paper_results complete, and if you need to save tokens, compress the answer wording before omitting citations. Do not call any more tools.",
               },
             ],
-          });
+          }, { signal: controller.signal });
+          ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, current?.usage);
           const finalReasoning = extractReasoningSummary(current);
           if (finalReasoning) {
@@ -3014,7 +3108,8 @@ export default function PaperviewApp() {
           ...basePayload,
           ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           input: passInput,
-        });
+        }, { signal: controller.signal });
+        ensureRequestRunActive(agentRequestRef, token);
         addUsageTotals(usageTotals, responseData?.usage);
         collectWebSources(
           responseData,
@@ -3035,6 +3130,7 @@ export default function PaperviewApp() {
 
         let toolCycles = 0;
         while (toolCycles < MAX_SEARCH_TOOL_ROUNDS) {
+          ensureRequestRunActive(agentRequestRef, token);
           const toolCalls = extractFunctionCalls(responseData);
           if (!toolCalls.length) break;
           toolCycles += 1;
@@ -3053,6 +3149,7 @@ export default function PaperviewApp() {
             }
 
             if (call.name === FETCH_REMOTE_PAPER_TOOL.name) {
+              ensureRequestRunActive(agentRequestRef, token);
               const descriptor = {
                 title: String(args.title || "").trim(),
                 sourceUrl: String(args.source_url || "").trim(),
@@ -3065,6 +3162,7 @@ export default function PaperviewApp() {
                   resultLabel: `Hydrated "${descriptor.title || "paper"}" for grounded citation search.`,
                   errorLabel: `Fetched "${descriptor.title || "paper"}", but text extraction was incomplete.`,
                 });
+                ensureRequestRunActive(agentRequestRef, token);
                 upsertThreadRemotePaper(remotePaper);
                 toolOutputs.push({
                   type: "function_call_output",
@@ -3159,7 +3257,8 @@ export default function PaperviewApp() {
             ...basePayload,
             previous_response_id: responseData.id,
             input: toolOutputs,
-          });
+          }, { signal: controller.signal });
+          ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, responseData?.usage);
           collectWebSources(
             responseData,
@@ -3382,6 +3481,7 @@ export default function PaperviewApp() {
         totalCost: usageBreakdown.totalCost,
       };
 
+      ensureRequestRunActive(agentRequestRef, token);
       updateMessageInAgentChat(targetChatId, userMessage.id, (message) => ({
         ...message,
         usage: usageMeta,
@@ -3402,6 +3502,10 @@ export default function PaperviewApp() {
       });
       clearAgentThinkingSteps(targetChatId);
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        clearAgentThinkingSteps(targetChatId);
+        return;
+      }
       const rawMessage = error?.message || String(error);
       if (/No OpenAI API key is configured/i.test(rawMessage)) {
         setShowSettings(true);
@@ -3421,8 +3525,10 @@ export default function PaperviewApp() {
         foundSourcesTotal: 0,
         paperResults: [],
       });
+    } finally {
+      finishRequestRun(agentRequestRef, token);
+      setAgentLoadingState(null);
     }
-    setAgentLoadingState(null);
   };
 
   const askAI = async () => {
@@ -5144,15 +5250,26 @@ export default function PaperviewApp() {
                               </div>
                             </div>
 
-                            <button
-                              className="icon-btn send-btn"
-                              onClick={() => doSendAgent()}
-                              disabled={!agentInput.trim() || Boolean(agentLoadingState)}
-                              title="Send"
-                              type="button"
-                            >
-                              <IArrowUp size={14} />
-                            </button>
+                            {agentLoadingState ? (
+                              <button
+                                className="chat-history-btn composer-stop-btn"
+                                onClick={stopAgentRun}
+                                title="Stop"
+                                type="button"
+                              >
+                                Stop
+                              </button>
+                            ) : (
+                              <button
+                                className="icon-btn send-btn"
+                                onClick={() => doSendAgent()}
+                                disabled={!agentInput.trim()}
+                                title="Send"
+                                type="button"
+                              >
+                                <IArrowUp size={14} />
+                              </button>
+                            )}
                           </div>
                         </div>
                           </div>
@@ -5593,14 +5710,20 @@ export default function PaperviewApp() {
                                       <button
                                         className="attach-mini-btn"
                                         type="button"
-                                        onClick={() => setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id))}
+                                        onClick={() => {
+                                          setChatContextMode("manual");
+                                          setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id));
+                                        }}
                                       >
                                         All
                                       </button>
                                       <button
                                         className="attach-mini-btn"
                                         type="button"
-                                        onClick={() => setSelectedChatPaperIds(activePaper?.id ? [activePaper.id] : [])}
+                                        onClick={() => {
+                                          setChatContextMode("auto");
+                                          setSelectedChatPaperIds(activePaper?.id ? [activePaper.id] : []);
+                                        }}
                                       >
                                         Active
                                       </button>
@@ -5612,13 +5735,16 @@ export default function PaperviewApp() {
                                   ) : (
                                     <div className="attach-list">
                                       {activeFolderPapers.map((paper) => {
-                                        const checked = selectedChatPaperIds.includes(paper.id);
+                                        const checked = chatContextMode === "auto"
+                                          ? paper.id === activePaper?.id
+                                          : selectedChatPaperIds.includes(paper.id);
                                         return (
                                           <label key={paper.id} className="attach-item">
                                             <input
                                               type="checkbox"
                                               checked={checked}
                                               onChange={() => {
+                                                setChatContextMode("manual");
                                                 setSelectedChatPaperIds((prev) =>
                                                   prev.includes(paper.id)
                                                     ? prev.filter((id) => id !== paper.id)
@@ -5688,9 +5814,20 @@ export default function PaperviewApp() {
                                 </div>
                               </div>
 
-                              <button className="icon-btn send-btn" onClick={() => doSend()} disabled={(!input.trim() && !chip) || Boolean(chatLoadingState)} title="Send">
-                                <IArrowUp size={14} />
-                              </button>
+                              {chatLoadingState ? (
+                                <button
+                                  className="chat-history-btn composer-stop-btn"
+                                  onClick={stopChatRun}
+                                  title="Stop"
+                                  type="button"
+                                >
+                                  Stop
+                                </button>
+                              ) : (
+                                <button className="icon-btn send-btn" onClick={() => doSend()} disabled={!input.trim() && !chip} title="Send" type="button">
+                                  <IArrowUp size={14} />
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>

@@ -330,6 +330,8 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);hei
 .icon-btn:hover{background:rgba(37,99,235,.06);color:var(--accent);}
 .send-btn{background:#111;border-color:#111;color:#fff;}
 .send-btn:hover{background:var(--accent);border-color:var(--accent);}
+.composer-stop-btn{height:32px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;color:#b42318;border-color:#f0d3d3;background:#fff7f7;}
+.composer-stop-btn:hover{background:#fff0f0;color:#912018;border-color:#efb5b5;}
 .attach-picker{position:relative;}
 .attach-menu{position:absolute;left:0;bottom:calc(100% + 6px);width:280px;max-height:260px;overflow:auto;background:#fff;border:1px solid var(--border);border-radius:6px;padding:8px;box-shadow:0 10px 22px rgba(0,0,0,.10);z-index:30;}
 .attach-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}
