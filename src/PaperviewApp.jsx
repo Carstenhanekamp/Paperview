@@ -3442,6 +3442,19 @@ export default function PaperviewApp() {
       });
       const pdfUrl = normalizeAgentSourceUrl(citation?.pdfUrl || remotePaper?.pdfUrl || "");
       const sourceUrl = normalizeAgentSourceUrl(citation?.url || remotePaper?.sourceUrl || "");
+      const localPaper = findWorkspacePaperForSource(agentWorkspacePapers, {
+        title: citation?.title || remotePaper?.title || remotePaper?.name || "",
+        sourceUrl,
+        pdfUrl,
+        doi: citation?.doi || remotePaper?.doi || "",
+      });
+      if (localPaper && currentView === "agent") {
+        openAgentPaper(localPaper, {
+          page: Number(citation?.page) || 1,
+          searchText: citation?.text || citation?.note || "",
+        });
+        return;
+      }
       if ((pdfUrl || remotePaper?.id) && currentView === "agent" && activeAgentChatId) {
         openAgentPreviewPaper({
           remotePaperId: remotePaper?.id || citation?.remotePaperId || null,
@@ -4730,85 +4743,88 @@ export default function PaperviewApp() {
                   </div>
                 ) : (
                   <>
-                    {agentSidebarOpen ? (
-                    <aside className="agent-sidebar">
+                    <aside className={`agent-sidebar ${agentSidebarOpen ? "" : "collapsed"}`}>
                       <div className="agent-sidebar-head">
                         <div className="agent-sidebar-topbar">
-                          <div className="agent-sidebar-copy">
-                            <div className="agent-empty-eyebrow">Workspace threads</div>
-                            <div className="agent-sidebar-title">{selectedRootFolder?.name || "Agent"}</div>
-                            <div className="agent-sidebar-subtitle">
-                              {agentWorkspacePapers.length} local paper{agentWorkspacePapers.length === 1 ? "" : "s"} available for grounded comparisons.
-                            </div>
-                          </div>
-                          <button
-                            className="chat-topbar-btn"
-                            type="button"
-                            onClick={() => setAgentSidebarOpen(false)}
-                            title="Collapse threads"
-                          >
-                            <IChevronLeftDouble size={14} />
-                          </button>
-                        </div>
-                        <div className="agent-sidebar-head-actions">
-                          <button className="lib-btn dark" type="button" onClick={startNewAgentChat}>
-                            <IPlus size={12} /> New thread
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="agent-context-card">
-                        <div className="agent-context-row">
-                          <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
-                          <span className="agent-context-meta">{selectedRootAgentThreads.length} saved thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>
-                        </div>
-                        <p className="agent-context-copy">
-                          Web research, local-paper context, and imported PDFs stay anchored to this writable root so the workspace travels with its <code>.paperview.json</code>.
-                        </p>
-                      </div>
-
-                      <div className="agent-thread-list">
-                        {selectedRootAgentThreads.length === 0 ? (
-                          <div className="chat-overview-empty-state">
-                            <div className="chat-overview-empty-title">No agent threads yet</div>
-                            <div className="chat-overview-empty-copy">Start a thread to search the web, compare papers, and save the conversation with this folder.</div>
-                          </div>
-                        ) : (
-                          selectedRootAgentThreads.map((thread) => (
-                            <div key={thread.id} className={`agent-thread-row ${thread.id === activeAgentChatId ? "active" : ""}`}>
-                              <button className="agent-thread-main" type="button" onClick={() => openAgentThread(thread.id)}>
-                                <div className="agent-thread-title">{thread.title}</div>
-                                <div className="agent-thread-meta">{formatChatMessageCount(thread.messages.length)} - {formatChatTimestamp(thread.updatedAt)}</div>
-                              </button>
-                              <div className="agent-thread-actions">
-                                {thread.id !== activeAgentChatId ? (
-                                  <button className="chat-thread-row-btn" type="button" onClick={() => openAgentThread(thread.id)}>Open</button>
-                                ) : (
-                                  <span className="agent-thread-badge">Open</span>
-                                )}
-                                <button
-                                  className="chat-thread-row-btn"
-                                  type="button"
-                                  onClick={() => resetAgentThreadById(thread.id)}
-                                  disabled={!thread.messages.length}
-                                >
-                                  Reset
-                                </button>
-                                <button
-                                  className="chat-thread-delete"
-                                  type="button"
-                                  onClick={() => deleteAgentThread(thread.id)}
-                                  title="Delete agent thread"
-                                >
-                                  <ITrash size={14} />
-                                </button>
+                          {agentSidebarOpen ? (
+                            <div className="agent-sidebar-copy">
+                              <div className="agent-empty-eyebrow">Workspace threads</div>
+                              <div className="agent-sidebar-title">{selectedRootFolder?.name || "Agent"}</div>
+                              <div className="agent-sidebar-subtitle">
+                                {agentWorkspacePapers.length} local paper{agentWorkspacePapers.length === 1 ? "" : "s"} available for grounded comparisons.
                               </div>
                             </div>
-                          ))
-                        )}
+                          ) : null}
+                          <button
+                            className="chat-topbar-btn agent-sidebar-toggle"
+                            type="button"
+                            onClick={() => setAgentSidebarOpen((open) => !open)}
+                            title={agentSidebarOpen ? "Collapse threads" : "Expand threads"}
+                            aria-label={agentSidebarOpen ? "Collapse threads" : "Expand threads"}
+                          >
+                            <IPanel size={14} />
+                          </button>
+                          {!agentSidebarOpen ? (
+                            <button
+                              className="chat-topbar-btn agent-sidebar-toggle agent-sidebar-chat-icon"
+                              type="button"
+                              onClick={() => setAgentSidebarOpen(true)}
+                              title="Show chats"
+                              aria-label="Show chats"
+                            >
+                              <IChat size={14} />
+                            </button>
+                          ) : null}
+                        </div>
+                        {agentSidebarOpen ? (
+                          <div className="agent-sidebar-head-actions">
+                            <button className="lib-btn dark" type="button" onClick={startNewAgentChat}>
+                              <IPlus size={12} /> New thread
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
+
+                      {agentSidebarOpen ? (
+                        <>
+                          <div className="agent-context-card">
+                            <div className="agent-context-row">
+                              <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
+                              <span className="agent-context-meta">{selectedRootAgentThreads.length} saved thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>
+                            </div>
+                            <p className="agent-context-copy">
+                              Web research, local-paper context, and imported PDFs stay anchored to this writable root so the workspace travels with its <code>.paperview.json</code>.
+                            </p>
+                          </div>
+
+                          <div className="agent-thread-list">
+                            {selectedRootAgentThreads.length === 0 ? (
+                              <div className="chat-overview-empty-state">
+                                <div className="chat-overview-empty-title">No agent threads yet</div>
+                                <div className="chat-overview-empty-copy">Start a thread to search the web, compare papers, and save the conversation with this folder.</div>
+                              </div>
+                            ) : (
+                              selectedRootAgentThreads.map((thread) => (
+                                <div key={thread.id} className={`agent-thread-row ${thread.id === activeAgentChatId ? "active" : ""}`}>
+                                  <button className="agent-thread-main" type="button" onClick={() => openAgentThread(thread.id)}>
+                                    <div className="agent-thread-title" title={thread.title}>{thread.title}</div>
+                                  </button>
+                                  <button
+                                    className="thread-compact-delete"
+                                    type="button"
+                                    onClick={() => deleteAgentThread(thread.id)}
+                                    title="Delete agent thread"
+                                    aria-label={`Delete ${thread.title}`}
+                                  >
+                                    <ITrash size={13} />
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </>
+                      ) : null}
                     </aside>
-                    ) : null}
 
                     <section className="agent-main citation-popover-boundary">
                       <div
@@ -4825,15 +4841,6 @@ export default function PaperviewApp() {
                               <div className="agent-main-subtitle">{activeAgentSummary}</div>
                             </div>
                             <div className="agent-main-actions">
-                              {!agentSidebarOpen ? (
-                                <button
-                                  className="chat-history-btn"
-                                  type="button"
-                                  onClick={() => setAgentSidebarOpen(true)}
-                                >
-                                  <IChevronRightDouble size={14} /> Threads
-                                </button>
-                              ) : null}
                               <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
                               <button
                                 className="chat-history-btn"
@@ -5386,22 +5393,18 @@ export default function PaperviewApp() {
                               <div className="chat-overview-list">
                                 {savedPaperThreads.map((thread) => (
                                   <div key={thread.id} className="chat-overview-row">
-                                    <button className="chat-overview-row-main" onClick={() => openChatThread(thread.id)}>
-                                      <div className="chat-overview-row-top">
-                                        <span className="chat-overview-row-title">{thread.title}</span>
-                                      </div>
-                                      <div className="chat-overview-row-meta">{formatChatMessageCount(thread.messages.length)} · {formatChatTimestamp(thread.updatedAt)}</div>
-                                      <div className="chat-overview-row-summary">
-                                        {thread.messages.length
-                                          ? "Resume this line of questioning exactly where you left it."
-                                          : "An empty thread ready for a new question."}
-                                      </div>
+                                    <button className="chat-overview-row-main" type="button" onClick={() => openChatThread(thread.id)}>
+                                      <span className="chat-overview-row-title" title={thread.title}>{thread.title}</span>
                                     </button>
-                                    <div className="chat-overview-row-actions">
-                                      <button className="chat-thread-row-btn" onClick={() => openChatThread(thread.id)}>Open</button>
-                                      <button className="chat-thread-row-btn" onClick={() => resetChatThreadById(thread.id)} disabled={!thread.messages.length}>Reset</button>
-                                      <button className="chat-thread-delete" onClick={() => deleteChatThread(thread.id)} title="Delete chat"><ITrash size={14}/></button>
-                                    </div>
+                                    <button
+                                      className="thread-compact-delete"
+                                      type="button"
+                                      onClick={() => deleteChatThread(thread.id)}
+                                      title="Delete chat"
+                                      aria-label={`Delete ${thread.title}`}
+                                    >
+                                      <ITrash size={13}/>
+                                    </button>
                                   </div>
                                 ))}
                               </div>
@@ -5874,7 +5877,7 @@ export default function PaperviewApp() {
                     />
                   </div>
                 )}
-                <p className="settings-info">Your key is stored only in this browser. When the backend proxy is available, Paperview can also use a server-side <code>OPENAI_API_KEY</code> instead of sending requests directly from the browser. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on whichever key you use.</p>
+                <p className="settings-info">To use AI features, add your OpenAI API key in Settings. It stays in this browser. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
               </div>
 
               <div className="m-acts">
