@@ -319,4 +319,19 @@ export async function extractPdfText(pdfBytes, options = {}) {
   return result;
 }
 
+export async function validatePdfBytes(pdfBytes) {
+  const lib = await loadPdfJs();
+  const loadingTask = lib.getDocument({ data: pdfBytes.slice(0), stopAtErrors: false });
+  const pdf = await loadingTask.promise;
+  try {
+    if (!pdf?.numPages || pdf.numPages < 1) {
+      throw new Error("PDF did not contain any pages.");
+    }
+    await pdf.getPage(1);
+    return { totalPages: pdf.numPages };
+  } finally {
+    try { await pdf.destroy?.(); } catch { /* ignore */ }
+  }
+}
+
 export { loadPdfJs };

@@ -18,7 +18,7 @@ import {
   loadPaperTextCache,
   deletePaperCachesByPaperIds,
 } from './db';
-import { extractPdfText, terminateTesseractWorkerNow } from './pdfUtils';
+import { extractPdfText, terminateTesseractWorkerNow, validatePdfBytes } from './pdfUtils';
 import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, ICopy, IZoomIn, IZoomOut, IPanel, IGrid, IChat, IMore, ILeft, IRight, ISpark, IPaperclip, IChevronDown, IArrowUp, IArrowDown, IChevronLeftDouble, IChevronRightDouble, ITrash, IGear, IHighlight, INotes } from './icons';
 import { CSS } from './styles';
 import { CHAT_TITLE_FALLBACK, createAgentChatThreadRecord, createChatThreadRecord, deriveChatTitle, formatChatTimestamp, formatChatMessageCount, derivePageTexts } from './chatUtils';
@@ -36,6 +36,8 @@ const OPENAI_MODELS = (import.meta.env.VITE_OPENAI_MODELS || "gpt-5.4-nano,gpt-5
   .filter(Boolean);
 
 const AGENT_IMPORTS_FOLDER_NAME = "Imported Papers";
+const OPENAI_PROXY_ENDPOINT = "/api/openai-response";
+const REMOTE_PDF_PROXY_ENDPOINT = "/api/fetch-pdf";
 const AGENT_WEB_SEARCH_DOMAINS = [
   "arxiv.org",
   "biorxiv.org",
@@ -237,6 +239,8 @@ const MAX_SEARCH_TOOL_ROUNDS = 20;
 const MAX_AGENT_RESEARCH_PASSES = 3;
 const TARGET_FOUND_SOURCES = 24;
 const MAX_FOUND_SOURCES_SHOWN = 8;
+const AGENT_MAX_OUTPUT_TOKENS = 8192;
+const AGENT_FINALIZE_MAX_OUTPUT_TOKENS = 6000;
 
 function createChatMessageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -405,6 +409,7 @@ function buildFoundSources({ paperResults = [], webSources = [], remotePapers = 
       sourceHost: getUrlHost(sourceUrl || pdfUrl),
       remotePaperId: remotePaper?.id || null,
       hydrationStatus: remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
+      hydrationError: remotePaper?.hydrationError || "",
       hasPdf: Boolean(pdfUrl),
       modelRank: index,
       sourceRank: Number.POSITIVE_INFINITY,
@@ -434,6 +439,7 @@ function buildFoundSources({ paperResults = [], webSources = [], remotePapers = 
       sourceHost: getUrlHost(sourceUrl || pdfUrl),
       remotePaperId: remotePaper?.id || null,
       hydrationStatus: remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
+      hydrationError: remotePaper?.hydrationError || "",
       hasPdf: Boolean(pdfUrl),
       modelRank: Number.POSITIVE_INFINITY,
       sourceRank: index,
@@ -492,6 +498,7 @@ function normalizeFoundSourceRecord(source, index = 0, remotePapers = []) {
     sourceHost: String(source?.sourceHost || getUrlHost(sourceUrl || pdfUrl)).trim(),
     remotePaperId: source?.remotePaperId || remotePaper?.id || null,
     hydrationStatus: source?.hydrationStatus || remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
+    hydrationError: source?.hydrationError || remotePaper?.hydrationError || "",
     hasPdf: Boolean(source?.hasPdf || pdfUrl),
   };
 }
@@ -556,6 +563,69 @@ function findPaperByName(papers, requestedName) {
   return papers.find((paper) => normalizeLookupValue(paper.name) === normalized) || null;
 }
 
+// Escape literal newlines/carriage-returns that appear inside JSON string values.
+// Models sometimes output unescaped newlines inside strings, making the JSON invalid.
+function sanitizeJsonNewlines(str) {
+  let inString = false;
+  let escaped = false;
+  let result = '';
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (escaped) { result += c; escaped = false; continue; }
+    if (c === '\\' && inString) { result += c; escaped = true; continue; }
+    if (c === '"') { inString = !inString; result += c; continue; }
+    if (inString && c === '\n') { result += '\\n'; continue; }
+    if (inString && c === '\r') { result += '\\r'; continue; }
+    result += c;
+  }
+  return result;
+}
+
+// Fetch a URL, preferring the app backend and falling back to browser fetches when needed.
+async function fetchWithCorsProxy(url) {
+  try {
+    const proxyResponse = await fetch(`${REMOTE_PDF_PROXY_ENDPOINT}?url=${encodeURIComponent(url)}`, {
+      headers: {
+        Accept: "application/pdf",
+      },
+    });
+    const proxyContentType = String(proxyResponse.headers.get("content-type") || "").toLowerCase();
+    if (proxyResponse.ok && !proxyContentType.includes("text/html")) return proxyResponse;
+
+    const proxyText = await proxyResponse.text();
+    const looksLikeAppShell = proxyContentType.includes("text/html") && /<!doctype html|<html/i.test(proxyText);
+    if (proxyResponse.ok || !looksLikeAppShell) {
+      // Fall through to browser-based fetches if the backend proxy is unavailable or the remote fetch failed.
+    }
+  } catch {
+    // Fall back to browser-based fetches below.
+  }
+
+  let directError = null;
+  try {
+    const res = await fetch(url);
+    if (res.ok) return res;
+    // Non-2xx but not a CORS block — throw so the proxy isn't used needlessly
+    directError = new Error(`Remote PDF download failed (${res.status}).`);
+  } catch (err) {
+    // TypeError ("Failed to fetch") is how browsers surface CORS blocks
+    directError = err;
+  }
+  const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+  const res = await fetch(proxyUrl);
+  if (!res.ok) throw directError || new Error(`Remote PDF download failed (${res.status}).`);
+  return res;
+}
+
+function extractOutputTextPart(part) {
+  if (!part || typeof part !== "object") return "";
+  if (typeof part.text === "string") return part.text.trim();
+  if (typeof part.value === "string") return part.value.trim();
+  if (typeof part?.text?.value === "string") return part.text.value.trim();
+  if (typeof part?.value?.text === "string") return part.value.text.trim();
+  return "";
+}
+
 function extractResponseOutputText(data) {
   const chunks = [];
   const seen = new Set();
@@ -569,8 +639,8 @@ function extractResponseOutputText(data) {
   for (const item of data?.output || []) {
     if (!Array.isArray(item?.content)) continue;
     for (const part of item.content) {
-      if (part?.type === "output_text" && typeof part.text === "string" && part.text.trim()) {
-        const text = part.text.trim();
+      if ((part?.type === "output_text" || part?.type === "text") && extractOutputTextPart(part)) {
+        const text = extractOutputTextPart(part);
         if (!seen.has(text)) {
           chunks.push(text);
           seen.add(text);
@@ -629,7 +699,102 @@ function extractReasoningSummary(data) {
   return texts.join("\n\n").trim();
 }
 
+function isResponseIncompleteForMaxOutput(data) {
+  return data?.status === "incomplete" && data?.incomplete_details?.reason === "max_output_tokens";
+}
+
+function getUrlFileStem(url) {
+  try {
+    const normalized = normalizeAgentSourceUrl(url);
+    const pathname = new URL(normalized).pathname || "";
+    const lastSegment = pathname.split("/").filter(Boolean).pop() || "";
+    return stripPdfExtension(decodeURIComponent(lastSegment));
+  } catch {
+    return "";
+  }
+}
+
+function isLikelySamePaperTitle(left, right) {
+  const a = normalizeLookupValue(left);
+  const b = normalizeLookupValue(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 14) return false;
+  return a.includes(b) || b.includes(a);
+}
+
+function isLikelySamePaperFile(paperName, source) {
+  const normalizedPaperName = normalizeLookupValue(stripPdfExtension(paperName));
+  const pdfStem = normalizeLookupValue(getUrlFileStem(source?.pdfUrl || source?.sourceUrl || ""));
+  if (!normalizedPaperName || !pdfStem) return false;
+  return normalizedPaperName === pdfStem || (pdfStem.length > 10 && normalizedPaperName.includes(pdfStem));
+}
+
+function findWorkspacePaperForSource(papers, source) {
+  if (!Array.isArray(papers) || !papers.length || !source) return null;
+  const exactTitle = papers.find((paper) => isLikelySamePaperTitle(paper?.name, source?.title));
+  if (exactTitle) return exactTitle;
+  const pdfStemMatch = papers.find((paper) => isLikelySamePaperFile(paper?.name, source));
+  if (pdfStemMatch) return pdfStemMatch;
+  return null;
+}
+
+function isManualPdfFetchError(message) {
+  return /invalid pdf structure|did not look like a pdf|server-side requests are not allowed|publisher blocked automated pdf|automated pdf fetch|forbidden/i.test(String(message || ""));
+}
+
+function buildManualPdfFetchMessage(title = "This paper") {
+  return `${title} blocked automated PDF fetch. Open the direct PDF in a browser tab, then download and import it manually.`;
+}
+
+function mergeFoldersByRoot(prevFolders, nextFolders, rootFolderId) {
+  if (!rootFolderId) return [...prevFolders];
+  const firstIndex = prevFolders.findIndex((folder) => folder.rootFolderId === rootFolderId);
+  const remaining = prevFolders.filter((folder) => folder.rootFolderId !== rootFolderId);
+  const insertIndex = firstIndex === -1 ? remaining.length : Math.min(firstIndex, remaining.length);
+  const merged = [...remaining];
+  merged.splice(insertIndex, 0, ...nextFolders);
+  return merged;
+}
+
 async function requestOpenAIResponse(apiKey, payload) {
+  try {
+    const proxyHeaders = {
+      "Content-Type": "application/json",
+    };
+    if (apiKey) proxyHeaders["x-openai-api-key"] = apiKey;
+
+    const proxyResponse = await fetch(OPENAI_PROXY_ENDPOINT, {
+      method: "POST",
+      headers: proxyHeaders,
+      body: JSON.stringify(payload),
+    });
+    const proxyContentType = String(proxyResponse.headers.get("content-type") || "").toLowerCase();
+    const proxyBody = await proxyResponse.text();
+    const looksLikeAppShell = proxyContentType.includes("text/html") && /<!doctype html|<html/i.test(proxyBody);
+
+    if (proxyResponse.ok && !looksLikeAppShell) {
+      return JSON.parse(proxyBody);
+    }
+
+    if (!looksLikeAppShell) {
+      if (!apiKey) {
+        throw new Error(proxyBody || "OpenAI request failed");
+      }
+    }
+  } catch (err) {
+    if (!apiKey) {
+      if (err instanceof TypeError) {
+        throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
+      }
+      throw err;
+    }
+  }
+
+  if (!apiKey) {
+    throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
+  }
+
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -743,6 +908,7 @@ export default function PaperviewApp() {
   const [searchQ, setSearchQ] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(true);
+  const [agentSidebarOpen, setAgentSidebarOpen] = useState(true);
   const [chatPaneMode, setChatPaneMode] = useState("chat");
   const [currentView, setCurrentView] = useState("library");
   const [selectedModel, setSelectedModel] = useState(OPENAI_MODEL);
@@ -757,6 +923,7 @@ export default function PaperviewApp() {
   const [agentPreviewState, setAgentPreviewState] = useState(null);
   const [agentPreviewScale, setAgentPreviewScale] = useState(1.05);
   const [agentPreviewPage, setAgentPreviewPage] = useState(1);
+  const [agentPreviewWidth, setAgentPreviewWidth] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [viewerSearchOpen, setViewerSearchOpen] = useState(false);
   const [viewerSearchQuery, setViewerSearchQuery] = useState("");
@@ -783,12 +950,14 @@ export default function PaperviewApp() {
       return false;
     }
   });
+  const [agentFolderCheckStates, setAgentFolderCheckStates] = useState({});
 
   const endRef = useRef(null);
   const taRef = useRef(null);
   const agentEndRef = useRef(null);
   const agentTaRef = useRef(null);
   const agentPreviewScrollFnRef = useRef(null);
+  const agentPreviewPaneRef = useRef(null);
   const fileRef = useRef(null);
   const scrollFnRef = useRef(null);
   const modelMenuRef = useRef(null);
@@ -798,6 +967,7 @@ export default function PaperviewApp() {
   const viewerSearchInputRef = useRef(null);
   const chatResizeRef = useRef({ active: false, startX: 0, startWidth: 480 });
   const sbResizeRef = useRef({ active: false, startX: 0, startWidth: 260 });
+  const agentPreviewResizeRef = useRef({ active: false, startX: 0, startWidth: 0 });
   const scanDirHandleRef = useRef(null);
   const folderHandlesMapRef = useRef(new Map()); // folderId → root FileSystemDirectoryHandle
   const foldersRef = useRef([]);
@@ -805,6 +975,7 @@ export default function PaperviewApp() {
   const agentThreadsRef = useRef([]);
   const agentRemotePaperJobsRef = useRef(new Map());
   const paperTextJobsRef = useRef(new Map());
+  const folderRefreshStateRef = useRef({ rootFolderId: null, lastRunAt: 0 });
 
   useEffect(() => {
     loadAllChats().then((saved) => {
@@ -921,8 +1092,11 @@ export default function PaperviewApp() {
     [agentRemotePapersByThread, activeAgentChatId]
   );
   const activeAgentPreviewPaper = useMemo(
-    () => activeAgentRemotePapers.find((paper) => paper.id === agentPreviewState?.paperId) || null,
-    [activeAgentRemotePapers, agentPreviewState?.paperId]
+    () =>
+      activeAgentRemotePapers.find((paper) => paper.id === agentPreviewState?.paperId) ||
+      agentWorkspacePapers.find((paper) => paper.id === agentPreviewState?.paperId) ||
+      null,
+    [activeAgentRemotePapers, agentPreviewState?.paperId, agentWorkspacePapers]
   );
   const hasAgentPreview = Boolean(agentPreviewState && activeAgentPreviewPaper?.pdfBytes?.length);
   const currentMessages = activeChat?.messages || [];
@@ -1407,6 +1581,29 @@ export default function PaperviewApp() {
   }, []);
 
   useEffect(() => {
+    const onMouseMove = (event) => {
+      if (!agentPreviewResizeRef.current.active) return;
+      const delta = agentPreviewResizeRef.current.startX - event.clientX;
+      const nextWidth = Math.max(300, Math.min(900, agentPreviewResizeRef.current.startWidth + delta));
+      setAgentPreviewWidth(nextWidth);
+    };
+
+    const onMouseUp = () => {
+      if (!agentPreviewResizeRef.current.active) return;
+      agentPreviewResizeRef.current.active = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
     setCurrentPage(1);
     setViewerSearchStatus("");
     setViewerSearchMatches([]);
@@ -1837,23 +2034,25 @@ export default function PaperviewApp() {
 
     const job = (async () => {
       try {
-        const response = await fetch(pdfUrl);
+        const response = await fetchWithCorsProxy(pdfUrl);
         if (!response.ok) {
           throw new Error(`Remote PDF download failed (${response.status}).`);
         }
         const fileBuffer = await response.arrayBuffer();
         const pdfBytes = new Uint8Array(fileBuffer);
+        const validation = await validatePdfBytes(pdfBytes);
         let hydratedPaper = {
           ...basePaper,
           pdfBytes,
           fileSize: pdfBytes.byteLength,
           fileLastModified: Date.now(),
+          pages: validation.totalPages || basePaper.pages,
           hydrationStatus: "preview_only",
         };
         upsertAgentRemotePaper(chatId, hydratedPaper);
 
         try {
-          const { fullText, pageTexts, totalPages } = await extractPdfText({ pdfBytes });
+          const { fullText, pageTexts, totalPages } = await extractPdfText(pdfBytes);
           hydratedPaper = {
             ...hydratedPaper,
             fullText,
@@ -1890,6 +2089,26 @@ export default function PaperviewApp() {
         }
 
         return hydratedPaper;
+      } catch (fetchError) {
+        const friendlyHydrationError = isManualPdfFetchError(fetchError?.message)
+          ? buildManualPdfFetchMessage(title)
+          : (fetchError?.message || "Could not fetch this PDF.");
+        const failedPaper = {
+          ...basePaper,
+          hydrationStatus: "manual_required",
+          hydrationError: friendlyHydrationError,
+        };
+        upsertAgentRemotePaper(chatId, failedPaper);
+        if (options.errorLabel) {
+          pushAgentThinkingStep({
+            id: `ats-${Date.now()}-fetchfail-${remotePaperId}`,
+            chatId,
+            type: "result",
+            label: options.errorLabel,
+            body: friendlyHydrationError,
+          });
+        }
+        throw new Error(friendlyHydrationError);
       } finally {
         agentRemotePaperJobsRef.current.delete(jobKey);
       }
@@ -1919,6 +2138,7 @@ export default function PaperviewApp() {
     if (!targetChatId) return;
     try {
       const remotePaper = await hydrateRemotePaperForAgent(targetChatId, descriptor);
+      setAgentPreviewWidth(null);
       setAgentPreviewState({
         chatId: targetChatId,
         paperId: remotePaper.id,
@@ -1933,7 +2153,9 @@ export default function PaperviewApp() {
         }
       }, 120);
     } catch (error) {
-      const fallbackUrl = normalizeAgentSourceUrl(descriptor?.sourceUrl || descriptor?.source_url || descriptor?.url || "");
+      const fallbackUrl = normalizeAgentSourceUrl(
+        descriptor?.pdfUrl || descriptor?.pdf_url || descriptor?.sourceUrl || descriptor?.source_url || descriptor?.url || ""
+      );
       if (fallbackUrl) {
         window.open(fallbackUrl, "_blank", "noopener,noreferrer");
       } else {
@@ -1970,6 +2192,21 @@ export default function PaperviewApp() {
     [sidebarOpen, sidebarWidth]
   );
 
+  const startAgentPreviewResize = useCallback(
+    (event) => {
+      if (!hasAgentPreview) return;
+      const currentWidth = agentPreviewPaneRef.current?.offsetWidth || 420;
+      agentPreviewResizeRef.current = {
+        active: true,
+        startX: event.clientX,
+        startWidth: currentWidth,
+      };
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [hasAgentPreview]
+  );
+
   const openPaper = async (paper, folderId) => {
     const ownerFolder =
       folders.find((f) => f.id === folderId) ||
@@ -2001,14 +2238,45 @@ export default function PaperviewApp() {
     }
   };
 
-  const openAgentPaper = (paper) => {
+  const openAgentPaper = useCallback(async (paper, options = {}) => {
     if (!paper) return;
     const ownerFolder =
-      folders.find((folder) => folder.id === paper.folderId) ||
-      folders.find((folder) => folder.papers.some((candidate) => candidate.id === paper.id));
+      foldersRef.current.find((folder) => folder.id === paper.folderId) ||
+      foldersRef.current.find((folder) => folder.papers.some((candidate) => candidate.id === paper.id));
     if (!ownerFolder) return;
-    openPaper(paper, ownerFolder.id);
-  };
+
+    try {
+      const readyPaper = paper.pdfBytes?.length ? paper : await ensurePaperPdfBytes(paper);
+      setSelectedFolderId(ownerFolder.id);
+      setUpFolder(ownerFolder.id);
+      setCurrentView("agent");
+      setFolders((prev) => prev.map((folder) => (
+        folder.id === ownerFolder.id || folder.id === ownerFolder.rootFolderId
+          ? { ...folder, expanded: true }
+          : folder
+      )));
+      setAgentPreviewWidth(null);
+      setAgentPreviewState({
+        chatId: activeAgentChatId,
+        paperId: readyPaper.id,
+        page: Number(options.page) || 1,
+        searchText: options.searchText || "",
+      });
+      setAgentPreviewPage(Number(options.page) || 1);
+      agentPreviewScrollFnRef.current = null;
+      if (!hasExtractedPaperText(readyPaper)) {
+        startPaperTextExtraction(readyPaper).catch(() => {});
+      }
+      setTimeout(() => {
+        if (options.page || options.searchText) {
+          jumpAgentPreviewToLocation(options.page || 1, options.searchText || "");
+        }
+      }, 120);
+    } catch (err) {
+      console.error('Failed to open paper in agent mode:', err);
+      alert(`Could not open "${paper.name}".\n\n${err?.message || String(err)}`);
+    }
+  }, [activeAgentChatId, ensurePaperPdfBytes, jumpAgentPreviewToLocation, startPaperTextExtraction]);
 
   const openFolderTabs = (folderId, options = {}) => {
     const { forceReader = true } = options;
@@ -2269,19 +2537,6 @@ export default function PaperviewApp() {
     setChatLoadingState({ chatId: targetChatId, phase: "preparing", label: "Preparing chat..." });
     clearThinkingSteps(targetChatId);
 
-    if (!apiKey) {
-      appendMessageToChat(targetChatId, {
-        role: "ai",
-        content: "No API key configured. Please open Settings to add your OpenAI API key.",
-        citations: [],
-      });
-      setChatLoadingState(null);
-      setShowSettings(true);
-      setSettingsKey('');
-      setSettingsKeyVisible(false);
-      return;
-    }
-
     try {
       const usageTotals = createUsageTotals();
       const conversationHistory = currentMessages.slice(-8);
@@ -2417,13 +2672,18 @@ export default function PaperviewApp() {
       // If still tool calls after max rounds, proceed anyway with the last response that has text
 
       const raw = extractResponseOutputText(data);
-      const m = raw.match(/\{[\s\S]*\}/);
       let parsed;
-      try {
-        parsed = m ? JSON.parse(m[0]) : null;
-        if (!parsed?.answer) throw new Error("Invalid");
-      } catch {
-        parsed = { answer: raw.replace(/```json|```/g, "").trim(), citations: [] };
+      {
+        const tryParseJson = (str) => { try { const p = JSON.parse(str); if (p?.answer) return p; } catch {} try { const p = JSON.parse(sanitizeJsonNewlines(str)); if (p?.answer) return p; } catch {} return null; };
+        const lastBrace = raw.lastIndexOf('}');
+        let found = null;
+        if (lastBrace !== -1) {
+          let pos = raw.indexOf('{');
+          const starts = [];
+          while (pos !== -1 && pos <= lastBrace) { starts.push(pos); pos = raw.indexOf('{', pos + 1); }
+          for (let i = starts.length - 1; i >= 0; i--) { found = tryParseJson(raw.slice(starts[i], lastBrace + 1)); if (found) break; }
+        }
+        parsed = found || { answer: raw.replace(/```json|```/g, "").trim(), citations: [] };
       }
 
       const allPapers = folders.flatMap((folder) =>
@@ -2473,6 +2733,11 @@ export default function PaperviewApp() {
       });
       clearThinkingSteps(targetChatId);
     } catch (e) {
+      if (/No OpenAI API key is configured/i.test(e?.message || "")) {
+        setShowSettings(true);
+        setSettingsKey("");
+        setSettingsKeyVisible(false);
+      }
       appendMessageToChat(targetChatId, {
         id: createChatMessageId(),
         role: "ai",
@@ -2503,24 +2768,6 @@ export default function PaperviewApp() {
       label: activeTool ? `${activeTool.title}...` : "Preparing research...",
     });
     clearAgentThinkingSteps(targetChatId);
-
-    if (!apiKey) {
-      appendMessageToAgentChat(targetChatId, {
-        id: createChatMessageId(),
-        role: "ai",
-        content: "No API key configured. Please open Settings to add your OpenAI API key.",
-        citations: [],
-        foundSources: [],
-        foundSourcesShown: 0,
-        foundSourcesTotal: 0,
-        paperResults: [],
-      });
-      setAgentLoadingState(null);
-      setShowSettings(true);
-      setSettingsKey('');
-      setSettingsKeyVisible(false);
-      return;
-    }
 
     try {
       const usageTotals = createUsageTotals();
@@ -2608,7 +2855,7 @@ export default function PaperviewApp() {
           : activeTool?.reasoningEffort || "low";
       const basePayload = {
         model: selectedModel,
-        max_output_tokens: 4096,
+        max_output_tokens: AGENT_MAX_OUTPUT_TOKENS,
         instructions: [AGENT_SYSTEM_PROMPT, modeInstruction, localContextInstruction].filter(Boolean).join("\n\n"),
         include: ["web_search_call.action.sources"],
         reasoning: { effort: reasoningEffort, summary: "detailed" },
@@ -2616,14 +2863,44 @@ export default function PaperviewApp() {
       };
       const normalizeParsedAgentResponse = (responseData) => {
         const raw = extractResponseOutputText(responseData);
-        const match = raw.match(/\{[\s\S]*\}/);
-        try {
-          const parsed = match ? JSON.parse(match[0]) : null;
-          if (!parsed?.answer) throw new Error("Invalid");
-          return parsed;
-        } catch {
-          return { answer: raw.replace(/```json|```/g, "").trim(), citations: [], paper_results: [] };
+        const tryParseJson = (str) => {
+          try {
+            const parsed = JSON.parse(str);
+            if (parsed?.answer) return parsed;
+          } catch {}
+          try {
+            const parsed = JSON.parse(sanitizeJsonNewlines(str));
+            if (parsed?.answer) return parsed;
+          } catch {}
+          return null;
+        };
+        // Find the { that begins the actual JSON response object by scanning all { positions.
+        // The greedy /\{[\s\S]*\}/ fails when the model prefixes the JSON with prose containing
+        // curly braces (e.g. "{EEG markers}"), so we try each { from last to first.
+        const lastBrace = raw.lastIndexOf('}');
+        if (lastBrace !== -1) {
+          let pos = raw.indexOf('{');
+          const starts = [];
+          while (pos !== -1 && pos <= lastBrace) {
+            starts.push(pos);
+            pos = raw.indexOf('{', pos + 1);
+          }
+          for (let i = starts.length - 1; i >= 0; i--) {
+            const result = tryParseJson(raw.slice(starts[i], lastBrace + 1));
+            if (result) {
+              return {
+                parsed: result,
+                parsedJson: true,
+                raw,
+              };
+            }
+          }
         }
+        return {
+          parsed: { answer: raw.replace(/```json|```/g, "").trim(), citations: [], paper_results: [] },
+          parsedJson: false,
+          raw,
+        };
       };
 
       const normalizePaperResults = (paperResults = []) =>
@@ -2679,6 +2956,57 @@ export default function PaperviewApp() {
         return documents.length
           ? documents.map((paper) => `"${paper.name}"`).join(", ")
           : "none";
+      };
+
+      const finalizeAgentJsonResponse = async (responseData) => {
+        let current = responseData;
+        let parseResult = normalizeParsedAgentResponse(current);
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          if (parseResult.parsedJson && !isResponseIncompleteForMaxOutput(current)) {
+            return { responseData: current, parseResult };
+          }
+
+          pushAgentThinkingStep({
+            id: `ats-${Date.now()}-finalize-${attempt + 1}`,
+            chatId: targetChatId,
+            type: "reasoning",
+            label: attempt === 0 ? "Finalizing the answer cleanly..." : "Retrying final answer formatting...",
+          });
+
+          current = await requestOpenAIResponse(apiKey, {
+            model: selectedModel,
+            previous_response_id: current.id,
+            max_output_tokens: AGENT_FINALIZE_MAX_OUTPUT_TOKENS,
+            instructions: [
+              AGENT_SYSTEM_PROMPT,
+              "Return the final answer again from scratch as one complete JSON object using the required schema.",
+              "Do not call tools. Do not continue a partial JSON object. Rewrite the full final answer compactly enough to fit within this response.",
+              "Preserve the complete citations array and paper_results before expanding the answer prose. If needed, shorten the answer slightly rather than dropping citations.",
+            ].join("\n\n"),
+            reasoning: { effort: "low", summary: "detailed" },
+            input: [
+              {
+                role: "user",
+                content: "Return the final answer again from scratch as one complete JSON object only. Keep the citations and paper_results complete, and if you need to save tokens, compress the answer wording before omitting citations. Do not call any more tools.",
+              },
+            ],
+          });
+          addUsageTotals(usageTotals, current?.usage);
+          const finalReasoning = extractReasoningSummary(current);
+          if (finalReasoning) {
+            pushAgentThinkingStep({
+              id: `ats-${Date.now()}-finalize-reason-${attempt + 1}`,
+              chatId: targetChatId,
+              type: "reasoning",
+              label: "Final answer reasoning",
+              body: finalReasoning,
+            });
+          }
+          parseResult = normalizeParsedAgentResponse(current);
+        }
+
+        return { responseData: current, parseResult };
       };
 
       const runAgentPass = async ({ input: passInput, previousResponseId = null, passNumber = 1 }) => {
@@ -2870,7 +3198,8 @@ export default function PaperviewApp() {
         ],
       });
 
-      let parsed = normalizeParsedAgentResponse(data);
+      let parseResult = normalizeParsedAgentResponse(data);
+      let parsed = parseResult.parsed;
       collectedPaperResults = normalizePaperResults(parsed.paper_results || []);
       let foundSourcesMeta = buildFoundSources({
         paperResults: collectedPaperResults,
@@ -2901,7 +3230,8 @@ export default function PaperviewApp() {
             },
           ],
         });
-        parsed = normalizeParsedAgentResponse(data);
+        parseResult = normalizeParsedAgentResponse(data);
+        parsed = parseResult.parsed;
         collectedPaperResults = [
           ...collectedPaperResults,
           ...normalizePaperResults(parsed.paper_results || []),
@@ -2929,6 +3259,20 @@ export default function PaperviewApp() {
         });
         passNumber = nextPassNumber;
       }
+
+      const finalized = await finalizeAgentJsonResponse(data);
+      data = finalized.responseData;
+      parseResult = finalized.parseResult;
+      parsed = parseResult.parsed;
+      collectedPaperResults = [
+        ...collectedPaperResults,
+        ...normalizePaperResults(parsed.paper_results || []),
+      ];
+      foundSourcesMeta = buildFoundSources({
+        paperResults: collectedPaperResults,
+        webSources: collectedWebSources,
+        remotePapers: threadRemotePapers,
+      });
 
       const allPapers = folders.flatMap((folder) =>
         folder.papers.map((paper) => ({ ...paper, folderId: folder.id }))
@@ -3059,6 +3403,11 @@ export default function PaperviewApp() {
       clearAgentThinkingSteps(targetChatId);
     } catch (error) {
       const rawMessage = error?.message || String(error);
+      if (/No OpenAI API key is configured/i.test(rawMessage)) {
+        setShowSettings(true);
+        setSettingsKey("");
+        setSettingsKeyVisible(false);
+      }
       const friendlyMessage = /web_search|unsupported|not supported/i.test(rawMessage)
         ? `The selected model (${selectedModel}) could not use web search. Choose a model with tool support and try again.`
         : rawMessage;
@@ -3172,97 +3521,28 @@ export default function PaperviewApp() {
     return null;
   }, []);
 
-  const renderFoundSourcesPanel = useCallback((message) => {
-    const foundSourcesMeta = getMessageFoundSources(message, activeAgentRemotePapers);
-    if (!foundSourcesMeta.shown.length) return null;
-
-    return (
-      <section className="agent-found-sources">
-        <div className="agent-found-sources-head">
-          <div className="agent-found-sources-title">
-            Found {foundSourcesMeta.total} source{foundSourcesMeta.total === 1 ? "" : "s"}
-          </div>
-          <div className="agent-found-sources-subtitle">
-            Showing the top {foundSourcesMeta.shown.length} ranked by relevance
-          </div>
-        </div>
-
-        <div className="agent-found-sources-list">
-          {foundSourcesMeta.shown.map((source, index) => {
-            const authorLine = formatSourceAuthors(source.authors);
-            const venueLine = [source.venue, source.year].filter(Boolean).join(", ");
-            const secondaryLine = venueLine || source.sourceHost || "Source";
-            return (
-              <article key={source.id || `${message.id}-source-${index}`} className="agent-found-source-row">
-                <div className="agent-found-source-copy">
-                  <div className="agent-found-source-title">{source.title || `Source ${index + 1}`}</div>
-                  {authorLine ? (
-                    <div className="agent-found-source-authors">{authorLine}</div>
-                  ) : null}
-                  {secondaryLine ? (
-                    <div className="agent-found-source-meta">{secondaryLine}</div>
-                  ) : null}
-                  {source.summary ? (
-                    <div className="agent-found-source-summary">{source.summary}</div>
-                  ) : null}
-                  <div className="agent-found-source-link">{source.sourceUrl || source.pdfUrl || source.sourceHost}</div>
-                </div>
-
-                <div className="agent-found-source-actions">
-                  {source.hasPdf ? (
-                    <span className="agent-found-source-badge">PDF available</span>
-                  ) : null}
-                  {source.sourceUrl ? (
-                    <button
-                      className="paper-result-btn"
-                      type="button"
-                      onClick={() => window.open(source.sourceUrl, "_blank", "noopener,noreferrer")}
-                    >
-                      Open source
-                    </button>
-                  ) : null}
-                  <button
-                    className="paper-result-btn"
-                    type="button"
-                    disabled={!source.pdfUrl}
-                    onClick={() => {
-                      openAgentPreviewPaper({
-                        remotePaperId: source.remotePaperId,
-                        title: source.title,
-                        sourceUrl: source.sourceUrl,
-                        pdfUrl: source.pdfUrl,
-                        doi: source.doi,
-                      }, { chatId: activeAgentChatId }).catch(() => {});
-                    }}
-                  >
-                    Open PDF
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-    );
-  }, [activeAgentChatId, activeAgentRemotePapers, openAgentPreviewPaper]);
-
   const renderAgentPreviewDrawer = useCallback(() => {
     if (!agentPreviewState || !activeAgentPreviewPaper?.pdfBytes?.length) return null;
     const previewSourceUrl = normalizeAgentSourceUrl(activeAgentPreviewPaper.sourceUrl || activeAgentPreviewPaper.pdfUrl || "");
+    const previewSubtitle = activeAgentPreviewPaper.venue
+      || activeAgentPreviewPaper.sourceHost
+      || activeAgentPreviewPaper.authors
+      || "Workspace PDF";
     return (
-      <aside className="agent-preview-drawer">
+      <aside className="agent-preview-drawer" ref={agentPreviewPaneRef}>
         <div className="agent-preview-head">
           <div className="agent-preview-copy">
             <div className="agent-empty-eyebrow">In-chat PDF preview</div>
             <div className="agent-preview-title">{activeAgentPreviewPaper.title || activeAgentPreviewPaper.name || "Remote paper"}</div>
             <div className="agent-preview-subtitle">
-              {activeAgentPreviewPaper.venue || activeAgentPreviewPaper.sourceHost || "Transient remote source"}
+              {previewSubtitle}
             </div>
           </div>
           <button
             className="chat-topbar-btn"
             type="button"
             onClick={() => {
+              setAgentPreviewWidth(null);
               setAgentPreviewState(null);
               agentPreviewScrollFnRef.current = null;
             }}
@@ -3308,15 +3588,17 @@ export default function PaperviewApp() {
         ) : null}
 
         <div className="agent-preview-viewer">
-          <PdfViewer
-            pdfBytes={activeAgentPreviewPaper.pdfBytes}
-            paperId={activeAgentPreviewPaper.id}
-            fileSize={activeAgentPreviewPaper.fileSize}
-            fileLastModified={activeAgentPreviewPaper.fileLastModified}
-            scale={agentPreviewScale}
-            onReady={handleAgentPreviewReady}
-            onPageChange={setAgentPreviewPage}
-          />
+          <div className="pdf-scroll">
+            <PdfViewer
+              pdfBytes={activeAgentPreviewPaper.pdfBytes}
+              paperId={activeAgentPreviewPaper.id}
+              fileSize={activeAgentPreviewPaper.fileSize}
+              fileLastModified={activeAgentPreviewPaper.fileLastModified}
+              scale={agentPreviewScale}
+              onReady={handleAgentPreviewReady}
+              onPageChange={setAgentPreviewPage}
+            />
+          </div>
         </div>
       </aside>
     );
@@ -3415,13 +3697,14 @@ export default function PaperviewApp() {
       }
 
       const targetFolder = await ensureImportedFolder(rootFolderId);
-      const response = await fetch(pdfUrl);
+      const response = await fetchWithCorsProxy(pdfUrl);
       if (!response.ok) {
         throw new Error(`PDF download failed (${response.status}).`);
       }
 
       const fileBuffer = await response.arrayBuffer();
       const pdfBytes = new Uint8Array(fileBuffer);
+      await validatePdfBytes(pdfBytes);
       const fileName = await getAvailablePdfFileName(targetFolder.directoryHandle, result?.title || "Imported paper");
       const fileHandle = await targetFolder.directoryHandle.getFileHandle(fileName, { create: true });
       const writable = await fileHandle.createWritable();
@@ -3464,14 +3747,17 @@ export default function PaperviewApp() {
       setSelectedFolderId(targetFolder.id);
       setUpFolder(targetFolder.id);
       setAgentImportStates((prev) => ({ ...prev, [importKey]: { status: "done", label: `Saved to ${targetFolder.name}` } }));
-      openPaper(paper, targetFolder.id);
+      openAgentPaper(paper);
     } catch (error) {
+      const message = isManualPdfFetchError(error?.message)
+        ? buildManualPdfFetchMessage(result?.title || "This paper")
+        : (error?.message || "Import failed.");
       setAgentImportStates((prev) => ({
         ...prev,
-        [importKey]: { status: "error", label: error?.message || "Import failed." },
+        [importKey]: { status: "error", label: message },
       }));
     }
-  }, [activeAgentChat?.rootFolderId, ensureImportedFolder, getAvailablePdfFileName, hasWritableAgentContext, openPaper, selectedRootFolderId]);
+  }, [activeAgentChat?.rootFolderId, ensureImportedFolder, getAvailablePdfFileName, hasWritableAgentContext, openAgentPaper, selectedRootFolderId]);
 
   const toggleFolder = (id) => setFolders((p) => p.map((f) => (f.id === id ? { ...f, expanded: !f.expanded } : f)));
 
@@ -3717,6 +4003,209 @@ export default function PaperviewApp() {
     }
   };
 
+  const refreshRootFolderContents = useCallback(async (rootFolderId) => {
+    if (!rootFolderId || !scanDirHandleRef.current) {
+      throw new Error("Open a writable Paperview folder first.");
+    }
+
+    const rootFolder = foldersRef.current.find((folder) => folder.id === rootFolderId && folder.rootFolderId === rootFolderId);
+    const dirHandle = rootFolder?.rootHandle || rootFolder?.directoryHandle;
+    if (!dirHandle) {
+      throw new Error("This workspace folder is not currently available.");
+    }
+
+    const scannedFolders = await scanDirHandleRef.current(dirHandle);
+    for (const folder of scannedFolders) {
+      folderHandlesMapRef.current.set(folder.id, dirHandle);
+    }
+    const snapshot = await readFolderSnapshot(dirHandle);
+    if (snapshot) await applyFolderSnapshot(snapshot);
+
+    setFolders((prev) => mergeFoldersByRoot(prev, scannedFolders, rootFolderId));
+
+    const selectedInRoot = foldersRef.current.find((folder) => folder.id === selectedFolderId)?.rootFolderId === rootFolderId
+      ? selectedFolderId
+      : null;
+    const nextSelectedFolder = scannedFolders.find((folder) => folder.id === selectedInRoot) || scannedFolders[0] || null;
+    setSelectedFolderId(nextSelectedFolder?.id || null);
+    setUpFolder(nextSelectedFolder?.id || "");
+    return scannedFolders;
+  }, [selectedFolderId]);
+
+  useEffect(() => {
+    if (!selectedRootFolderId || !hasWritableAgentContext) return undefined;
+
+    const maybeRefresh = () => {
+      if (document.visibilityState === "hidden") return;
+      const now = Date.now();
+      const lastRun = folderRefreshStateRef.current;
+      if (lastRun.rootFolderId === selectedRootFolderId && now - lastRun.lastRunAt < 2500) return;
+      folderRefreshStateRef.current = { rootFolderId: selectedRootFolderId, lastRunAt: now };
+      refreshRootFolderContents(selectedRootFolderId).catch(() => {});
+    };
+
+    window.addEventListener("focus", maybeRefresh);
+    document.addEventListener("visibilitychange", maybeRefresh);
+    return () => {
+      window.removeEventListener("focus", maybeRefresh);
+      document.removeEventListener("visibilitychange", maybeRefresh);
+    };
+  }, [hasWritableAgentContext, refreshRootFolderContents, selectedRootFolderId]);
+
+  const renderFoundSourcesPanel = useCallback((message) => {
+    const foundSourcesMeta = getMessageFoundSources(message, activeAgentRemotePapers);
+    if (!foundSourcesMeta.shown.length) return null;
+
+    return (
+      <section className="agent-found-sources">
+        <div className="agent-found-sources-head">
+          <div className="agent-found-sources-title">
+            Found {foundSourcesMeta.total} source{foundSourcesMeta.total === 1 ? "" : "s"}
+          </div>
+          <div className="agent-found-sources-subtitle">
+            Showing the top {foundSourcesMeta.shown.length} ranked by relevance
+          </div>
+        </div>
+
+        <div className="agent-found-sources-list">
+          {foundSourcesMeta.shown.map((source, index) => {
+            const authorLine = formatSourceAuthors(source.authors);
+            const venueLine = [source.venue, source.year].filter(Boolean).join(", ");
+            const secondaryLine = venueLine || source.sourceHost || "Source";
+            const importKey = buildAgentImportKey(message.id, source);
+            const folderCheckState = agentFolderCheckStates[importKey] || null;
+            const localPaper = findWorkspacePaperForSource(agentWorkspacePapers, source);
+            const badgeLabel =
+              localPaper
+                ? "Found in folder"
+                : source.hydrationStatus === "ready"
+                  ? "Searchable PDF"
+                  : source.hydrationStatus === "preview_only"
+                    ? "Previewable PDF"
+                    : source.hydrationStatus === "loading"
+                      ? "Fetching PDF"
+                      : source.hydrationStatus === "manual_required"
+                        ? "Open in browser"
+                        : source.hasPdf
+                          ? "PDF link found"
+                          : "";
+            const openPdfInBrowser = () => {
+              const targetUrl = normalizeAgentSourceUrl(source.pdfUrl || source.sourceUrl || "");
+              if (targetUrl) window.open(targetUrl, "_blank", "noopener,noreferrer");
+            };
+            const checkFolderForPaper = async () => {
+              if (!selectedRootFolderId) return;
+              setAgentFolderCheckStates((prev) => ({
+                ...prev,
+                [importKey]: { status: "loading", label: "Checking folder..." },
+              }));
+              try {
+                const refreshedFolders = await refreshRootFolderContents(selectedRootFolderId);
+                const refreshedPaper = findWorkspacePaperForSource(
+                  refreshedFolders.flatMap((folder) => folder.papers.map((paper) => ({ ...paper, folderId: folder.id }))),
+                  source,
+                );
+                setAgentFolderCheckStates((prev) => ({
+                  ...prev,
+                  [importKey]: refreshedPaper
+                    ? { status: "found", label: "Found in folder" }
+                    : { status: "idle", label: "Not found yet" },
+                }));
+              } catch (error) {
+                setAgentFolderCheckStates((prev) => ({
+                  ...prev,
+                  [importKey]: { status: "error", label: error?.message || "Could not check folder." },
+                }));
+              }
+            };
+            return (
+              <article key={source.id || `${message.id}-source-${index}`} className="agent-found-source-row">
+                <div className="agent-found-source-copy">
+                  <div className="agent-found-source-title">{source.title || `Source ${index + 1}`}</div>
+                  {authorLine ? (
+                    <div className="agent-found-source-authors">{authorLine}</div>
+                  ) : null}
+                  {secondaryLine ? (
+                    <div className="agent-found-source-meta">{secondaryLine}</div>
+                  ) : null}
+                  {source.summary ? (
+                    <div className="agent-found-source-summary">{source.summary}</div>
+                  ) : null}
+                  {source.hydrationError ? (
+                    <div className="agent-found-source-summary" style={{ color: "#9a3412" }}>{source.hydrationError}</div>
+                  ) : null}
+                  {source.hydrationStatus === "manual_required" && hasWritableAgentContext ? (
+                    <div className="agent-found-source-summary">
+                      Open the PDF in a browser tab, save it into <b>{selectedRootFolder?.name || "this workspace"}</b>, then click <b>Check folder</b>.
+                    </div>
+                  ) : null}
+                  {folderCheckState?.label ? (
+                    <div className="agent-found-source-summary">{folderCheckState.label}</div>
+                  ) : null}
+                  <div className="agent-found-source-link">{source.sourceUrl || source.pdfUrl || source.sourceHost}</div>
+                </div>
+
+                <div className="agent-found-source-actions">
+                  {badgeLabel ? (
+                    <span className="agent-found-source-badge">{badgeLabel}</span>
+                  ) : null}
+                  {source.sourceUrl ? (
+                    <button
+                      className="paper-result-btn"
+                      type="button"
+                      onClick={() => window.open(source.sourceUrl, "_blank", "noopener,noreferrer")}
+                    >
+                      Open source
+                    </button>
+                  ) : null}
+                  {localPaper ? (
+                    <button
+                      className="paper-result-btn"
+                      type="button"
+                      onClick={() => openAgentPaper(localPaper)}
+                    >
+                      Open in agent mode
+                    </button>
+                  ) : null}
+                  {!localPaper && source.hydrationStatus === "manual_required" && hasWritableAgentContext ? (
+                    <button
+                      className="paper-result-btn"
+                      type="button"
+                      onClick={() => checkFolderForPaper()}
+                      disabled={folderCheckState?.status === "loading"}
+                    >
+                      Check folder
+                    </button>
+                  ) : null}
+                  <button
+                    className="paper-result-btn"
+                    type="button"
+                    disabled={!source.pdfUrl}
+                    onClick={() => {
+                      if (source.hydrationStatus === "manual_required") {
+                        openPdfInBrowser();
+                        return;
+                      }
+                      openAgentPreviewPaper({
+                        remotePaperId: source.remotePaperId,
+                        title: source.title,
+                        sourceUrl: source.sourceUrl,
+                        pdfUrl: source.pdfUrl,
+                        doi: source.doi,
+                      }, { chatId: activeAgentChatId }).catch(() => {});
+                    }}
+                  >
+                    {source.hydrationStatus === "manual_required" ? "Open PDF in browser" : "Open PDF"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }, [activeAgentChatId, activeAgentRemotePapers, agentFolderCheckStates, agentWorkspacePapers, hasWritableAgentContext, openAgentPaper, openAgentPreviewPaper, refreshRootFolderContents, selectedRootFolder?.name, selectedRootFolderId]);
+
   // Trigger a folder snapshot write for the folder that owns a given paper
   const syncFolderForPaper = (paperId) => {
     if (!paperId) return;
@@ -3733,10 +4222,13 @@ export default function PaperviewApp() {
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       const flatFolders = await scanDirHandle(dirHandle);
+      const rootFolderId = flatFolders[0]?.rootFolderId || null;
       for (const f of flatFolders) folderHandlesMapRef.current.set(f.id, dirHandle);
       const snapshot = await readFolderSnapshot(dirHandle);
       if (snapshot) await applyFolderSnapshot(snapshot);
-      setFolders(flatFolders);
+      setFolders((prev) => (
+        rootFolderId ? mergeFoldersByRoot(prev, flatFolders, rootFolderId) : prev
+      ));
       setSelectedFolderId(flatFolders[0]?.id || null);
       setUpFolder(flatFolders[0]?.id || '');
       setCurrentView('library');
@@ -4216,7 +4708,7 @@ export default function PaperviewApp() {
                 </div>
               </div>
             ) : currentView === "agent" ? (
-              <div className="agent-view">
+              <div className={`agent-view ${agentSidebarOpen ? "" : "sidebar-collapsed"}`}>
                 {!hasWritableAgentContext ? (
                   <div className="agent-gate">
                     <div className="agent-empty-icon"><ISpark size={18} /></div>
@@ -4238,18 +4730,31 @@ export default function PaperviewApp() {
                   </div>
                 ) : (
                   <>
+                    {agentSidebarOpen ? (
                     <aside className="agent-sidebar">
                       <div className="agent-sidebar-head">
-                        <div className="agent-sidebar-copy">
-                          <div className="agent-empty-eyebrow">Workspace threads</div>
-                          <div className="agent-sidebar-title">{selectedRootFolder?.name || "Agent"}</div>
-                          <div className="agent-sidebar-subtitle">
-                            {agentWorkspacePapers.length} local paper{agentWorkspacePapers.length === 1 ? "" : "s"} available for grounded comparisons.
+                        <div className="agent-sidebar-topbar">
+                          <div className="agent-sidebar-copy">
+                            <div className="agent-empty-eyebrow">Workspace threads</div>
+                            <div className="agent-sidebar-title">{selectedRootFolder?.name || "Agent"}</div>
+                            <div className="agent-sidebar-subtitle">
+                              {agentWorkspacePapers.length} local paper{agentWorkspacePapers.length === 1 ? "" : "s"} available for grounded comparisons.
+                            </div>
                           </div>
+                          <button
+                            className="chat-topbar-btn"
+                            type="button"
+                            onClick={() => setAgentSidebarOpen(false)}
+                            title="Collapse threads"
+                          >
+                            <IChevronLeftDouble size={14} />
+                          </button>
                         </div>
-                        <button className="lib-btn dark" type="button" onClick={startNewAgentChat}>
-                          <IPlus size={12} /> New thread
-                        </button>
+                        <div className="agent-sidebar-head-actions">
+                          <button className="lib-btn dark" type="button" onClick={startNewAgentChat}>
+                            <IPlus size={12} /> New thread
+                          </button>
+                        </div>
                       </div>
 
                       <div className="agent-context-card">
@@ -4303,29 +4808,43 @@ export default function PaperviewApp() {
                         )}
                       </div>
                     </aside>
+                    ) : null}
 
                     <section className="agent-main citation-popover-boundary">
-                      <div className="agent-main-head">
-                        <div className="agent-main-copy">
-                          <div className="agent-empty-eyebrow">Paperview Agent</div>
-                          <div className="agent-main-title">{activeAgentChat?.title || "New thread"}</div>
-                          <div className="agent-main-subtitle">{activeAgentSummary}</div>
-                        </div>
-                        <div className="agent-main-actions">
-                          <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
-                          <button
-                            className="chat-history-btn"
-                            type="button"
-                            onClick={resetActiveAgentHistory}
-                            disabled={!currentAgentMessages.length && !agentInput.trim()}
-                          >
-                            Reset current
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className={`agent-workspace-body ${hasAgentPreview ? "has-preview" : ""}`}>
+                      <div
+                        className={`agent-workspace-body ${hasAgentPreview ? "has-preview" : ""}`}
+                        style={hasAgentPreview && agentPreviewWidth
+                          ? { gridTemplateColumns: `minmax(0,1fr) 5px minmax(300px, ${agentPreviewWidth}px)` }
+                          : undefined}
+                      >
                         <div className="agent-conversation-pane">
+                          <div className="agent-main-head">
+                            <div className="agent-main-copy">
+                              <div className="agent-empty-eyebrow">Paperview Agent</div>
+                              <div className="agent-main-title">{activeAgentChat?.title || "New thread"}</div>
+                              <div className="agent-main-subtitle">{activeAgentSummary}</div>
+                            </div>
+                            <div className="agent-main-actions">
+                              {!agentSidebarOpen ? (
+                                <button
+                                  className="chat-history-btn"
+                                  type="button"
+                                  onClick={() => setAgentSidebarOpen(true)}
+                                >
+                                  <IChevronRightDouble size={14} /> Threads
+                                </button>
+                              ) : null}
+                              <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
+                              <button
+                                className="chat-history-btn"
+                                type="button"
+                                onClick={resetActiveAgentHistory}
+                                disabled={!currentAgentMessages.length && !agentInput.trim()}
+                              >
+                                Reset current
+                              </button>
+                            </div>
+                          </div>
                           <div className="agent-msgs">
                             {currentAgentMessages.length === 0 ? (
                               <div className="agent-empty">
@@ -4631,6 +5150,18 @@ export default function PaperviewApp() {
                         </div>
                           </div>
                         </div>
+
+                        {hasAgentPreview ? (
+                          <div
+                            className="agent-preview-resize-handle"
+                            onMouseDown={startAgentPreviewResize}
+                            role="separator"
+                            aria-orientation="vertical"
+                            aria-label="Resize in-chat PDF preview"
+                          >
+                            <span className="agent-preview-resize-grip" />
+                          </div>
+                        ) : null}
 
                         {renderAgentPreviewDrawer()}
                       </div>
@@ -5343,7 +5874,7 @@ export default function PaperviewApp() {
                     />
                   </div>
                 )}
-                <p className="settings-info">Your key is stored only in this browser and sent directly to OpenAI over HTTPS. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
+                <p className="settings-info">Your key is stored only in this browser. When the backend proxy is available, Paperview can also use a server-side <code>OPENAI_API_KEY</code> instead of sending requests directly from the browser. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on whichever key you use.</p>
               </div>
 
               <div className="m-acts">
@@ -5412,7 +5943,7 @@ export default function PaperviewApp() {
                   { green:true,  text:'Chat history and annotations are saved in your browser and synced to a .paperview.json file inside your folder.' },
                   { green:true,  text:'Your API key is stored in your browser\'s localStorage only.' },
                   { green:false, text:'PDF text is sent to OpenAI when you send a message.' },
-                  { green:false, text:'Your API key is included in requests to OpenAI (encrypted via HTTPS).' },
+                  { green:false, text:'Your API key is sent from the browser only when you use a client-side key instead of the backend proxy.' },
                 ].map((item, i) => (
                   <div key={i} style={{ display:'flex',gap:10,alignItems:'flex-start' }}>
                     <div style={{ width:8,height:8,borderRadius:'50%',background:item.green?'#16a34a':'#dc2626',marginTop:5,flexShrink:0 }} />
@@ -5421,7 +5952,7 @@ export default function PaperviewApp() {
                 ))}
               </div>
               <p style={{ fontSize:12,color:'#8a867c',marginBottom:24,lineHeight:1.5,fontWeight:500 }}>
-                Green = stays on your device. Red = sent to OpenAI over HTTPS. We never see any of it.
+                Green = stays on your device. Red = sent to OpenAI over HTTPS. If you deploy the backend proxy, Paperview sends those requests through your own server route instead of directly from the browser.
               </p>
               <button
                 style={{ width:'100%',background:'#121212',color:'#fff',border:'none',borderRadius:10,padding:'12px 0',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit' }}

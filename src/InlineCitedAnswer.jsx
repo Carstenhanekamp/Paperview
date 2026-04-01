@@ -18,153 +18,18 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
       .replace(/\s+/g, " ")
       .trim(), []);
 
-  const markerSegments = useMemo(() => {
-    const raw = String(text || "");
-    if (!/\[\d+\]/.test(raw)) return null;
-
-    const lines = raw.split("\n");
-    const out = [];
-
-    lines.forEach((line, lineIndex) => {
-      if (!line.length) {
-        out.push({ type: "br", id: `marker-br-${lineIndex}` });
-      } else {
-        const markerRegex = /\[(\d+)\]/g;
-        let lastIndex = 0;
-        let markerMatch = markerRegex.exec(line);
-        let partIndex = 0;
-
-        while (markerMatch) {
-          if (markerMatch.index > lastIndex) {
-            out.push({
-              type: "text",
-              id: `marker-text-${lineIndex}-${partIndex}`,
-              text: line.slice(lastIndex, markerMatch.index),
-            });
-            partIndex += 1;
-          }
-
-          out.push({
-            type: "marker",
-            id: `marker-${lineIndex}-${partIndex}`,
-            citationIndex: Number(markerMatch[1]) - 1,
-          });
-          partIndex += 1;
-          lastIndex = markerMatch.index + markerMatch[0].length;
-          markerMatch = markerRegex.exec(line);
-        }
-
-        if (lastIndex < line.length) {
-          out.push({
-            type: "text",
-            id: `marker-text-${lineIndex}-${partIndex}`,
-            text: line.slice(lastIndex),
-          });
-        }
-      }
-
-      if (lineIndex < lines.length - 1) {
-        out.push({ type: "br", id: `marker-newline-${lineIndex}` });
-      }
-    });
-
-    return out;
-  }, [text]);
-
-  const usesExplicitMarkers = Boolean(markerSegments);
-
-  const segments = useMemo(() => {
-    const lines = String(text || "").split("\n");
-    const out = [];
-    lines.forEach((line, li) => {
-      if (!line.trim()) {
-        out.push({ type: "br", id: `br-${li}` });
-      } else {
-        const parts = (line.match(/[^.!?]+[.!?]+[,;]?(?:\s+|$)|[^.!?]+$/g) || [line])
-          .map((p) => p.replace(/^[\s,;]+/, ''))
-          .filter(Boolean);
-        parts.forEach((part, pi) => {
-          if (part.trim()) out.push({ type: "sentence", id: `s-${li}-${pi}`, text: part });
-        });
-      }
-      if (li < lines.length - 1) out.push({ type: "br", id: `n-${li}` });
-    });
-    return out;
-  }, [text]);
-
-  const placement = useMemo(() => {
-    if (usesExplicitMarkers) return new Map();
-
-    const sentenceIdxs = [];
-    const sentenceNorm = [];
-    segments.forEach((seg, idx) => {
-      if (seg.type === "sentence") {
-        sentenceIdxs.push(idx);
-        sentenceNorm.push(normalize(seg.text));
-      }
-    });
-
-    const map = new Map();
-    if (!sentenceIdxs.length) return map;
-
-    const makeNgrams = (arr, n) => {
-      const gs = [];
-      if (arr.length < n) return gs;
-      for (let i = 0; i <= arr.length - n; i++) gs.push(arr.slice(i, i + n).join(" "));
-      return gs;
-    };
-
-    (citations || []).forEach((c, ci) => {
-      const cNorm = normalize(c?.text || "");
-      const cWords = cNorm.split(" ").filter(Boolean);
-      if (!cWords.length) return;
-
-      let bestPos = 0;
-      let bestScore = -1;
-
-      sentenceNorm.forEach((sNorm, si) => {
-        const sWords = sNorm.split(" ").filter(Boolean);
-        if (!sWords.length) return;
-
-        const sSet = new Set(sWords);
-        const overlap = cWords.filter((w) => sSet.has(w)).length / cWords.length;
-        const tri = makeNgrams(cWords, Math.min(3, cWords.length));
-        const triHit = tri.length ? tri.some((g) => sNorm.includes(g)) : false;
-        const fullHit = sNorm.includes(cNorm) ? 1 : 0;
-        const score = overlap + (triHit ? 0.45 : 0) + fullHit;
-
-        if (score > bestScore) {
-          bestScore = score;
-          bestPos = si;
-        }
-      });
-
-      const segIdx = sentenceIdxs[bestPos] ?? sentenceIdxs[sentenceIdxs.length - 1];
-      const arr = map.get(segIdx) || [];
-      arr.push(ci);
-      map.set(segIdx, arr);
-    });
-
-    return map;
-  }, [usesExplicitMarkers, segments, citations, normalize]);
-
   useEffect(() => () => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
   }, []);
 
   useEffect(() => {
     if (hoveredCitation == null) return undefined;
-
     const handleOutsidePointer = (event) => {
-      if (!event.target.closest(".inline-cit-wrap")) {
-        setHoveredCitation(null);
-      }
+      if (!event.target.closest(".inline-cit-wrap")) setHoveredCitation(null);
     };
-
     const handleEscape = (event) => {
       if (event.key === "Escape") setHoveredCitation(null);
     };
-
     document.addEventListener("mousedown", handleOutsidePointer);
     document.addEventListener("keydown", handleEscape);
     return () => {
@@ -178,15 +43,10 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
       setPopoverStyle(null);
       return undefined;
     }
-
     const updatePopoverPosition = () => {
       const wrap = citationWrapRefs.current.get(hoveredCitation.anchorKey);
       const panel = wrap?.closest(".citation-popover-boundary") || wrap?.closest(".chat-panel");
-      if (!wrap || !panel) {
-        setPopoverStyle(null);
-        return;
-      }
-
+      if (!wrap || !panel) { setPopoverStyle(null); return; }
       const wrapRect = wrap.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
       const maxWidth = Math.min(320, Math.max(220, panelRect.width - 28));
@@ -194,13 +54,8 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
         Math.max(panelRect.left + 10, wrapRect.left),
         panelRect.right - maxWidth - 10
       );
-
-      setPopoverStyle({
-        left: `${clampedLeft - wrapRect.left}px`,
-        width: `${maxWidth}px`,
-      });
+      setPopoverStyle({ left: `${clampedLeft - wrapRect.left}px`, width: `${maxWidth}px` });
     };
-
     updatePopoverPosition();
     window.addEventListener("resize", updatePopoverPosition);
     return () => window.removeEventListener("resize", updatePopoverPosition);
@@ -216,18 +71,10 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
     hideTimerRef.current = setTimeout(() => setHoveredCitation(null), 120);
   };
 
-  const renderRich = (value, keyPrefix) => {
-    const parts = String(value || "").replace(/^[\s,;]+/, "").split(/\*\*([^*]+)\*\*/g);
-    return parts.map((p, j) =>
-      j % 2 === 1 ? <strong key={`${keyPrefix}-b-${j}`}>{p}</strong> : <React.Fragment key={`${keyPrefix}-t-${j}`}>{p}</React.Fragment>
-    );
-  };
-
   const renderCitationAnchor = (ci, key) => {
     const c = citations[ci];
     if (!c) return null;
     const anchorKey = `anchor-${key}`;
-
     const isWebCitation = c?.kind === "web" || Boolean(c?.url);
     const title = isWebCitation
       ? `Source ${ci + 1}`
@@ -299,26 +146,218 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
     );
   };
 
-  return (
-    <>
-      {usesExplicitMarkers
-        ? markerSegments.map((seg) => {
-            if (seg.type === "br") return <br key={seg.id} />;
-            if (seg.type === "marker") {
-              return renderCitationAnchor(seg.citationIndex, seg.id);
-            }
-            return <React.Fragment key={seg.id}>{renderRich(seg.text, seg.id)}</React.Fragment>;
-          })
-        : segments.map((seg, idx) => {
-            if (seg.type === "br") return <br key={seg.id} />;
-            const attached = placement.get(idx) || [];
+  const renderBoldSegments = useCallback((content, keyPrefix) => {
+    const nodes = [];
+    const regex = /\*\*(.+?)\*\*/g;
+    let last = 0;
+    let m;
+
+    while ((m = regex.exec(content)) !== null) {
+      if (m.index > last) {
+        nodes.push(
+          <React.Fragment key={`${keyPrefix}-t${nodes.length}`}>
+            {content.slice(last, m.index)}
+          </React.Fragment>
+        );
+      }
+      nodes.push(<strong key={`${keyPrefix}-b${nodes.length}`}>{m[1]}</strong>);
+      last = m.index + m[0].length;
+      if (!m[0]?.length) regex.lastIndex += 1;
+    }
+
+    if (last < content.length) {
+      nodes.push(
+        <React.Fragment key={`${keyPrefix}-t${nodes.length}`}>
+          {content.slice(last)}
+        </React.Fragment>
+      );
+    }
+
+    return nodes;
+  }, []);
+
+  // Parse citations first so nested markdown inside bold text cannot swallow [N] markers.
+  const parseInlineLine = useCallback((line, keyPrefix) => {
+    const nodes = [];
+    const regex = /\[(\d+)\]/g;
+    let last = 0;
+    let m;
+
+    while ((m = regex.exec(line)) !== null) {
+      if (m.index > last) {
+        nodes.push(...renderBoldSegments(line.slice(last, m.index), `${keyPrefix}-s${nodes.length}`));
+      }
+      nodes.push(renderCitationAnchor(Number(m[1]) - 1, `${keyPrefix}-c${nodes.length}`));
+      last = m.index + m[0].length;
+      if (!m[0]?.length) regex.lastIndex += 1;
+    }
+
+    if (last < line.length) {
+      nodes.push(...renderBoldSegments(line.slice(last), `${keyPrefix}-s${nodes.length}`));
+    }
+
+    return nodes;
+  }, [renderBoldSegments, citations, hoveredCitation, popoverStyle]);
+
+  // Detect if text uses explicit [N] citation markers
+  const hasExplicitMarkers = useMemo(() => /\[\d+\]/.test(String(text || "")), [text]);
+
+  // Parse text into block-level elements for rendering
+  const blocks = useMemo(() => {
+    const lines = String(text || "").split("\n");
+    const result = [];
+    let listType = null; // "ul" or "ol"
+    let listItems = [];
+
+    const flushList = () => {
+      if (listItems.length) {
+        result.push({ type: listType, items: listItems });
+        listItems = [];
+        listType = null;
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        flushList();
+        continue;
+      }
+
+      const h3 = trimmed.match(/^###\s+(.*)/);
+      const h2 = trimmed.match(/^##\s+(.*)/);
+      const h1 = trimmed.match(/^#\s+(.*)/);
+      if (h1 || h2 || h3) {
+        flushList();
+        const level = h3 ? 3 : h2 ? 2 : 1;
+        const txt = (h3 || h2 || h1)[1];
+        result.push({ type: "heading", level, text: txt });
+        continue;
+      }
+
+      const bullet = trimmed.match(/^[-*•]\s+(.*)/);
+      if (bullet) {
+        if (listType !== "ul") { flushList(); listType = "ul"; }
+        listItems.push(bullet[1]);
+        continue;
+      }
+
+      const ordered = trimmed.match(/^\d+[.)]\s+(.*)/);
+      if (ordered) {
+        if (listType !== "ol") { flushList(); listType = "ol"; }
+        listItems.push(ordered[1]);
+        continue;
+      }
+
+      // Plain text — merge consecutive non-empty lines into the same paragraph
+      flushList();
+      if (result.length > 0 && result[result.length - 1].type === "p") {
+        result[result.length - 1].text += " " + trimmed;
+      } else {
+        result.push({ type: "p", text: trimmed });
+      }
+    }
+
+    flushList();
+    return result;
+  }, [text]);
+
+  // Auto-placement logic for texts without explicit [N] markers
+  const autoPlacement = useMemo(() => {
+    if (hasExplicitMarkers) return new Map();
+
+    const sentenceTexts = [];
+    const sentenceBlockRefs = []; // {blockIdx, itemIdx?}
+
+    blocks.forEach((block, bi) => {
+      const extractSentences = (txt, ref) => {
+        const parts = (txt.match(/[^.!?]+[.!?]+[,;]?(?:\s+|$)|[^.!?]+$/g) || [txt])
+          .map((p) => p.replace(/^[\s,;]+/, "").trim())
+          .filter(Boolean);
+        parts.forEach((s) => { sentenceTexts.push(normalize(s)); sentenceBlockRefs.push(ref); });
+      };
+
+      if (block.type === "p") extractSentences(block.text, { bi });
+      if (block.type === "ul" || block.type === "ol") {
+        block.items.forEach((item, ii) => extractSentences(item, { bi, ii }));
+      }
+    });
+
+    const makeNgrams = (arr, n) => {
+      const gs = [];
+      if (arr.length < n) return gs;
+      for (let i = 0; i <= arr.length - n; i++) gs.push(arr.slice(i, i + n).join(" "));
+      return gs;
+    };
+
+    const map = new Map();
+    (citations || []).forEach((c, ci) => {
+      const cNorm = normalize(c?.text || "");
+      const cWords = cNorm.split(" ").filter(Boolean);
+      if (!cWords.length) return;
+      let bestRef = sentenceBlockRefs[0];
+      let bestScore = -1;
+      sentenceTexts.forEach((sNorm, si) => {
+        const sWords = sNorm.split(" ").filter(Boolean);
+        const sSet = new Set(sWords);
+        const overlap = cWords.filter((w) => sSet.has(w)).length / cWords.length;
+        const tri = makeNgrams(cWords, Math.min(3, cWords.length));
+        const triHit = tri.length ? tri.some((g) => sNorm.includes(g)) : false;
+        const fullHit = sNorm.includes(cNorm) ? 1 : 0;
+        const score = overlap + (triHit ? 0.45 : 0) + fullHit;
+        if (score > bestScore) { bestScore = score; bestRef = sentenceBlockRefs[si]; }
+      });
+      if (bestRef) {
+        const key = bestRef.ii !== undefined ? `${bestRef.bi}-${bestRef.ii}` : String(bestRef.bi);
+        const arr = map.get(key) || [];
+        arr.push(ci);
+        map.set(key, arr);
+      }
+    });
+
+    return map;
+  }, [hasExplicitMarkers, blocks, citations, normalize]);
+
+  const renderBlock = (block, bi) => {
+    if (block.type === "heading") {
+      return <div key={`b${bi}`} className={`cited-answer-h${block.level}`}>{parseInlineLine(block.text, `b${bi}`)}</div>;
+    }
+
+    if (block.type === "p") {
+      const trailingCitations = autoPlacement.get(String(bi)) || [];
+      return (
+        <div key={`b${bi}`} className="cited-answer-p">
+          {parseInlineLine(block.text, `b${bi}`)}
+          {trailingCitations.map((ci) => renderCitationAnchor(ci, `b${bi}-ac${ci}`))}
+        </div>
+      );
+    }
+
+    if (block.type === "ul" || block.type === "ol") {
+      const Tag = block.type === "ol" ? "ol" : "ul";
+      return (
+        <Tag key={`b${bi}`} className="cited-answer-list">
+          {block.items.map((item, ii) => {
+            const trailingCitations = autoPlacement.get(`${bi}-${ii}`) || [];
             return (
-              <React.Fragment key={seg.id}>
-                {renderRich(seg.text, seg.id)}
-                {attached.map((ci) => renderCitationAnchor(ci, `cit-${seg.id}-${ci}`))}
-              </React.Fragment>
+              <li key={`b${bi}-li${ii}`} className="cited-answer-li">
+                {parseInlineLine(item, `b${bi}-li${ii}`)}
+                {trailingCitations.map((ci) => renderCitationAnchor(ci, `b${bi}-li${ii}-ac${ci}`))}
+              </li>
             );
           })}
-    </>
+        </Tag>
+      );
+    }
+
+    return null;
+  };
+
+  return (
+    <div className="cited-answer-body">
+      {blocks.map((block, bi) => renderBlock(block, bi))}
+    </div>
   );
 }

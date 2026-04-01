@@ -2,7 +2,7 @@
 
 Paperview is a local-first research paper reader and research agent. Open local folders of PDFs, read and annotate papers, ask grounded questions with citations, search for papers online, and import promising PDFs back onto your own disk.
 
-No backend or account is required. The app runs in the browser and uses the File System Access API for folder-backed workspaces.
+No account is required. The app still runs locally in the browser for reading and workspace storage, and can optionally use small Vercel Functions for OpenAI requests and remote PDF downloads to avoid browser CORS issues.
 
 ## What Paperview does
 
@@ -60,9 +60,12 @@ npm run dev
 ### Environment Variables
 
 ```env
-VITE_OPENAI_API_KEY=your_openai_api_key
+OPENAI_API_KEY=your_openai_api_key
+VITE_OPENAI_API_KEY=
 VITE_OPENAI_MODEL=gpt-5.4-mini
 ```
+
+For local `npm run dev`, Vite does not serve the Vercel `api/` functions, so set `VITE_OPENAI_API_KEY` if you want to call OpenAI directly from the browser while developing. In deployed environments, prefer `OPENAI_API_KEY` so the backend proxy can keep OpenAI and remote PDF fetches server-side.
 
 ## Scripts
 
@@ -108,9 +111,9 @@ Imported PDFs are written as real files into the selected folder, or into an `Im
 
 Paperview is local-first, but it does make network requests for:
 
-- OpenAI API inference and tool calls
+- OpenAI API inference and tool calls, either directly from the browser or through the optional backend proxy
 - User-initiated web research through OpenAI web search
-- User-initiated direct PDF downloads when importing papers from search results
+- User-initiated direct PDF downloads when importing papers from search results, preferably through the backend PDF proxy when deployed
 
 ## Contributing
 
