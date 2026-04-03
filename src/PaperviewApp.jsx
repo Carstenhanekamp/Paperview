@@ -17,16 +17,19 @@ import {
   loadAllAnnotations,
   loadPaperTextCache,
   deletePaperCachesByPaperIds,
+  loadUploadedPdf,
+  saveUploadedPdf,
 } from './db';
-import { extractPdfText, terminateTesseractWorkerNow, validatePdfBytes } from './pdfUtils';
+import { clearOcrMemoryCache, extractPdfText, terminateTesseractWorkerNow, validatePdfBytes } from './pdfUtils';
 import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, ICopy, IZoomIn, IZoomOut, IPanel, IGrid, IChat, IMore, ILeft, IRight, ISpark, IPaperclip, IChevronDown, IArrowUp, IArrowDown, IChevronLeftDouble, IChevronRightDouble, ITrash, IGear, IHighlight, INotes } from './icons';
 import { CSS } from './styles';
-import { CHAT_TITLE_FALLBACK, createAgentChatThreadRecord, createChatThreadRecord, deriveChatTitle, formatChatTimestamp, formatChatMessageCount, derivePageTexts } from './chatUtils';
+import { CHAT_TITLE_FALLBACK, createAgentChatThreadRecord, createChatThreadRecord, deriveChatTitle, formatChatTimestamp, formatChatMessageCount, derivePageTexts, materializeFullText } from './chatUtils';
 import TextFallback from './TextFallback';
 import InlineCitedAnswer from './InlineCitedAnswer';
 import PdfViewer from './PdfViewer';
 import { selectRelevantPassages } from './ragUtils';
 import { addUsageTotals, createUsageTotals, getUsageBreakdown, formatTokenCount, formatUsd } from './openaiPricing';
+import { evictUnpinnedPayloads, mergePaperWithPayload, pickPaperPayload, stripPaperPayload } from './paperPayloadUtils';
 
 const ENV_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || '';
 const OPENAI_MODEL = import.meta.env.VITE_OPENAI_MODEL || "gpt-5.4-mini";
@@ -255,7 +258,7 @@ function makeStableId(prefix, path) {
 }
 
 function hasExtractedPaperText(paper) {
-  return Array.isArray(paper?.pageTexts) && paper.pageTexts.length > 0;
+  return derivePageTexts(paper).length > 0;
 }
 
 function isPaperTextCacheValid(cacheEntry, paper) {
@@ -265,7 +268,6 @@ function isPaperTextCacheValid(cacheEntry, paper) {
     cacheEntry.fileSize === paper.fileSize &&
     cacheEntry.fileLastModified === paper.fileLastModified &&
     Array.isArray(cacheEntry.pageTexts) &&
-    typeof cacheEntry.fullText === "string" &&
     Number.isFinite(cacheEntry.totalPages)
   );
 }
@@ -889,6 +891,7 @@ function ThinkingTrace({ steps, isLive, expanded, onToggle }) {
 export default function PaperviewApp() {
   const [folders, setFolders] = useState([]);
   const [openTabs, setOpenTabs] = useState([]);
+  const [paperPayloads, setPaperPayloads] = useState({});
   const [activeTabId, setActiveTabId] = useState(null);
   const [chatThreads, setChatThreads] = useState([]);
   const [agentThreads, setAgentThreads] = useState([]);
@@ -985,6 +988,7 @@ export default function PaperviewApp() {
   const scanDirHandleRef = useRef(null);
   const folderHandlesMapRef = useRef(new Map()); // folderId → root FileSystemDirectoryHandle
   const foldersRef = useRef([]);
+  const paperPayloadsRef = useRef({});
   const chatThreadsRef = useRef([]);
   const agentThreadsRef = useRef([]);
   const agentRemotePaperJobsRef = useRef(new Map());
@@ -1010,6 +1014,7 @@ export default function PaperviewApp() {
   }, []);
 
   useEffect(() => { foldersRef.current = folders; }, [folders]);
+  useEffect(() => { paperPayloadsRef.current = paperPayloads; }, [paperPayloads]);
   useEffect(() => { chatThreadsRef.current = chatThreads; }, [chatThreads]);
   useEffect(() => { agentThreadsRef.current = agentThreads; }, [agentThreads]);
   useEffect(() => () => { terminateTesseractWorkerNow().catch(() => {}); }, []);
@@ -1060,7 +1065,41 @@ export default function PaperviewApp() {
     scrollFnRef.current = fn;
   }, []);
 
-  const activePaper = openTabs.find((t) => t.id === activeTabId) || null;
+  const getPaperPayload = useCallback((paperId) => {
+    if (!paperId) return null;
+    return paperPayloadsRef.current[paperId] || null;
+  }, []);
+
+  const updatePaperPayload = useCallback((paperId, updater) => {
+    if (!paperId) return;
+    setPaperPayloads((prev) => {
+      const current = prev[paperId] || null;
+      const nextValue = typeof updater === "function" ? updater(current) : updater;
+      if (!nextValue) {
+        if (!(paperId in prev)) return prev;
+        const next = { ...prev };
+        delete next[paperId];
+        return next;
+      }
+      return { ...prev, [paperId]: { ...(current || {}), ...nextValue } };
+    });
+  }, []);
+
+  const mergePaperRecord = useCallback((paper) => mergePaperWithPayload(paper, paper?.id ? paperPayloads[paper.id] : null), [paperPayloads]);
+
+  const evictPaperPayload = useCallback((paperId) => {
+    if (!paperId) return;
+    clearOcrMemoryCache(paperId);
+    setPaperPayloads((prev) => {
+      if (!(paperId in prev)) return prev;
+      const next = { ...prev };
+      delete next[paperId];
+      return next;
+    });
+  }, []);
+
+  const activePaperDescriptor = openTabs.find((t) => t.id === activeTabId) || null;
+  const activePaper = useMemo(() => mergePaperRecord(activePaperDescriptor), [activePaperDescriptor, mergePaperRecord]);
   const selectedFolder = folders.find((f) => f.id === selectedFolderId) || null;
 
   // Load annotations for active paper
@@ -1083,9 +1122,9 @@ export default function PaperviewApp() {
       selectedRootFolderId
         ? folders
             .filter((folder) => folder.rootFolderId === selectedRootFolderId)
-            .flatMap((folder) => folder.papers.map((paper) => ({ ...paper, folderId: folder.id })))
+            .flatMap((folder) => folder.papers.map((paper) => mergePaperRecord({ ...paper, folderId: folder.id })))
         : [],
-    [folders, selectedRootFolderId]
+    [folders, mergePaperRecord, selectedRootFolderId]
   );
   const searchablePageTexts = useMemo(() => derivePageTexts(activePaper), [activePaper]);
   const activePaperTotalPages = Math.max(1, Number(activePaper?.pages) || searchablePageTexts.length || 1);
@@ -1108,8 +1147,8 @@ export default function PaperviewApp() {
     [agentThreads, activeAgentChatId, selectedRootFolderId]
   );
   const activeAgentRemotePapers = useMemo(
-    () => agentRemotePapersByThread[activeAgentChatId] || [],
-    [agentRemotePapersByThread, activeAgentChatId]
+    () => (agentRemotePapersByThread[activeAgentChatId] || []).map((paper) => mergePaperRecord(paper)),
+    [agentRemotePapersByThread, activeAgentChatId, mergePaperRecord]
   );
   const activeAgentPreviewPaper = useMemo(
     () =>
@@ -1133,6 +1172,7 @@ export default function PaperviewApp() {
       .filter((thread) => thread.rootFolderId === selectedRootFolderId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }, [agentThreads, selectedRootFolderId]);
+
   const chatContextPapers = useMemo(() => {
     const paperPool = (activeFolderPapers.length ? activeFolderPapers : openTabs).filter(Boolean);
     const byId = new Map(paperPool.map((paper) => [paper.id, paper]));
@@ -1305,6 +1345,14 @@ export default function PaperviewApp() {
   }, [agentPreviewState, activeAgentChatId, activeAgentPreviewPaper]);
 
   useEffect(() => {
+    const pinnedIds = new Set([activeTabId, agentPreviewState?.paperId].filter(Boolean));
+    const evictedIds = Object.keys(paperPayloads).filter((paperId) => !pinnedIds.has(paperId));
+    if (!evictedIds.length) return;
+    evictedIds.forEach((paperId) => clearOcrMemoryCache(paperId));
+    setPaperPayloads((prev) => evictUnpinnedPayloads(prev, pinnedIds));
+  }, [activeTabId, agentPreviewState?.paperId, paperPayloads]);
+
+  useEffect(() => {
     if (chatLoadingState?.chatId !== activeChatId) return;
     if (!lastActiveMessage || lastActiveMessage.role !== "user") {
       setChatLoadingState(null);
@@ -1319,7 +1367,11 @@ export default function PaperviewApp() {
   }, [activeAgentChatId, agentLoadingState, lastActiveAgentMessage]);
 
   const updatePaperEverywhere = useCallback((paperId, transform) => {
-    const applyTransform = (paper) => (paper.id === paperId ? transform(paper) : paper);
+    const applyTransform = (paper) => {
+      if (paper.id !== paperId) return paper;
+      const nextPaper = transform(mergePaperWithPayload(paper, getPaperPayload(paper.id)));
+      return stripPaperPayload(nextPaper || paper);
+    };
     setFolders((prev) =>
       prev.map((folder) => ({
         ...folder,
@@ -1327,7 +1379,7 @@ export default function PaperviewApp() {
       }))
     );
     setOpenTabs((prev) => prev.map(applyTransform));
-  }, []);
+  }, [getPaperPayload]);
 
   const updatePaperScanState = useCallback((paperId, nextState) => {
     if (!paperId) return;
@@ -1352,42 +1404,56 @@ export default function PaperviewApp() {
 
   const ensurePaperPdfBytes = useCallback(
     async (paper) => {
-      if (paper?.pdfBytes?.length && Number.isFinite(paper?.fileSize) && Number.isFinite(paper?.fileLastModified)) return paper;
-      if (!paper?.fileHandle) {
-        throw new Error(`Could not load "${paper?.name || "paper"}".`);
+      const hydrated = mergePaperWithPayload(paper, getPaperPayload(paper?.id));
+      if (hydrated?.pdfBytes?.length && Number.isFinite(hydrated?.fileSize) && Number.isFinite(hydrated?.fileLastModified)) {
+        return hydrated;
       }
 
-      const file = await paper.fileHandle.getFile();
-      const uint8 = new Uint8Array(await file.arrayBuffer());
-      const hydratedPaper = {
+      let uint8 = null;
+      let nextFileSize = hydrated?.fileSize ?? null;
+      let nextFileLastModified = hydrated?.fileLastModified ?? null;
+
+      if (paper?.fileHandle) {
+        const file = await paper.fileHandle.getFile();
+        uint8 = new Uint8Array(await file.arrayBuffer());
+        nextFileSize = file.size;
+        nextFileLastModified = file.lastModified;
+      } else {
+        const storedUpload = await loadUploadedPdf(paper?.id).catch(() => null);
+        if (!storedUpload?.pdfBytes?.length) {
+          throw new Error(`Could not load "${paper?.name || "paper"}".`);
+        }
+        uint8 = storedUpload.pdfBytes;
+        nextFileSize = storedUpload.fileSize ?? nextFileSize ?? uint8.byteLength;
+        nextFileLastModified = storedUpload.fileLastModified ?? nextFileLastModified ?? storedUpload.updatedAt ?? Date.now();
+      }
+
+      updatePaperPayload(paper.id, {
+        pdfBytes: uint8,
+        fileSize: nextFileSize,
+        fileLastModified: nextFileLastModified,
+      });
+      updatePaperEverywhere(paper.id, (current) => ({
+        ...current,
+        fileSize: nextFileSize,
+        fileLastModified: nextFileLastModified,
+      }));
+
+      return {
         ...paper,
         pdfBytes: uint8,
-        fileSize: file.size,
-        fileLastModified: file.lastModified,
+        fileSize: nextFileSize,
+        fileLastModified: nextFileLastModified,
       };
-
-      updatePaperEverywhere(paper.id, (current) =>
-        current.pdfBytes?.length &&
-        current.fileSize === file.size &&
-        current.fileLastModified === file.lastModified
-          ? current
-          : {
-              ...current,
-              pdfBytes: uint8,
-              fileSize: file.size,
-              fileLastModified: file.lastModified,
-            }
-      );
-
-      return hydratedPaper;
     },
-    [updatePaperEverywhere]
+    [getPaperPayload, updatePaperEverywhere, updatePaperPayload]
   );
 
   const startPaperTextExtraction = useCallback(
     async (paper) => {
       if (!paper?.id) throw new Error("No paper selected for scanning.");
-      if (hasExtractedPaperText(paper)) return paper;
+      const mergedPaper = mergePaperWithPayload(paper, getPaperPayload(paper.id));
+      if (hasExtractedPaperText(mergedPaper)) return mergedPaper;
 
       const existingJob = paperTextJobsRef.current.get(paper.id);
       if (existingJob) return existingJob;
@@ -1397,17 +1463,19 @@ export default function PaperviewApp() {
 
         const cachedText = await loadPaperTextCache(paper.id).catch(() => null);
         if (isPaperTextCacheValid(cachedText, hydratedPaper)) {
-          const readyPaper = {
-            ...hydratedPaper,
-            fullText: cachedText.fullText,
+          const readyPayload = {
             pageTexts: cachedText.pageTexts,
+            pages: cachedText.totalPages,
+          };
+          updatePaperPayload(paper.id, readyPayload);
+          updatePaperEverywhere(paper.id, (current) => ({
+            ...current,
             pages: cachedText.totalPages,
             textStatus: "ready",
             textProgress: 1,
             textError: null,
             textStatusText: "",
-          };
-          updatePaperEverywhere(paper.id, (current) => ({ ...current, ...readyPaper }));
+          }));
           updatePaperScanState(paper.id, {
             status: "ready",
             progress: 1,
@@ -1415,7 +1483,11 @@ export default function PaperviewApp() {
             totalPages: cachedText.totalPages,
             label: "",
           });
-          return readyPaper;
+          return {
+            ...hydratedPaper,
+            ...readyPayload,
+            fullText: cachedText.fullText || materializeFullText(cachedText.pageTexts),
+          };
         }
 
         updatePaperEverywhere(paper.id, (current) =>
@@ -1423,7 +1495,6 @@ export default function PaperviewApp() {
             ? { ...current, textStatus: current.textStatus || "ready", textProgress: 1, textError: null, textStatusText: "" }
             : {
                 ...current,
-                pdfBytes: hydratedPaper.pdfBytes,
                 textStatus: "scanning",
                 textProgress: 0,
                 textError: null,
@@ -1436,7 +1507,7 @@ export default function PaperviewApp() {
           label: "Scanning paper...",
         });
 
-        const { fullText, pageTexts, totalPages } = await extractPdfText(hydratedPaper.pdfBytes, {
+        const { pageTexts, totalPages } = await extractPdfText(hydratedPaper.pdfBytes, {
           paperId: paper.id,
           fileSize: hydratedPaper.fileSize,
           fileLastModified: hydratedPaper.fileLastModified,
@@ -1444,7 +1515,6 @@ export default function PaperviewApp() {
           onProgress: (pageNum, total) => {
             updatePaperEverywhere(paper.id, (current) => ({
               ...current,
-              pdfBytes: hydratedPaper.pdfBytes,
               textStatus: "scanning",
               textProgress: total ? pageNum / total : 0,
               textError: null,
@@ -1460,18 +1530,19 @@ export default function PaperviewApp() {
           },
         });
 
-        const readyPaper = {
-          ...hydratedPaper,
-          fullText,
+        const readyPayload = {
           pageTexts,
+          pages: totalPages,
+        };
+        updatePaperPayload(paper.id, readyPayload);
+        updatePaperEverywhere(paper.id, (current) => ({
+          ...current,
           pages: totalPages,
           textStatus: "ready",
           textProgress: 1,
           textError: null,
           textStatusText: "",
-        };
-
-        updatePaperEverywhere(paper.id, (current) => ({ ...current, ...readyPaper }));
+        }));
         updatePaperScanState(paper.id, {
           status: "ready",
           progress: 1,
@@ -1479,7 +1550,7 @@ export default function PaperviewApp() {
           totalPages,
           label: "",
         });
-        return readyPaper;
+        return { ...hydratedPaper, ...readyPayload };
       })()
         .catch((error) => {
           updatePaperEverywhere(paper.id, (current) => ({
@@ -1504,8 +1575,42 @@ export default function PaperviewApp() {
       paperTextJobsRef.current.set(paper.id, job);
       return job;
     },
-    [ensurePaperPdfBytes, updatePaperEverywhere, updatePaperScanState]
+    [ensurePaperPdfBytes, getPaperPayload, updatePaperEverywhere, updatePaperPayload, updatePaperScanState]
   );
+
+  const activateReaderTab = useCallback((tabId) => {
+    const descriptor = openTabs.find((tab) => tab.id === tabId);
+    if (!descriptor) return;
+
+    setActiveTabId(tabId);
+    setCurrentView("reader");
+    scrollFnRef.current = null;
+
+    ensurePaperPdfBytes(descriptor)
+      .then((hydratedPaper) => {
+        if (!hasExtractedPaperText(hydratedPaper)) {
+          startPaperTextExtraction(descriptor).catch(() => {});
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to activate tab paper:', error);
+      });
+  }, [ensurePaperPdfBytes, openTabs, startPaperTextExtraction]);
+
+  useEffect(() => {
+    if (!activePaperDescriptor?.id) return;
+    const currentPaper = mergePaperWithPayload(activePaperDescriptor, getPaperPayload(activePaperDescriptor.id));
+
+    if (!currentPaper?.pdfBytes?.length) {
+      ensurePaperPdfBytes(activePaperDescriptor).catch((error) => {
+        console.error('Failed to hydrate active paper:', error);
+      });
+    }
+
+    if (!hasExtractedPaperText(currentPaper)) {
+      startPaperTextExtraction(activePaperDescriptor).catch(() => {});
+    }
+  }, [activePaperDescriptor, ensurePaperPdfBytes, getPaperPayload, startPaperTextExtraction]);
 
   useEffect(() => {
     if (!activePaper?.id) {
@@ -1905,6 +2010,12 @@ export default function PaperviewApp() {
 
   const clearAgentRemotePapersForThread = useCallback((chatId) => {
     if (!chatId) return;
+    const remotePapers = agentRemotePapersByThread[chatId] || [];
+    remotePapers.forEach((paper) => {
+      if (paper?.id && paper.id !== activeTabId && paper.id !== agentPreviewState?.paperId) {
+        evictPaperPayload(paper.id);
+      }
+    });
     setAgentRemotePapersByThread((prev) => {
       if (!prev[chatId]) return prev;
       const next = { ...prev };
@@ -1916,7 +2027,7 @@ export default function PaperviewApp() {
         agentRemotePaperJobsRef.current.delete(key);
       }
     }
-  }, []);
+  }, [activeTabId, agentPreviewState?.paperId, agentRemotePapersByThread, evictPaperPayload]);
 
   const startNewAgentChat = useCallback(() => {
     if (!selectedRootFolderId || !hasWritableAgentContext) return;
@@ -2015,14 +2126,19 @@ export default function PaperviewApp() {
 
   const upsertAgentRemotePaper = useCallback((chatId, nextPaper) => {
     if (!chatId || !nextPaper?.id) return;
+    const payload = pickPaperPayload(nextPaper);
+    if (payload) {
+      updatePaperPayload(nextPaper.id, payload);
+    }
+    const nextDescriptor = stripPaperPayload(nextPaper);
     setAgentRemotePapersByThread((prev) => {
       const existing = prev[chatId] || [];
-      const nextList = existing.some((paper) => paper.id === nextPaper.id)
-        ? existing.map((paper) => (paper.id === nextPaper.id ? { ...paper, ...nextPaper } : paper))
-        : [...existing, nextPaper];
+      const nextList = existing.some((paper) => paper.id === nextDescriptor.id)
+        ? existing.map((paper) => (paper.id === nextDescriptor.id ? { ...paper, ...nextDescriptor } : paper))
+        : [...existing, nextDescriptor];
       return { ...prev, [chatId]: nextList };
     });
-  }, []);
+  }, [updatePaperPayload]);
 
   const hydrateRemotePaperForAgent = useCallback(async (chatId, descriptor, options = {}) => {
     if (!chatId) throw new Error("No active Agent thread is available.");
@@ -2036,8 +2152,9 @@ export default function PaperviewApp() {
     const remoteKey = buildRemotePaperKey({ title, sourceUrl, pdfUrl, doi: descriptor?.doi });
     const jobKey = `${chatId}:${remoteKey}`;
     const existing = (agentRemotePapersByThread[chatId] || []).find((paper) => buildRemotePaperKey(paper) === remoteKey);
-    if (existing?.hydrationStatus === "ready" || existing?.hydrationStatus === "preview_only") {
-      return existing;
+    const existingPayload = existing?.id ? getPaperPayload(existing.id) : null;
+    if ((existing?.hydrationStatus === "ready" || existing?.hydrationStatus === "preview_only") && existingPayload?.pdfBytes?.length) {
+      return mergePaperWithPayload(existing, existingPayload);
     }
     if (agentRemotePaperJobsRef.current.has(jobKey)) {
       return agentRemotePaperJobsRef.current.get(jobKey);
@@ -2056,10 +2173,7 @@ export default function PaperviewApp() {
       venue: String(descriptor?.venue || "").trim(),
       summary: summarizeToWordLimit(descriptor?.summary || descriptor?.abstract || descriptor?.note || ""),
       sourceHost: getUrlHost(sourceUrl || pdfUrl),
-      pageTexts: existing?.pageTexts || [],
-      fullText: existing?.fullText || "",
       pages: existing?.pages || null,
-      pdfBytes: existing?.pdfBytes || null,
       fileSize: existing?.fileSize || null,
       fileLastModified: existing?.fileLastModified || null,
       hydrationStatus: "loading",
@@ -2095,10 +2209,9 @@ export default function PaperviewApp() {
         upsertAgentRemotePaper(chatId, hydratedPaper);
 
         try {
-          const { fullText, pageTexts, totalPages } = await extractPdfText(pdfBytes);
+          const { pageTexts, totalPages } = await extractPdfText(pdfBytes);
           hydratedPaper = {
             ...hydratedPaper,
-            fullText,
             pageTexts,
             pages: totalPages,
             hydrationStatus: "ready",
@@ -2159,7 +2272,7 @@ export default function PaperviewApp() {
 
     agentRemotePaperJobsRef.current.set(jobKey, job);
     return job;
-  }, [agentRemotePapersByThread, upsertAgentRemotePaper]);
+  }, [agentRemotePapersByThread, getPaperPayload, upsertAgentRemotePaper]);
 
   const handleAgentPreviewReady = useCallback((fn) => {
     agentPreviewScrollFnRef.current = fn;
@@ -2260,24 +2373,23 @@ export default function PaperviewApp() {
     }
 
     let readyPaper = paper;
-    if (!paper.pdfBytes && paper.fileHandle) {
-      try {
-        readyPaper = await ensurePaperPdfBytes(paper);
-      } catch (err) {
-        console.error('Failed to load PDF:', err);
-        alert(`Could not open "${paper.name}".\n\n${err?.message || String(err)}`);
-        return;
-      }
+    try {
+      readyPaper = await ensurePaperPdfBytes(paper);
+    } catch (err) {
+      console.error('Failed to load PDF:', err);
+      alert(`Could not open "${paper.name}".\n\n${err?.message || String(err)}`);
+      return;
     }
 
-    if (!openTabs.find((t) => t.id === readyPaper.id)) setOpenTabs((p) => [...p, readyPaper]);
-    else setOpenTabs((p) => p.map((t) => t.id === readyPaper.id ? readyPaper : t));
+    const readyDescriptor = stripPaperPayload(readyPaper);
+    if (!openTabs.find((t) => t.id === readyDescriptor.id)) setOpenTabs((p) => [...p, readyDescriptor]);
+    else setOpenTabs((p) => p.map((t) => t.id === readyDescriptor.id ? readyDescriptor : t));
     setActiveTabId(readyPaper.id);
     setCurrentView("reader");
     scrollFnRef.current = null;
 
     if (!hasExtractedPaperText(readyPaper)) {
-      startPaperTextExtraction(readyPaper).catch(() => {});
+      startPaperTextExtraction(readyDescriptor).catch(() => {});
     }
   };
 
@@ -2289,7 +2401,7 @@ export default function PaperviewApp() {
     if (!ownerFolder) return;
 
     try {
-      const readyPaper = paper.pdfBytes?.length ? paper : await ensurePaperPdfBytes(paper);
+      const readyPaper = await ensurePaperPdfBytes(paper);
       setSelectedFolderId(ownerFolder.id);
       setUpFolder(ownerFolder.id);
       setCurrentView("agent");
@@ -2328,16 +2440,37 @@ export default function PaperviewApp() {
 
     setSelectedFolderId(folderId);
     setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, expanded: true } : f)));
-    setOpenTabs(folder.papers);
-    setActiveTabId((prev) => (folder.papers.some((p) => p.id === prev) ? prev : folder.papers[0]?.id || null));
     if (forceReader) setCurrentView("reader");
     scrollFnRef.current = null;
   };
+
+  const openAllPapersInFolder = useCallback(async (folderId, options = {}) => {
+    const { forceReader = true } = options;
+    const folder = foldersRef.current.find((item) => item.id === folderId);
+    if (!folder) return;
+    if (folder.papers.length > 4 && !window.confirm(`Open all ${folder.papers.length} papers in "${folder.name}"? This may still use more memory than opening one paper at a time.`)) {
+      return;
+    }
+
+    setSelectedFolderId(folderId);
+    setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, expanded: true } : f)));
+    setOpenTabs(folder.papers.map((paper) => stripPaperPayload(paper)));
+    setActiveTabId((prev) => (folder.papers.some((paper) => paper.id === prev) ? prev : folder.papers[0]?.id || null));
+    if (forceReader) setCurrentView("reader");
+    scrollFnRef.current = null;
+
+    if (folder.papers[0]) {
+      ensurePaperPdfBytes(folder.papers[0]).catch(() => {});
+    }
+  }, [ensurePaperPdfBytes]);
 
   const closeTab = (e, id) => {
     e.stopPropagation();
     const remaining = openTabs.filter((t) => t.id !== id);
     setOpenTabs(remaining);
+    if (agentPreviewState?.paperId !== id) {
+      evictPaperPayload(id);
+    }
     if (activeTabId === id) {
       setActiveTabId(remaining[remaining.length - 1]?.id || null);
     }
@@ -2866,7 +2999,7 @@ export default function PaperviewApp() {
       const conversationHistory = currentAgentMessages.slice(-8);
       const contextPapers = agentContextPapers;
       const readyContextPapers = [];
-      let threadRemotePapers = [...(agentRemotePapersByThread[targetChatId] || [])];
+      let threadRemotePapers = (agentRemotePapersByThread[targetChatId] || []).map((paper) => mergePaperWithPayload(paper, getPaperPayload(paper.id)));
 
       if (contextPapers.some((paper) => !hasExtractedPaperText(paper))) {
         setAgentLoadingState({
@@ -3592,16 +3725,16 @@ export default function PaperviewApp() {
     };
 
     if (targetPaper && targetPaper.id !== activeTabId) {
-      if (!openTabs.find((t) => t.id === targetPaper.id)) {
-        setOpenTabs((prev) => [...prev, targetPaper]);
-      }
       if (owner?.id) {
-        setSelectedFolderId(owner.id);
+        openPaper(targetPaper, owner.id).then(() => {
+          setTimeout(() => jump(), 220);
+        }).catch(() => {});
+      } else {
+        setCurrentView("reader");
+        setActiveTabId(targetPaper.id);
+        scrollFnRef.current = null;
+        setTimeout(() => jump(), 220);
       }
-      setCurrentView("reader");
-      setActiveTabId(targetPaper.id);
-      scrollFnRef.current = null;
-      setTimeout(() => jump(), 220);
       return;
     }
     jump();
@@ -3838,11 +3971,8 @@ export default function PaperviewApp() {
         year: result?.year || "",
         pages: null,
         size: `${(savedFile.size / 1024 / 1024).toFixed(1)} MB`,
-        pdfBytes,
         fileSize: savedFile.size,
         fileLastModified: savedFile.lastModified,
-        fullText: "",
-        pageTexts: [],
         textStatus: "idle",
         textProgress: 0,
         textError: null,
@@ -3944,6 +4074,7 @@ export default function PaperviewApp() {
     setAnnotations((prev) => prev.filter((a) => a.paperId !== paperId));
     deleteAnnotationsByPaperIds([paperId]).catch(() => {});
     deletePaperCachesByPaperIds([paperId]).catch(() => {});
+    evictPaperPayload(paperId);
     if (ownerFolder?.rootFolderId) {
       syncRootFolderSnapshot(ownerFolder.rootFolderId).catch(() => {});
     }
@@ -3989,6 +4120,7 @@ export default function PaperviewApp() {
     setAnnotations((prev) => prev.filter((a) => !ids.has(a.paperId)));
     deleteAnnotationsByPaperIds([...ids]).catch(() => {});
     deletePaperCachesByPaperIds([...ids]).catch(() => {});
+    [...ids].forEach((paperId) => evictPaperPayload(paperId));
     if (!remainingFolders.length) clearFolderHandles().catch(() => {});
     if (!isRootFolder && folder.rootFolderId) {
       syncRootFolderSnapshot(folder.rootFolderId).catch(() => {});
@@ -4025,11 +4157,8 @@ export default function PaperviewApp() {
             authors: '',
             year: '',
             pages: null,
-            pdfBytes: null,
             fileSize: null,
             fileLastModified: null,
-            fullText: '',
-            pageTexts: [],
             textStatus: "idle",
             textProgress: 0,
             textError: null,
@@ -4375,18 +4504,23 @@ export default function PaperviewApp() {
     try {
       const ab = await pendingFile.arrayBuffer();
       const uint8 = new Uint8Array(ab);
+      const paperId = `p${Date.now()}`;
+      await saveUploadedPdf({
+        paperId,
+        pdfBytes: uint8,
+        fileSize: pendingFile.size,
+        fileLastModified: pendingFile.lastModified,
+        updatedAt: Date.now(),
+      });
       const paper = {
-        id: `p${Date.now()}`,
+        id: paperId,
         name: stripPdfExtension(pendingFile.name),
         authors: "Uploaded",
         year: new Date().getFullYear(),
         pages: null,
         size: `${(pendingFile.size / 1024 / 1024).toFixed(1)} MB`,
-        pdfBytes: uint8,
         fileSize: pendingFile.size,
         fileLastModified: pendingFile.lastModified,
-        fullText: "",
-        pageTexts: [],
         textStatus: "idle",
         textProgress: 0,
         textError: null,
@@ -4423,13 +4557,11 @@ export default function PaperviewApp() {
           setSelectedFolderId(uploadsId);
           setUpFolder(uploadsId);
         }
-        setOpenTabs((prev) => (prev.find((t) => t.id === readyPaper.id) ? prev : [...prev, readyPaper]));
-        setActiveTabId(readyPaper.id);
-        setCurrentView('reader');
-        scrollFnRef.current = null;
-        startPaperTextExtraction(readyPaper).catch(() => {});
         setUpStatus("done");
-        setTimeout(() => closeModal(), 600);
+        setTimeout(() => {
+          closeModal();
+          openPaper(readyPaper, uploadsId);
+        }, 600);
       } else {
         const targetFolder = folders.find((f) => f.id === upFolder);
         const readyPaper = {
@@ -4520,7 +4652,7 @@ export default function PaperviewApp() {
                     className={`sb-folder-hd ${selectedFolderId === folder.id ? "active" : ""}`}
                     style={folder.depth ? { paddingLeft: 8 + folder.depth * 14 } : undefined}
                     onClick={() => openFolderTabs(folder.id, { forceReader: currentView === "reader" })}
-                    title={currentView === "reader" ? "Open all files from this folder in tabs" : "Select this folder"}
+                    title="Select this folder"
                   >
                     <button
                       className="sb-folder-toggle"
@@ -4671,7 +4803,7 @@ export default function PaperviewApp() {
                   key={tab.id}
                   className={`tab ${active ? "active" : ""} ${idx === 0 ? "tab-first" : ""} ${idx === openTabs.length - 1 ? "tab-last" : ""}`}
                   style={{ zIndex: active ? openTabs.length + 2 : idx + 1 }}
-                  onClick={() => { setActiveTabId(tab.id); scrollFnRef.current = null; }}
+                  onClick={() => activateReaderTab(tab.id)}
                 >
                   <span className="tab-icon"><IFile size={13} /></span>
                   <span className="tab-name">{tab.name}</span>
@@ -4735,7 +4867,7 @@ export default function PaperviewApp() {
                       <div
                         className={`db-row folder ${selectedFolderId === folder.id ? "selected" : ""}`}
                         onClick={() => openFolderTabs(folder.id, { forceReader: false })}
-                        title="Set folder context and open all its files in reader tabs"
+                        title="Select this folder"
                       >
                         <div className="db-cell">
                           <button
@@ -4757,6 +4889,15 @@ export default function PaperviewApp() {
                         <div className="db-cell">{openTabs.filter((tab) => folder.papers.some((p) => p.id === tab.id)).length}</div>
                         <div className="db-cell">
                           <div className="db-actions">
+                            <button
+                              className="db-open"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openAllPapersInFolder(folder.id, { forceReader: true });
+                              }}
+                            >
+                              Open all
+                            </button>
                             <button
                               className="lib-icon-btn"
                               title="Upload file to folder"
@@ -5382,7 +5523,7 @@ export default function PaperviewApp() {
                           onAnnotationClick={handleAnnotationClick}
                         />
                       ) : (
-                        <TextFallback text={activePaper.fullText} />
+                        <TextFallback text={materializeFullText(searchablePageTexts)} />
                       )}
                     </div>
                   </div>

@@ -1,4 +1,5 @@
 import { loadOcrPage, saveOcrPage, savePaperTextCache } from "./db";
+import { materializeFullText } from "./chatUtils";
 
 async function loadPdfJs() {
   if (window.pdfjsLib) return window.pdfjsLib;
@@ -31,6 +32,27 @@ let _tesseractWorkerBusy = 0;
 let _tesseractWorkerTerminateTimer = null;
 const _ocrPageMemoryCache = new Map();
 const _ocrPagePromiseCache = new Map();
+const OCR_MEMORY_CACHE_LIMIT = 24;
+
+function getOcrMemoryCache(cacheKey) {
+  if (!_ocrPageMemoryCache.has(cacheKey)) return null;
+  const record = _ocrPageMemoryCache.get(cacheKey);
+  _ocrPageMemoryCache.delete(cacheKey);
+  _ocrPageMemoryCache.set(cacheKey, record);
+  return record;
+}
+
+function setOcrMemoryCache(cacheKey, record) {
+  if (_ocrPageMemoryCache.has(cacheKey)) {
+    _ocrPageMemoryCache.delete(cacheKey);
+  }
+  _ocrPageMemoryCache.set(cacheKey, record);
+  while (_ocrPageMemoryCache.size > OCR_MEMORY_CACHE_LIMIT) {
+    const oldestKey = _ocrPageMemoryCache.keys().next().value;
+    if (!oldestKey) break;
+    _ocrPageMemoryCache.delete(oldestKey);
+  }
+}
 
 async function getTesseractWorker() {
   const Tesseract = await loadTesseract();
@@ -66,6 +88,19 @@ export async function terminateTesseractWorkerNow() {
     try { await _tesseractWorker.terminate(); } catch { /* ignore */ }
     _tesseractWorker = null;
     _tesseractWorkerBusy = 0;
+  }
+}
+
+export function clearOcrMemoryCache(paperId = null) {
+  if (!paperId) {
+    _ocrPageMemoryCache.clear();
+    return;
+  }
+  const prefix = `${paperId}:`;
+  for (const key of [..._ocrPageMemoryCache.keys()]) {
+    if (String(key).startsWith(prefix)) {
+      _ocrPageMemoryCache.delete(key);
+    }
   }
 }
 
@@ -194,12 +229,12 @@ async function runOcrPageWithTesseract(page, scale = 2) {
 async function getCachedOcrPage({ paperId, pageNum, scale, fileSize, fileLastModified }) {
   if (!paperId || !Number.isFinite(pageNum)) return null;
   const cacheKey = makeOcrCacheKey({ paperId, pageNum, scale, fileSize, fileLastModified });
-  const memoryHit = _ocrPageMemoryCache.get(cacheKey);
+  const memoryHit = getOcrMemoryCache(cacheKey);
   if (isOcrRecordValid(memoryHit, fileSize, fileLastModified)) return memoryHit;
 
   const stored = await loadOcrPage({ paperId, pageNum, scale });
   if (!isOcrRecordValid(stored, fileSize, fileLastModified)) return null;
-  _ocrPageMemoryCache.set(cacheKey, stored);
+  setOcrMemoryCache(cacheKey, stored);
   return stored;
 }
 
@@ -238,7 +273,7 @@ export async function getOcrPageData(page, options = {}) {
       await saveOcrPage(record);
     }
 
-    _ocrPageMemoryCache.set(promiseKey, record);
+    setOcrMemoryCache(promiseKey, record);
     return record;
   })().finally(() => {
     _ocrPagePromiseCache.delete(promiseKey);
@@ -254,69 +289,71 @@ export async function extractPdfText(pdfBytes, options = {}) {
     fileSize = null,
     fileLastModified = null,
     enableOcrFallback = false,
+    includeFullText = false,
     onProgress,
   } = options;
   const lib = await loadPdfJs();
   const loadingTask = lib.getDocument({ data: pdfBytes.slice(0), stopAtErrors: false });
   const pdf = await loadingTask.promise;
   const pageTexts = [];
-  const fullTextParts = [];
+  try {
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+      const page = await pdf.getPage(pageNum);
+      let pageText = "";
 
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
-    const page = await pdf.getPage(pageNum);
-    let pageText = "";
-
-    try {
-      const textContent = await page.getTextContent({ includeMarkedContent: true });
-      pageText = (textContent.items || [])
-        .map((item) => String(item?.str || ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-    } catch {
-      pageText = "";
-    }
-
-    if (!pageText && enableOcrFallback) {
       try {
-        const ocrData = await getOcrPageData(page, {
-          paperId,
-          pageNum,
-          scale: 2,
-          fileSize,
-          fileLastModified,
-        });
-        pageText = ocrData?.pageText || "";
+        const textContent = await page.getTextContent({ includeMarkedContent: true });
+        pageText = (textContent.items || [])
+          .map((item) => String(item?.str || ""))
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
       } catch {
         pageText = "";
       }
+
+      if (!pageText && enableOcrFallback) {
+        try {
+          const ocrData = await getOcrPageData(page, {
+            paperId,
+            pageNum,
+            scale: 2,
+            fileSize,
+            fileLastModified,
+          });
+          pageText = ocrData?.pageText || "";
+        } catch {
+          pageText = "";
+        }
+      }
+
+      const finalText = pageText || "[No extractable text on this page]";
+      pageTexts.push({ page: pageNum, text: finalText });
+      onProgress?.(pageNum, pdf.numPages);
     }
 
-    const finalText = pageText || "[No extractable text on this page]";
-    pageTexts.push({ page: pageNum, text: finalText });
-    fullTextParts.push(`--- Page ${pageNum} ---\n${finalText}`);
-    onProgress?.(pageNum, pdf.numPages);
+    const result = {
+      totalPages: pdf.numPages,
+      pageTexts,
+      fullText: includeFullText ? materializeFullText(pageTexts) : "",
+    };
+
+    if (paperId) {
+      await savePaperTextCache({
+        paperId,
+        fileSize,
+        fileLastModified,
+        totalPages: result.totalPages,
+        pageTexts: result.pageTexts,
+        fullText: "",
+        updatedAt: Date.now(),
+      });
+    }
+
+    return result;
+  } finally {
+    try { await pdf.destroy?.(); } catch { /* ignore */ }
   }
-
-  const result = {
-    totalPages: pdf.numPages,
-    pageTexts,
-    fullText: fullTextParts.join("\n\n"),
-  };
-
-  if (paperId) {
-    await savePaperTextCache({
-      paperId,
-      fileSize,
-      fileLastModified,
-      totalPages: result.totalPages,
-      pageTexts: result.pageTexts,
-      fullText: result.fullText,
-      updatedAt: Date.now(),
-    });
-  }
-
-  return result;
 }
 
 export async function validatePdfBytes(pdfBytes) {

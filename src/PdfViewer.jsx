@@ -1,5 +1,246 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { loadPdfJs, getOcrPageData } from './pdfUtils';
+import { computeVisiblePageWindow, mergeWindowWithTarget } from './pdfViewerUtils';
+
+const PAGE_GAP = 12;
+const OVERSCAN_PAGES = 2;
+
+function waitForLayout() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+function normalizeMatchText(value) {
+  return (value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'")
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function clearAnnotationHighlights(wrap) {
+  if (!wrap) return;
+  wrap.querySelectorAll('[data-ann-split]').forEach((span) => {
+    span.textContent = span.dataset.annOrigText || span.textContent;
+    span.removeAttribute('data-ann-split');
+    span.removeAttribute('data-ann-orig-text');
+  });
+  wrap.querySelectorAll('.ann-hl').forEach((node) => {
+    node.classList.remove('ann-hl');
+    delete node.dataset.annId;
+    node.style.removeProperty('background-color');
+  });
+}
+
+function applyAnnotationHighlights(wrap, pageAnnotations) {
+  clearAnnotationHighlights(wrap);
+  if (!wrap || !pageAnnotations.length) return;
+
+  const textLayer = wrap.querySelector('.textLayer');
+  if (!textLayer) return;
+  const spans = Array.from(textLayer.querySelectorAll(':scope > span'));
+  if (!spans.length) return;
+
+  const spanOffsets = [];
+  let charPos = 0;
+  spans.forEach((span) => {
+    const text = span.textContent || '';
+    spanOffsets.push({ span, start: charPos, end: charPos + text.length, text });
+    charPos += text.length;
+  });
+
+  [...pageAnnotations]
+    .sort((a, b) => a.startOffset - b.startOffset)
+    .forEach((ann) => {
+      const color = ann.color || 'rgba(255,213,79,.4)';
+      spanOffsets.forEach((so) => {
+        if (so.end <= ann.startOffset || so.start >= ann.endOffset) return;
+        const relStart = Math.max(0, ann.startOffset - so.start);
+        const relEnd = Math.min(so.text.length, ann.endOffset - so.start);
+
+        if (relStart === 0 && relEnd === so.text.length) {
+          so.span.classList.add('ann-hl');
+          so.span.dataset.annId = ann.id;
+          so.span.style.backgroundColor = color;
+          return;
+        }
+
+        const before = so.text.substring(0, relStart);
+        const highlighted = so.text.substring(relStart, relEnd);
+        const after = so.text.substring(relEnd);
+        so.span.dataset.annSplit = '1';
+        so.span.dataset.annOrigText = so.text;
+        so.span.textContent = '';
+        if (before) so.span.appendChild(document.createTextNode(before));
+
+        const hSpan = document.createElement('span');
+        hSpan.textContent = highlighted;
+        hSpan.classList.add('ann-hl');
+        hSpan.dataset.annId = ann.id;
+        hSpan.style.backgroundColor = color;
+        so.span.appendChild(hSpan);
+
+        if (after) so.span.appendChild(document.createTextNode(after));
+      });
+    });
+}
+
+async function buildOcrOverlay({ page, wrap, width, height, pageNum, scale, paperId, fileSize, fileLastModified }) {
+  const existingTl = wrap.querySelector('.textLayer');
+  if (existingTl) {
+    const textContent = Array.from(existingTl.querySelectorAll('span')).map((node) => node.textContent).join('').trim();
+    if (textContent.length > 20) {
+      existingTl.style.pointerEvents = 'auto';
+      return;
+    }
+  }
+
+  const ocrScale = Math.max(2, scale);
+  const ocrData = await getOcrPageData(page, {
+    paperId,
+    pageNum,
+    scale: ocrScale,
+    fileSize,
+    fileLastModified,
+  });
+  const data = ocrData?.segments || [];
+  if (!data.length) return;
+
+  const ocrViewport = page.getViewport({ scale: ocrScale });
+  const xScale = ocrViewport.width ? width / ocrViewport.width : 1;
+  const yScale = ocrViewport.height ? height / ocrViewport.height : 1;
+  wrap.querySelector('.ocrLayer')?.remove();
+
+  const layer = document.createElement('div');
+  layer.className = 'ocrLayer';
+  layer.style.cssText = `position:absolute;top:0;left:0;width:${width}px;height:${height}px;overflow:hidden;line-height:1;pointer-events:auto;`;
+
+  data.forEach((seg) => {
+    if (!seg?.bbox || !seg.words?.length) return;
+    const lineDiv = document.createElement('div');
+    const lineWidth = Math.max(1, (seg.bbox.x1 - seg.bbox.x0) * xScale);
+    const lineHeight = Math.max(1, (seg.bbox.y1 - seg.bbox.y0) * yScale);
+    lineDiv.className = 'ocr-line';
+    lineDiv.style.cssText = `position:absolute;left:${seg.bbox.x0 * xScale}px;top:${seg.bbox.y0 * yScale}px;width:${lineWidth}px;height:${lineHeight}px;line-height:1;pointer-events:none;user-select:none;`;
+
+    seg.words.forEach((word, index) => {
+      const span = document.createElement('span');
+      const nextWord = seg.words[index + 1];
+      const wordHeight = Math.max(1, (word.bbox.y1 - word.bbox.y0) * yScale);
+      const wordAdvance = nextWord
+        ? Math.max(word.bbox.x1 - word.bbox.x0, nextWord.bbox.x0 - word.bbox.x0)
+        : (word.bbox.x1 - word.bbox.x0);
+      span.className = 'ocr-word';
+      span.dataset.targetW = String(Math.max(1, wordAdvance * xScale));
+      span.style.cssText = `position:absolute;left:${Math.max(0, (word.bbox.x0 - seg.bbox.x0) * xScale)}px;top:${Math.max(0, (word.bbox.y0 - seg.bbox.y0) * yScale)}px;height:${wordHeight}px;font-size:${wordHeight}px;white-space:pre;transform-origin:0 0;`;
+      span.textContent = index < seg.words.length - 1 ? `${word.text} ` : word.text;
+      lineDiv.appendChild(span);
+    });
+
+    layer.appendChild(lineDiv);
+  });
+
+  if (existingTl) existingTl.style.pointerEvents = 'none';
+  wrap.appendChild(layer);
+
+  await new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      layer.querySelectorAll('.ocr-word').forEach((span) => {
+        const targetW = parseFloat(span.dataset.targetW);
+        const naturalW = span.scrollWidth;
+        if (targetW > 0 && naturalW > 0) {
+          const scaleX = targetW / naturalW;
+          if (Math.abs(scaleX - 1) > 0.01) {
+            span.style.transform = `scaleX(${scaleX.toFixed(4)})`;
+          }
+        }
+      });
+      resolve();
+    });
+  });
+}
+
+function matchContiguousTokens(elements, queryWords, getTextFn, options = {}) {
+  const { returnAllExact = false, allowFuzzy = true } = options;
+  if (!elements?.length || !queryWords.length) return null;
+
+  const tokens = [];
+  const tokenToEl = [];
+  elements.forEach((node, index) => {
+    normalizeMatchText(getTextFn(node))
+      .split(' ')
+      .filter(Boolean)
+      .forEach((word) => {
+        tokens.push(word);
+        tokenToEl.push(index);
+      });
+  });
+
+  if (!tokens.length) return null;
+  const exactMatches = [];
+  if (tokens.length >= queryWords.length) {
+    for (let start = 0; start <= tokens.length - queryWords.length; start += 1) {
+      let ok = true;
+      for (let index = 0; index < queryWords.length; index += 1) {
+        if (tokens[start + index] !== queryWords[index]) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) continue;
+      exactMatches.push({
+        elements: elements.slice(tokenToEl[start], tokenToEl[start + queryWords.length - 1] + 1),
+        score: 1,
+      });
+    }
+  }
+
+  if (returnAllExact) return exactMatches;
+  if (exactMatches.length) return exactMatches[0];
+  if (!allowFuzzy) return null;
+  const makeNgrams = (arr, n) => {
+    if (arr.length < n) return [];
+    const out = [];
+    for (let index = 0; index <= arr.length - n; index += 1) {
+      out.push(arr.slice(index, index + n).join(' '));
+    }
+    return out;
+  };
+
+  const queryBigrams = makeNgrams(queryWords, 2);
+  const queryTrigrams = makeNgrams(queryWords, 3);
+  const minWindow = Math.max(3, queryWords.length - 4);
+  const maxWindow = Math.min(tokens.length, queryWords.length + 6);
+  let best = null;
+
+  for (let start = 0; start < tokens.length; start += 1) {
+    for (let winLen = minWindow; winLen <= maxWindow; winLen += 1) {
+      if (start + winLen > tokens.length) break;
+      const candidate = tokens.slice(start, start + winLen);
+      const candidateBigrams = new Set(makeNgrams(candidate, 2));
+      const candidateTrigrams = new Set(makeNgrams(candidate, 3));
+      const candidateSet = new Set(candidate);
+      const biOverlap = queryBigrams.length ? queryBigrams.filter((gram) => candidateBigrams.has(gram)).length / queryBigrams.length : 0;
+      const triOverlap = queryTrigrams.length ? queryTrigrams.filter((gram) => candidateTrigrams.has(gram)).length / queryTrigrams.length : 0;
+      const tokenOverlap = queryWords.filter((word) => candidateSet.has(word)).length / queryWords.length;
+      const lenPenalty = Math.abs(winLen - queryWords.length) * 0.02;
+      const score = biOverlap * 0.6 + triOverlap * 0.25 + tokenOverlap * 0.15 - lenPenalty;
+      const overlapCount = queryWords.filter((word) => candidateSet.has(word)).length;
+      if (overlapCount < Math.max(2, Math.ceil(queryWords.length * 0.6))) continue;
+      if (!best || score > best.score) {
+        best = {
+          elements: elements.slice(tokenToEl[start], tokenToEl[start + winLen - 1] + 1),
+          score,
+        };
+      }
+    }
+  }
+
+  return best && best.score >= 0.58 ? best : null;
+}
 
 export default function PdfViewer({
   pdfBytes,
@@ -16,10 +257,11 @@ export default function PdfViewer({
 }) {
   const containerRef = useRef(null);
   const pdfRef = useRef(null);
+  const pdfLibRef = useRef(null);
   const wrappersRef = useRef([]);
-  const [pdfReady, setPdfReady] = useState(0);
-  const tasksRef = useRef([]);
-  const observerRef = useRef(null);
+  const pageMetricsRef = useRef([]);
+  const pageStatesRef = useRef({});
+  const mountedWindowRef = useRef({ startPage: 1, endPage: 0 });
   const ocrDoneRef = useRef(new Set());
   const ocrInFlightRef = useRef(new Set());
   const onReadyRef = useRef(onReady);
@@ -27,6 +269,7 @@ export default function PdfViewer({
   const onDocumentLoadRef = useRef(onDocumentLoad);
   const annotationsRef = useRef(annotations);
   const onAnnotationClickRef = useRef(onAnnotationClick);
+  const [pdfReady, setPdfReady] = useState(0);
 
   useEffect(() => {
     onReadyRef.current = onReady;
@@ -50,686 +293,408 @@ export default function PdfViewer({
     const el = containerRef.current;
     if (!el || !pdfBytes?.length) return undefined;
 
-    let cleanupScrollTracking = () => {};
-    el.innerHTML = "";
+    let cleanupScroll = () => {};
+    let cleanupResize = () => {};
+    el.innerHTML = '';
     wrappersRef.current = [];
-    setPdfReady(0);
-    tasksRef.current = [];
+    pageMetricsRef.current = [];
+    pageStatesRef.current = {};
+    mountedWindowRef.current = { startPage: 1, endPage: 0 };
     ocrDoneRef.current = new Set();
     ocrInFlightRef.current = new Set();
-    if (observerRef.current) observerRef.current.disconnect();
+    setPdfReady(0);
 
-    const buildOcrOverlay = async (page, wrap, width, height, pageNum) => {
-      // Check if the native text layer already has sufficient text.
-      // If so, skip Tesseract OCR entirely — the text layer positions are more accurate.
-      const existingTl = wrap.querySelector(".textLayer");
-      if (existingTl) {
-        const spans = existingTl.querySelectorAll("span");
-        const textContent = Array.from(spans).map(s => s.textContent).join("").trim();
-        if (textContent.length > 20) {
-          // Native text layer has enough content — no OCR needed
-          existingTl.style.pointerEvents = "auto";
-          return;
+    const getScrollContainer = () => el.closest('.pdf-scroll');
+    const getPageState = (pageNum) => {
+      if (!pageStatesRef.current[pageNum]) {
+        pageStatesRef.current[pageNum] = { ensurePromise: null, renderTask: null, canvas: null, textLayer: null, mounted: false };
+      }
+      return pageStatesRef.current[pageNum];
+    };
+
+    const clearMountedPage = (pageNum) => {
+      const state = getPageState(pageNum);
+      state.renderTask?.cancel?.();
+      state.renderTask = null;
+      state.ensurePromise = null;
+      state.mounted = false;
+      if (state.canvas) {
+        state.canvas.width = 0;
+        state.canvas.height = 0;
+        state.canvas.remove();
+        state.canvas = null;
+      }
+      if (state.textLayer) {
+        state.textLayer.remove();
+        state.textLayer = null;
+      }
+      const wrap = wrappersRef.current[pageNum - 1];
+      wrap?.querySelector('.ocrLayer')?.remove();
+      wrap?.querySelector('.cit-svg')?.remove();
+      clearAnnotationHighlights(wrap);
+    };
+
+    const renderTextLayer = async (textContent, container, viewport) => {
+      try {
+        const task = pdfLibRef.current.renderTextLayer({ textContentSource: textContent, container, viewport });
+        if (task?.promise) await task.promise;
+      } catch {
+        try {
+          const task = pdfLibRef.current.renderTextLayer({ textContent, container, viewport, textDivs: [] });
+          if (task?.promise) await task.promise;
+        } catch {
+          // ignore text-layer failures
+        }
+      }
+    };
+
+    const ensurePageMounted = async (pageNum) => {
+      const state = getPageState(pageNum);
+      if (state.ensurePromise) return state.ensurePromise;
+      state.ensurePromise = (async () => {
+        const wrap = wrappersRef.current[pageNum - 1];
+        const metric = pageMetricsRef.current[pageNum - 1];
+        if (!wrap || !metric || !pdfRef.current || cancelled) return null;
+
+        if (!state.canvas) {
+          wrap.querySelector('.page-placeholder')?.remove();
+          state.canvas = document.createElement('canvas');
+          state.canvas.style.cssText = `display:block;width:${metric.width}px;height:${metric.height}px;border-radius:8px;`;
+          wrap.appendChild(state.canvas);
+        }
+        if (!state.textLayer) {
+          state.textLayer = document.createElement('div');
+          state.textLayer.className = 'textLayer';
+          state.textLayer.style.cssText = `position:absolute;top:0;left:0;width:${metric.width}px;height:${metric.height}px;overflow:hidden;line-height:1;user-select:text;`;
+          wrap.appendChild(state.textLayer);
+        }
+
+        state.mounted = true;
+        const page = await pdfRef.current.getPage(pageNum);
+        const viewport = page.getViewport({ scale });
+        const dpr = window.devicePixelRatio || 1;
+        state.canvas.width = Math.ceil(viewport.width * dpr);
+        state.canvas.height = Math.ceil(viewport.height * dpr);
+        state.canvas.style.width = `${viewport.width}px`;
+        state.canvas.style.height = `${viewport.height}px`;
+        state.textLayer.style.width = `${viewport.width}px`;
+        state.textLayer.style.height = `${viewport.height}px`;
+        state.textLayer.style.setProperty('--scale-factor', String(viewport.scale));
+        wrap.style.width = `${viewport.width}px`;
+        wrap.style.height = `${viewport.height}px`;
+        wrap.style.setProperty('--scale-factor', String(viewport.scale));
+        state.textLayer.innerHTML = '';
+
+        const ctx = state.canvas.getContext('2d');
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.scale(dpr, dpr);
+        const renderTask = page.render({ canvasContext: ctx, viewport });
+        state.renderTask = renderTask;
+
+        try {
+          await renderTask.promise;
+          if (cancelled || !state.mounted) return null;
+          const textContent = await page.getTextContent({ includeMarkedContent: true });
+          await renderTextLayer(textContent, state.textLayer, viewport);
+          applyAnnotationHighlights(wrap, annotationsRef.current.filter((ann) => ann.pageNum === pageNum));
+          if (!ocrDoneRef.current.has(pageNum)) {
+            ensureOcr(pageNum, page, wrap, viewport).catch(() => {});
+          }
+          return { wrap, viewport };
+        } catch (error) {
+          if (error?.name !== 'RenderingCancelledException') console.warn(error);
+          return null;
+        } finally {
+          state.renderTask = null;
+          state.ensurePromise = null;
+        }
+      })();
+
+      return state.ensurePromise;
+    };
+
+    const ensureOcr = async (pageNum, page, wrap, viewport) => {
+      if (ocrDoneRef.current.has(pageNum) || ocrInFlightRef.current.has(pageNum)) return;
+      if (!getPageState(pageNum).mounted) return;
+      ocrInFlightRef.current.add(pageNum);
+      try {
+        await buildOcrOverlay({
+          page,
+          wrap,
+          width: viewport.width,
+          height: viewport.height,
+          pageNum,
+          scale,
+          paperId,
+          fileSize,
+          fileLastModified,
+        });
+        ocrDoneRef.current.add(pageNum);
+      } finally {
+        ocrInFlightRef.current.delete(pageNum);
+      }
+    };
+
+    const updateOffsets = () => {
+      pageMetricsRef.current = wrappersRef.current.map((wrap, index) => ({
+        ...(pageMetricsRef.current[index] || {}),
+        top: wrap?.offsetTop || 0,
+      }));
+    };
+
+    const updateWindow = (options = {}) => {
+      const scrollContainer = getScrollContainer();
+      if (!scrollContainer || !pageMetricsRef.current.length) return;
+
+      let nextWindow = computeVisiblePageWindow({
+        pageMetrics: pageMetricsRef.current,
+        scrollTop: scrollContainer.scrollTop,
+        viewportHeight: scrollContainer.clientHeight,
+        overscanPages: OVERSCAN_PAGES,
+      });
+      if (options.forcePage) {
+        nextWindow = mergeWindowWithTarget(nextWindow, options.forcePage, pageMetricsRef.current.length, OVERSCAN_PAGES);
+      }
+
+      const prevWindow = mountedWindowRef.current;
+      mountedWindowRef.current = nextWindow;
+      for (let pageNum = nextWindow.startPage; pageNum <= nextWindow.endPage; pageNum += 1) {
+        ensurePageMounted(pageNum).catch(() => {});
+      }
+      for (let pageNum = prevWindow.startPage; pageNum <= prevWindow.endPage; pageNum += 1) {
+        if (pageNum < nextWindow.startPage || pageNum > nextWindow.endPage) {
+          clearMountedPage(pageNum);
         }
       }
 
-      const ocrScale = Math.max(2, scale);
-      const ocrData = await getOcrPageData(page, {
-        paperId,
-        pageNum,
-        scale: ocrScale,
-        fileSize,
-        fileLastModified,
+      const targetY = scrollContainer.scrollTop + scrollContainer.clientHeight * 0.35;
+      let bestPage = 1;
+      let bestDist = Number.POSITIVE_INFINITY;
+      pageMetricsRef.current.forEach((metric, index) => {
+        const dist = Math.abs((metric?.top || 0) - targetY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestPage = index + 1;
+        }
       });
-      const data = ocrData?.segments || [];
-      if (!data?.length) return;
-
-      const ocrViewport = page.getViewport({ scale: ocrScale });
-      const xScale = ocrViewport.width ? width / ocrViewport.width : 1;
-      const yScale = ocrViewport.height ? height / ocrViewport.height : 1;
-
-      wrap.querySelector(".ocrLayer")?.remove();
-      const layer = document.createElement("div");
-      layer.className = "ocrLayer";
-      layer.style.cssText = `position:absolute;top:0;left:0;width:${width}px;height:${height}px;overflow:hidden;line-height:1;pointer-events:auto;`;
-
-      data.forEach((seg) => {
-        if (!seg?.bbox || !seg.words?.length) return;
-        const lineDiv = document.createElement("div");
-        lineDiv.className = "ocr-line";
-        const lineWidth = Math.max(1, (seg.bbox.x1 - seg.bbox.x0) * xScale);
-        const lineHeight = Math.max(1, (seg.bbox.y1 - seg.bbox.y0) * yScale);
-        const left = seg.bbox.x0 * xScale;
-        const top = seg.bbox.y0 * yScale;
-        lineDiv.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${lineWidth}px;height:${lineHeight}px;line-height:1;pointer-events:none;user-select:none;`;
-
-        seg.words.forEach((w, i) => {
-          const span = document.createElement("span");
-          span.className = "ocr-word";
-          const nextWord = seg.words[i + 1];
-          const wordLeft = Math.max(0, (w.bbox.x0 - seg.bbox.x0) * xScale);
-          const wordTop = Math.max(0, (w.bbox.y0 - seg.bbox.y0) * yScale);
-          const wordHeight = Math.max(1, (w.bbox.y1 - w.bbox.y0) * yScale);
-          const wordAdvance = nextWord
-            ? Math.max(w.bbox.x1 - w.bbox.x0, nextWord.bbox.x0 - w.bbox.x0)
-            : (w.bbox.x1 - w.bbox.x0);
-          span.dataset.targetW = String(Math.max(1, wordAdvance * xScale));
-          span.style.cssText = `position:absolute;left:${wordLeft}px;top:${wordTop}px;height:${wordHeight}px;font-size:${wordHeight}px;white-space:pre;transform-origin:0 0;`;
-          span.textContent = i < seg.words.length - 1 ? `${w.text} ` : w.text;
-          lineDiv.appendChild(span);
-        });
-
-        layer.appendChild(lineDiv);
-      });
-
-      const tl = wrap.querySelector(".textLayer");
-      if (tl) tl.style.pointerEvents = "none";
-      wrap.appendChild(layer);
-
-      // Post-render: scale each OCR word horizontally so the transparent text
-      // aligns to its measured bbox without turning the entire line into one box.
-      await new Promise((resolve) => {
-        requestAnimationFrame(() => {
-          layer.querySelectorAll(".ocr-word").forEach((span) => {
-            const targetW = parseFloat(span.dataset.targetW);
-            const naturalW = span.scrollWidth;
-            if (naturalW > 0 && targetW > 0) {
-              const scx = targetW / naturalW;
-              if (Math.abs(scx - 1) > 0.01) {
-                span.style.transformOrigin = "0 0";
-                span.style.transform = `scaleX(${scx.toFixed(4)})`;
-              }
-            }
-          });
-          resolve();
-        });
-      });
+      onPageChangeRef.current?.(bestPage);
     };
 
-    // Helper: force-OCR a specific page (used by citation jump)
-    const ensureOcr = async (pageNum) => {
-      if (ocrDoneRef.current.has(pageNum)) return;
+    const jumpToCitation = async (pageNum, searchText, occurrenceIndex) => {
       const wrap = wrappersRef.current[pageNum - 1];
-      if (!wrap || !pdfRef.current) return;
-      const page = await pdfRef.current.getPage(pageNum);
-      const vp = page.getViewport({ scale });
-      try {
-        await buildOcrOverlay(page, wrap, vp.width, vp.height, pageNum);
-        ocrDoneRef.current.add(pageNum);
-      } catch { /* best-effort */ }
+      const scrollContainer = getScrollContainer();
+      if (!wrap || !scrollContainer) return;
+
+      scrollContainer.scrollTo({ top: Math.max(0, wrap.offsetTop - 80), behavior: 'smooth' });
+      updateWindow({ forcePage: pageNum });
+      await ensurePageMounted(pageNum);
+      await waitForLayout();
+      wrappersRef.current.forEach((node) => node?.querySelectorAll('.cit-svg').forEach((svg) => svg.remove()));
+      if (!searchText) return;
+
+      const queryWords = normalizeMatchText(String(searchText).replace(/^\s*["'""'']+|["'""'']+\s*$/g, '')).split(' ').filter(Boolean);
+      if (!queryWords.length) return;
+      const indexedSearch = Number.isInteger(occurrenceIndex) && occurrenceIndex >= 0;
+      const targetWrap = wrappersRef.current[pageNum - 1];
+      if (!targetWrap) return;
+
+      const collectMatches = () => {
+        const out = [];
+        const ocrWords = Array.from(targetWrap.querySelectorAll('.ocr-word'));
+        const ocrLines = Array.from(targetWrap.querySelectorAll('.ocr-line'));
+        const textSpans = Array.from(targetWrap.querySelectorAll('.textLayer span'));
+        const pushMatches = (matches, layer) => {
+          if (!matches) return;
+          const list = Array.isArray(matches) ? matches : [matches];
+          list.forEach((match) => {
+            if (match?.elements?.length) out.push({ ...match, layer });
+          });
+        };
+        pushMatches(matchContiguousTokens(ocrWords, queryWords, (node) => node.textContent, { returnAllExact: indexedSearch, allowFuzzy: !indexedSearch }), 'ocrWords');
+        pushMatches(matchContiguousTokens(ocrLines, queryWords, (node) => node.textContent, { returnAllExact: indexedSearch, allowFuzzy: !indexedSearch }), 'ocrLines');
+        pushMatches(matchContiguousTokens(textSpans, queryWords, (node) => node.textContent, { returnAllExact: indexedSearch, allowFuzzy: !indexedSearch }), 'textLayer');
+        return out;
+      };
+
+      let matches = collectMatches();
+      if (!matches.length && !ocrDoneRef.current.has(pageNum)) {
+        const page = await pdfRef.current.getPage(pageNum);
+        const viewport = page.getViewport({ scale });
+        await ensureOcr(pageNum, page, targetWrap, viewport);
+        await waitForLayout();
+        matches = collectMatches();
+      }
+
+      if (!matches.length) {
+        if (debugCitations) {
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          svg.setAttribute('width', targetWrap.offsetWidth);
+          svg.setAttribute('height', targetWrap.offsetHeight);
+          svg.setAttribute('class', 'cit-svg');
+          svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:5;';
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', '8');
+          rect.setAttribute('y', '8');
+          rect.setAttribute('width', String(Math.max(10, targetWrap.offsetWidth - 16)));
+          rect.setAttribute('height', String(Math.max(10, targetWrap.offsetHeight - 16)));
+          rect.setAttribute('rx', '8');
+          rect.setAttribute('fill', 'none');
+          rect.setAttribute('stroke', 'rgba(220,38,38,.8)');
+          rect.setAttribute('stroke-width', '2');
+          rect.setAttribute('stroke-dasharray', '6 5');
+          svg.appendChild(rect);
+          targetWrap.appendChild(svg);
+        }
+        return;
+      }
+
+      let bestMatch = null;
+      if (indexedSearch) {
+        const orderedLayers = ['ocrWords', 'textLayer', 'ocrLines'];
+        let chosen = [];
+        orderedLayers.some((layer) => {
+          const hits = matches.filter((match) => match.layer === layer);
+          if (hits.length) {
+            chosen = hits;
+            return true;
+          }
+          return false;
+        });
+        bestMatch = chosen.length ? chosen[occurrenceIndex % chosen.length] : null;
+      }
+      if (!bestMatch) {
+        const bestOverall = matches.reduce((best, match) => (match.score > best.score ? match : best), matches[0]);
+        const bestText = matches.filter((match) => match.layer === 'textLayer').sort((a, b) => b.score - a.score)[0] || null;
+        bestMatch = bestText && bestOverall.layer !== 'textLayer' && bestOverall.score < bestText.score + 0.12 ? bestText : bestOverall;
+      }
+      if (!bestMatch?.elements?.length) return;
+
+      const wrapRect = targetWrap.getBoundingClientRect();
+      const rows = [];
+      bestMatch.elements.forEach((node) => {
+        const rect = node.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const top = Math.round(rect.top - wrapRect.top);
+        const row = rows.find((entry) => Math.abs(entry.top - top) < 5);
+        if (row) {
+          row.left = Math.min(row.left, rect.left - wrapRect.left);
+          row.right = Math.max(row.right, rect.right - wrapRect.left);
+          row.height = Math.max(row.height, rect.height);
+        } else {
+          rows.push({ top, left: rect.left - wrapRect.left, right: rect.right - wrapRect.left, height: rect.height });
+        }
+      });
+      if (!rows.length) return;
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', targetWrap.offsetWidth);
+      svg.setAttribute('height', targetWrap.offsetHeight);
+      svg.setAttribute('class', 'cit-svg');
+      svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:5;';
+      rows.forEach((row) => {
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', Math.max(0, row.left - 3));
+        rect.setAttribute('y', Math.max(0, row.top - 1));
+        rect.setAttribute('width', Math.min(targetWrap.offsetWidth, row.right - row.left + 6));
+        rect.setAttribute('height', row.height + 2);
+        rect.setAttribute('rx', '3');
+        rect.setAttribute('fill', 'rgba(250,204,21,.4)');
+        rect.setAttribute('stroke', 'rgba(202,138,4,.55)');
+        rect.setAttribute('stroke-width', '1');
+        svg.appendChild(rect);
+      });
+      targetWrap.appendChild(svg);
     };
 
     (async () => {
-      const lib = await loadPdfJs();
-      const pdf = await lib.getDocument({ data: pdfBytes.slice(0), stopAtErrors: false }).promise;
+      pdfLibRef.current = await loadPdfJs();
+      const pdf = await pdfLibRef.current.getDocument({ data: pdfBytes.slice(0), stopAtErrors: false }).promise;
       if (cancelled) return;
       pdfRef.current = pdf;
-      if (onDocumentLoadRef.current) onDocumentLoadRef.current({ totalPages: pdf.numPages });
-      const dpr = window.devicePixelRatio || 1;
+      onDocumentLoadRef.current?.({ totalPages: pdf.numPages });
 
-      // Phase 1: Create all page containers and start canvas renders in parallel batches
-      const pageData = [];
-      for (let n = 1; n <= pdf.numPages; n++) {
-        const page = await pdf.getPage(n);
-        const vp = page.getViewport({ scale });
-        const W = vp.width;
-        const H = vp.height;
-
-        const wrap = document.createElement("div");
-        wrap.dataset.page = n;
-        wrap.style.cssText = `position:relative;margin:0 auto 12px;width:${W}px;height:${H}px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.08);border:1px solid #ececec;border-radius:8px;`;
-        wrap.style.setProperty("--scale-factor", String(vp.scale));
-        wrappersRef.current[n - 1] = wrap;
-
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.ceil(W * dpr);
-        canvas.height = Math.ceil(H * dpr);
-        canvas.style.cssText = `display:block;width:${W}px;height:${H}px;border-radius:8px;`;
-
-        const tl = document.createElement("div");
-        tl.className = "textLayer";
-        tl.style.cssText = `position:absolute;top:0;left:0;width:${W}px;height:${H}px;overflow:hidden;line-height:1;user-select:text;`;
-        tl.style.setProperty("--scale-factor", String(vp.scale));
-
-        wrap.appendChild(canvas);
-        wrap.appendChild(tl);
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale });
+        const wrap = document.createElement('div');
+        wrap.dataset.page = String(pageNum);
+        wrap.style.cssText = `position:relative;margin:0 auto ${PAGE_GAP}px;width:${viewport.width}px;height:${viewport.height}px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.08);border:1px solid #ececec;border-radius:8px;`;
+        const placeholder = document.createElement('div');
+        placeholder.className = 'page-placeholder';
+        placeholder.style.cssText = 'position:absolute;inset:0;border-radius:8px;background:linear-gradient(180deg,#fff 0%,#fbfbfa 100%);';
+        wrap.appendChild(placeholder);
+        wrappersRef.current.push(wrap);
+        pageMetricsRef.current.push({ width: viewport.width, height: viewport.height, top: 0 });
         el.appendChild(wrap);
-
-        pageData.push({ page, wrap, canvas, tl, W, H, n });
+        try { page.cleanup?.(); } catch { /* ignore */ }
       }
 
-      // Render canvases in parallel (batches of 4 for memory safety)
-      const BATCH = 4;
-      for (let i = 0; i < pageData.length; i += BATCH) {
-        if (cancelled) break;
-        const batch = pageData.slice(i, i + BATCH);
-        await Promise.all(
-          batch.map(async ({ page, canvas, tl, W, H, n }) => {
-            if (cancelled) return;
-            const vp = page.getViewport({ scale });
-            tl.style.setProperty("--scale-factor", String(vp.scale));
-            const ctx = canvas.getContext("2d");
-            ctx.scale(dpr, dpr);
-            const task = page.render({ canvasContext: ctx, viewport: vp });
-            tasksRef.current.push(task);
-            try {
-              await task.promise;
-              // Render native text layer (hidden, used as fallback for citations)
-              if (!cancelled) {
-                const tc = await page.getTextContent({ includeMarkedContent: true });
-                try {
-                  const tlTask = lib.renderTextLayer({ textContentSource: tc, container: tl, viewport: vp });
-                  if (tlTask?.promise) await tlTask.promise;
-                } catch {
-                  try {
-                    const tlTask = lib.renderTextLayer({ textContent: tc, container: tl, viewport: vp, textDivs: [] });
-                    if (tlTask?.promise) await tlTask.promise;
-                  } catch { /* ignore */ }
-                }
-              }
-            } catch (e) {
-              if (e?.name !== "RenderingCancelledException") console.warn(e);
-            }
-          })
-        );
-      }
+      await waitForLayout();
+      updateOffsets();
+      setPdfReady((value) => value + 1);
 
-      if (cancelled) return;
+      const scrollContainer = getScrollContainer();
+      if (!scrollContainer) return;
+      let rafId = null;
+      const onScroll = () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => updateWindow());
+      };
+      const onResize = () => {
+        updateOffsets();
+        updateWindow();
+      };
+      scrollContainer.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', onResize);
+      cleanupScroll = () => {
+        scrollContainer.removeEventListener('scroll', onScroll);
+        if (rafId) cancelAnimationFrame(rafId);
+      };
+      cleanupResize = () => window.removeEventListener('resize', onResize);
 
-      // Signal that text layers are ready for annotation highlighting
-      setPdfReady((v) => v + 1);
-
-      // Phase 2: Lazy OCR via IntersectionObserver — only OCR pages near viewport
-      const scrollContainer = el.closest(".pdf-scroll");
-      const observer = new IntersectionObserver(
-        (entries) => {
-          entries.forEach((entry) => {
-            if (!entry.isIntersecting) return;
-            const wrap = entry.target;
-            const pageNum = parseInt(wrap.dataset.page, 10);
-            if (ocrDoneRef.current.has(pageNum) || ocrInFlightRef.current.has(pageNum)) return;
-            ocrInFlightRef.current.add(pageNum);
-            const pd = pageData.find((p) => p.n === pageNum);
-            if (!pd) return;
-            buildOcrOverlay(pd.page, pd.wrap, pd.W, pd.H, pageNum)
-              .then(() => ocrDoneRef.current.add(pageNum))
-              .catch(() => {})
-              .finally(() => ocrInFlightRef.current.delete(pageNum));
-          });
-        },
-        { root: scrollContainer, rootMargin: "200% 0px" } // OCR pages 2 viewports ahead
-      );
-      observerRef.current = observer;
-      wrappersRef.current.forEach((w) => { if (w) observer.observe(w); });
-
-      if (scrollContainer) {
-        let rafId = null;
-        const notifyVisiblePage = () => {
-          const wraps = wrappersRef.current.filter(Boolean);
-          if (!wraps.length) return;
-          const targetY = scrollContainer.scrollTop + scrollContainer.clientHeight * 0.35;
-          let bestPage = 1;
-          let bestDist = Number.POSITIVE_INFINITY;
-
-          wraps.forEach((w, i) => {
-            const dist = Math.abs(w.offsetTop - targetY);
-            if (dist < bestDist) {
-              bestDist = dist;
-              bestPage = i + 1;
-            }
-          });
-
-          if (onPageChangeRef.current) onPageChangeRef.current(bestPage);
-        };
-
-        const onScroll = () => {
-          if (rafId) cancelAnimationFrame(rafId);
-          rafId = requestAnimationFrame(notifyVisiblePage);
-        };
-
-        scrollContainer.addEventListener("scroll", onScroll, { passive: true });
-        notifyVisiblePage();
-        cleanupScrollTracking = () => {
-          scrollContainer.removeEventListener("scroll", onScroll);
-          if (rafId) cancelAnimationFrame(rafId);
-        };
-      }
-
-      if (onReadyRef.current) {
-        onReadyRef.current((pageNum, searchText, occurrenceIndex) => {
-          const wrap = wrappersRef.current[pageNum - 1];
-          if (!wrap) return;
-          const sc = wrap.closest(".pdf-scroll");
-          let off = 0;
-          let e = wrap;
-          while (e && e !== sc) {
-            off += e.offsetTop;
-            e = e.offsetParent;
-          }
-          if (sc) sc.scrollTo({ top: off - 80, behavior: "smooth" });
-
-          const doHighlight = async () => {
-            const dbg = (...args) => {
-              if (debugCitations) console.info("[citation-debug]", ...args);
-            };
-
-            dbg("jump request", { pageNum, searchText });
-            // Wait for layout to fully settle
-            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-            // Clear any previous citation highlights across all pages
-            wrappersRef.current.forEach((w) => w?.querySelectorAll(".cit-svg").forEach((x) => x.remove()));
-            if (!searchText) return;
-
-            const normalizeText = (s) =>
-              (s || "")
-                .normalize("NFKD")
-                .replace(/[\u0300-\u036f]/g, "")
-                .replace(/[""]/g, '"')
-                .replace(/['']/g, "'")
-                .replace(/[^\p{L}\p{N}\s]/gu, " ")
-                .toLowerCase()
-                .replace(/\s+/g, " ")
-                .trim();
-
-            const q = normalizeText(String(searchText).replace(/^\s*["'""'']+|["'""'']+\s*$/g, ""));
-            const qWords = q.split(" ").filter(Boolean);
-            if (!qWords.length) return;
-            const isIndexedSearch = Number.isInteger(occurrenceIndex) && occurrenceIndex >= 0;
-            dbg("normalized query", q);
-
-            const makeNgrams = (arr, n) => {
-              if (arr.length < n) return [];
-              const out = [];
-              for (let i = 0; i <= arr.length - n; i++) out.push(arr.slice(i, i + n).join(" "));
-              return out;
-            };
-
-            // Match only contiguous token windows so highlights stay connected and local.
-            const matchContiguousTokens = (elements, getTextFn, options = {}) => {
-              const { returnAllExact = false, allowFuzzy = true } = options;
-              if (!elements?.length) return null;
-              const tokens = [];
-              const tokenToEl = [];
-
-              elements.forEach((el, elIdx) => {
-                const ws = normalizeText(getTextFn(el)).split(" ").filter(Boolean);
-                ws.forEach((w) => {
-                  tokens.push(w);
-                  tokenToEl.push(elIdx);
-                });
-              });
-
-              if (!tokens.length) return null;
-              const qLen = qWords.length;
-              const exactMatches = [];
-
-              // 1) Exact contiguous phrase match
-              if (tokens.length >= qLen) {
-                for (let start = 0; start <= tokens.length - qLen; start++) {
-                  let ok = true;
-                  for (let k = 0; k < qLen; k++) {
-                    if (tokens[start + k] !== qWords[k]) {
-                      ok = false;
-                      break;
-                    }
-                  }
-                  if (ok) {
-                    const sEl = tokenToEl[start];
-                    const eEl = tokenToEl[start + qLen - 1];
-                    exactMatches.push({
-                      elements: elements.slice(sEl, eEl + 1),
-                      score: 1,
-                      mode: "exact",
-                    });
-                  }
-                }
-              }
-
-              if (returnAllExact) return exactMatches;
-              if (exactMatches.length) return exactMatches[0];
-              if (!allowFuzzy) return null;
-
-              // 2) Contiguous fuzzy phrase match (adjacency-aware via n-grams)
-              const qBi = makeNgrams(qWords, 2);
-              const qTri = makeNgrams(qWords, 3);
-              const minWin = Math.max(3, qLen - 4);
-              const maxWin = Math.min(tokens.length, qLen + 6);
-              let best = null;
-
-              for (let start = 0; start < tokens.length; start++) {
-                for (let winLen = minWin; winLen <= maxWin; winLen++) {
-                  if (start + winLen > tokens.length) break;
-                  const cand = tokens.slice(start, start + winLen);
-                  const cBi = new Set(makeNgrams(cand, 2));
-                  const cTri = new Set(makeNgrams(cand, 3));
-                  const cSet = new Set(cand);
-
-                  const biOverlap = qBi.length ? qBi.filter((g) => cBi.has(g)).length / qBi.length : 0;
-                  const triOverlap = qTri.length ? qTri.filter((g) => cTri.has(g)).length / qTri.length : 0;
-                  const tokOverlap = qWords.filter((w) => cSet.has(w)).length / qLen;
-                  const lenPenalty = Math.abs(winLen - qLen) * 0.02;
-                  const score = biOverlap * 0.6 + triOverlap * 0.25 + tokOverlap * 0.15 - lenPenalty;
-
-                  const overlapCount = qWords.filter((w) => cSet.has(w)).length;
-                  const minOverlap = Math.max(2, Math.ceil(qLen * 0.6));
-                  if (overlapCount < minOverlap) continue;
-
-                  if (!best || score > best.score) {
-                    const sEl = tokenToEl[start];
-                    const eEl = tokenToEl[start + winLen - 1];
-                    best = {
-                      elements: elements.slice(sEl, eEl + 1),
-                      score,
-                      mode: "fuzzy-contiguous",
-                    };
-                  }
-                }
-              }
-
-              if (best && best.score >= 0.58) return best;
-              return null;
-            };
-
-            const collectLayerMatches = () => {
-              const asList = (v) => {
-                if (!v) return [];
-                return Array.isArray(v) ? v : [v];
-              };
-
-              const out = [];
-              const ocrLayer = wrap.querySelector(".ocrLayer");
-              const textLayer = wrap.querySelector(".textLayer");
-
-              if (ocrLayer) {
-                const wordSpans = Array.from(ocrLayer.querySelectorAll(".ocr-word"));
-                dbg("ocr layer words", wordSpans.length);
-                const mWords = matchContiguousTokens(wordSpans, (s) => s.textContent, {
-                  returnAllExact: isIndexedSearch,
-                  allowFuzzy: !isIndexedSearch,
-                });
-                asList(mWords).forEach((m) => {
-                  if (m?.elements?.length) out.push({ ...m, layer: "ocrWords" });
-                });
-
-                const lineDivs = Array.from(ocrLayer.querySelectorAll(".ocr-line"));
-                dbg("ocr layer lines", lineDivs.length);
-                const mLines = matchContiguousTokens(lineDivs, (d) => d.textContent.trim(), {
-                  returnAllExact: isIndexedSearch,
-                  allowFuzzy: !isIndexedSearch,
-                });
-                asList(mLines).forEach((m) => {
-                  if (m?.elements?.length) out.push({ ...m, layer: "ocrLines" });
-                });
-              }
-
-              if (textLayer) {
-                const spans = Array.from(textLayer.querySelectorAll("span"));
-                dbg("text layer spans", spans.length);
-                const m = matchContiguousTokens(spans, (s) => s.textContent, {
-                  returnAllExact: isIndexedSearch,
-                  allowFuzzy: !isIndexedSearch,
-                });
-                asList(m).forEach((hit) => {
-                  if (hit?.elements?.length) out.push({ ...hit, layer: "textLayer" });
-                });
-              }
-
-              return out;
-            };
-
-            if (isIndexedSearch && !ocrDoneRef.current.has(pageNum)) {
-              dbg("indexed search requested; ensuring OCR for precise words", { pageNum });
-              await ensureOcr(pageNum);
-              await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-            }
-
-            // Prefer immediate text-layer highlight; only force OCR if no match found.
-            let matches = collectLayerMatches();
-            if (!matches.length && !ocrDoneRef.current.has(pageNum)) {
-              dbg("no immediate match; forcing OCR fallback", { pageNum });
-              await ensureOcr(pageNum);
-              await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-              matches = collectLayerMatches();
-            }
-
-            if (!matches.length) {
-              dbg("no element match found", { pageNum, q });
-              if (debugCitations) {
-                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-                svg.setAttribute("width", wrap.offsetWidth);
-                svg.setAttribute("height", wrap.offsetHeight);
-                svg.setAttribute("class", "cit-svg");
-                svg.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;z-index:5;";
-                const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-                rect.setAttribute("x", "8");
-                rect.setAttribute("y", "8");
-                rect.setAttribute("width", String(Math.max(10, wrap.offsetWidth - 16)));
-                rect.setAttribute("height", String(Math.max(10, wrap.offsetHeight - 16)));
-                rect.setAttribute("rx", "8");
-                rect.setAttribute("fill", "none");
-                rect.setAttribute("stroke", "rgba(220,38,38,.8)");
-                rect.setAttribute("stroke-width", "2");
-                rect.setAttribute("stroke-dasharray", "6 5");
-                svg.appendChild(rect);
-                wrap.appendChild(svg);
-              }
-              return;
-            }
-
-            let bestMatch = null;
-            if (isIndexedSearch) {
-              const byLayer = (name) => matches.filter((m) => m.layer === name);
-              const orderedLayers = ["ocrWords", "textLayer", "ocrLines"];
-              let chosen = [];
-              orderedLayers.some((layerName) => {
-                const hits = byLayer(layerName);
-                if (hits.length) {
-                  chosen = hits;
-                  return true;
-                }
-                return false;
-              });
-              const idx = chosen.length ? occurrenceIndex % chosen.length : 0;
-              bestMatch = chosen[idx] || null;
-            }
-
-            if (!bestMatch) {
-              const bestByLayer = matches.reduce((acc, m) => {
-                if (!acc[m.layer] || m.score > acc[m.layer].score) acc[m.layer] = m;
-                return acc;
-              }, {});
-
-              const bestOverall = matches.reduce((best, m) => (m.score > best.score ? m : best), matches[0]);
-              const bestText = bestByLayer.textLayer || null;
-              const OCR_ADVANTAGE_REQUIRED = 0.12;
-
-              // Prefer native text extraction unless OCR is significantly more confident.
-              bestMatch =
-                bestText && bestOverall.layer !== "textLayer" && bestOverall.score < bestText.score + OCR_ADVANTAGE_REQUIRED
-                  ? bestText
-                  : bestOverall;
-            }
-
-            if (!bestMatch?.elements?.length) {
-              dbg("best match could not be resolved", { pageNum, q, isIndexedSearch, occurrenceIndex });
-              return;
-            }
-
-            const matchedEls = bestMatch.elements;
-            const matchedLayer = bestMatch.layer;
-
-            dbg("matched elements", {
-              layer: matchedLayer,
-              mode: bestMatch.mode,
-              score: Number(bestMatch.score.toFixed(3)),
-              count: matchedEls.length,
-            });
-
-            const pgW = wrap.offsetWidth;
-            const pgH = wrap.offsetHeight;
-            const wR = wrap.getBoundingClientRect();
-            const rows = [];
-            matchedEls.forEach((el) => {
-              const r = el.getBoundingClientRect();
-              if (!r.width || !r.height) return;
-              const top = Math.round(r.top - wR.top);
-              const ex = rows.find((row) => Math.abs(row.top - top) < 5);
-              if (ex) {
-                ex.left = Math.min(ex.left, r.left - wR.left);
-                ex.right = Math.max(ex.right, r.right - wR.left);
-                ex.h = Math.max(ex.h, r.height);
-              } else {
-                rows.push({ top, left: r.left - wR.left, right: r.right - wR.left, h: r.height });
-              }
-            });
-            if (!rows.length) {
-              dbg("matched elements had zero measurable rects");
-              return;
-            }
-            dbg("highlight rows", rows);
-
-            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-            svg.setAttribute("width", pgW);
-            svg.setAttribute("height", pgH);
-            svg.setAttribute("class", "cit-svg");
-            svg.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;z-index:5;";
-            rows.forEach((row) => {
-              const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-              rect.setAttribute("x", Math.max(0, row.left - 3));
-              rect.setAttribute("y", Math.max(0, row.top - 1));
-              rect.setAttribute("width", Math.min(pgW, row.right - row.left + 6));
-              rect.setAttribute("height", row.h + 2);
-              rect.setAttribute("rx", "3");
-              rect.setAttribute("fill", "rgba(250,204,21,.4)");
-              rect.setAttribute("stroke", "rgba(202,138,4,.55)");
-              rect.setAttribute("stroke-width", "1");
-              svg.appendChild(rect);
-            });
-            wrap.appendChild(svg);
-            dbg("highlight overlay appended");
-          };
-
-          // Small delay for scroll to settle, then highlight
-          setTimeout(() => doHighlight().catch((e) => console.warn("Citation highlight failed:", e)), 420);
-        });
-      }
-    })();
+      updateWindow({ forcePage: 1 });
+      onReadyRef.current?.((pageNum, searchText, occurrenceIndex) => {
+        setTimeout(() => {
+          jumpToCitation(pageNum, searchText, occurrenceIndex).catch((error) => console.warn('Citation highlight failed:', error));
+        }, 420);
+      });
+    })().catch((error) => {
+      if (!cancelled) console.warn(error);
+    });
 
     return () => {
       cancelled = true;
-      cleanupScrollTracking();
-      if (observerRef.current) observerRef.current.disconnect();
-      tasksRef.current.forEach((t) => {
-        try {
-          t.cancel();
-        } catch {
-          // ignore
-        }
-      });
+      cleanupScroll();
+      cleanupResize();
+      Object.keys(pageStatesRef.current).forEach((pageNum) => clearMountedPage(Number(pageNum)));
+      try { pdfRef.current?.destroy?.(); } catch { /* ignore */ }
+      pdfRef.current = null;
+      pdfLibRef.current = null;
+      wrappersRef.current = [];
+      pageMetricsRef.current = [];
+      pageStatesRef.current = {};
+      el.innerHTML = '';
     };
-  }, [fileLastModified, fileSize, paperId, pdfBytes, scale]);
+  }, [debugCitations, fileLastModified, fileSize, paperId, pdfBytes, scale]);
 
-  // Apply annotation highlights whenever annotations change (without full re-render)
   useEffect(() => {
-    const wrappers = wrappersRef.current;
-    if (!wrappers.length) return;
-
-    // Clear existing annotation highlights — restore original span text
-    wrappers.forEach((w) => {
-      if (!w) return;
-      w.querySelectorAll('[data-ann-split]').forEach((span) => {
-        span.textContent = span.dataset.annOrigText || span.textContent;
-        span.removeAttribute('data-ann-split');
-        span.removeAttribute('data-ann-orig-text');
-      });
-      w.querySelectorAll('.ann-hl').forEach((el) => {
-        el.classList.remove('ann-hl');
-        delete el.dataset.annId;
-        el.style.removeProperty('background-color');
-      });
-    });
-
-    if (!annotations.length) return;
-
-    wrappers.forEach((wrap, idx) => {
-      if (!wrap) return;
-      const pageNum = idx + 1;
-      const pageAnns = annotations.filter((a) => a.pageNum === pageNum);
-      if (!pageAnns.length) return;
-
-      const tl = wrap.querySelector('.textLayer');
-      if (!tl) return;
-      const spans = Array.from(tl.querySelectorAll(':scope > span'));
-      if (!spans.length) return;
-
-      // Build character offset map: each span's start offset in the concatenated text
-      const spanOffsets = [];
-      let charPos = 0;
-      for (const span of spans) {
-        const text = span.textContent || '';
-        spanOffsets.push({ span, start: charPos, end: charPos + text.length, text });
-        charPos += text.length;
-      }
-
-      // Sort annotations by startOffset so we process them front-to-back
-      const sorted = [...pageAnns].sort((a, b) => a.startOffset - b.startOffset);
-
-      for (const ann of sorted) {
-        const { startOffset, endOffset, id } = ann;
-        const color = ann.color || 'rgba(255,213,79,.4)';
-
-        for (const so of spanOffsets) {
-          if (so.end <= startOffset || so.start >= endOffset) continue;
-
-          const relStart = Math.max(0, startOffset - so.start);
-          const relEnd = Math.min(so.text.length, endOffset - so.start);
-
-          if (relStart === 0 && relEnd === so.text.length) {
-            so.span.classList.add('ann-hl');
-            so.span.dataset.annId = id;
-            so.span.style.backgroundColor = color;
-          } else {
-            const before = so.text.substring(0, relStart);
-            const highlighted = so.text.substring(relStart, relEnd);
-            const after = so.text.substring(relEnd);
-
-            so.span.dataset.annSplit = '1';
-            so.span.dataset.annOrigText = so.text;
-            so.span.textContent = '';
-
-            if (before) {
-              so.span.appendChild(document.createTextNode(before));
-            }
-
-            const hSpan = document.createElement('span');
-            hSpan.textContent = highlighted;
-            hSpan.classList.add('ann-hl');
-            hSpan.dataset.annId = id;
-            hSpan.style.backgroundColor = color;
-            so.span.appendChild(hSpan);
-
-            if (after) {
-              so.span.appendChild(document.createTextNode(after));
-            }
-          }
-        }
+    wrappersRef.current.forEach((wrap, index) => {
+      if (wrap?.querySelector('.textLayer')) {
+        applyAnnotationHighlights(wrap, annotations.filter((ann) => ann.pageNum === index + 1));
       }
     });
-  }, [annotations, scale, pdfReady]);
+  }, [annotations, pdfReady, scale]);
 
-  // Click handler for annotation highlights
   useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
-    const handler = (e) => {
-      const target = e.target.closest('[data-ann-id]');
+    if (!el) return undefined;
+    const handler = (event) => {
+      const target = event.target.closest('[data-ann-id]');
       if (!target) return;
-      const annId = target.dataset.annId;
-      const ann = annotationsRef.current.find((a) => a.id === annId);
-      if (ann && onAnnotationClickRef.current) {
-        const rect = target.getBoundingClientRect();
-        onAnnotationClickRef.current(ann, { x: rect.left + rect.width / 2, y: rect.bottom + 4 });
-      }
+      const ann = annotationsRef.current.find((item) => item.id === target.dataset.annId);
+      if (!ann || !onAnnotationClickRef.current) return;
+      const rect = target.getBoundingClientRect();
+      onAnnotationClickRef.current(ann, { x: rect.left + rect.width / 2, y: rect.bottom + 4 });
     };
     el.addEventListener('click', handler);
     return () => el.removeEventListener('click', handler);

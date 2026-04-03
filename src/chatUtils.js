@@ -1,5 +1,16 @@
 export const CHAT_TITLE_FALLBACK = "New chat";
 
+export function materializeFullText(pageTexts = []) {
+  if (!Array.isArray(pageTexts) || !pageTexts.length) return "";
+  return pageTexts
+    .map((entry, index) => {
+      const page = Number(entry?.page) || index + 1;
+      const text = String(entry?.text || "").trim() || "[No extractable text on this page]";
+      return `--- Page ${page} ---\n${text}`;
+    })
+    .join("\n\n");
+}
+
 export function createChatThreadRecord(paperId) {
   return {
     id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

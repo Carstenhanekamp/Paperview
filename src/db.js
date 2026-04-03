@@ -34,6 +34,16 @@ db.version(5).stores({
   ocrPages: 'id, paperId, pageNum, scale, updatedAt',
 });
 
+db.version(6).stores({
+  chats: 'id, paperId, updatedAt',
+  agentChats: 'id, rootFolderId, updatedAt',
+  folderHandles: 'id',
+  annotations: 'id, paperId, pageNum, createdAt',
+  paperTextCache: 'paperId, updatedAt',
+  ocrPages: 'id, paperId, pageNum, scale, updatedAt',
+  uploadedPdfs: 'paperId, updatedAt',
+});
+
 function makeOcrPageId(paperId, pageNum, scale) {
   return `${paperId}:${pageNum}:${scale}`;
 }
@@ -121,10 +131,23 @@ export async function saveOcrPage(entry) {
   });
 }
 
+export async function loadUploadedPdf(paperId) {
+  return db.uploadedPdfs.get(paperId);
+}
+
+export async function saveUploadedPdf(entry) {
+  return db.uploadedPdfs.put(entry);
+}
+
+export async function deleteUploadedPdf(paperId) {
+  return db.uploadedPdfs.delete(paperId);
+}
+
 export async function deletePaperCachesByPaperIds(paperIds) {
   if (!paperIds?.length) return;
   await Promise.all([
     db.paperTextCache.where('paperId').anyOf(paperIds).delete(),
     db.ocrPages.where('paperId').anyOf(paperIds).delete(),
+    db.uploadedPdfs.where('paperId').anyOf(paperIds).delete(),
   ]);
 }
