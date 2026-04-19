@@ -2,7 +2,15 @@
 
 Paperview is a local-first research paper reader and research agent. Open local folders of PDFs, read and annotate papers, ask grounded questions with citations, search for papers online, and import promising PDFs back onto your own disk.
 
-No account is required. The app still runs locally in the browser for reading and workspace storage, and can optionally use small Vercel Functions for OpenAI requests and remote PDF downloads to avoid browser CORS issues.
+No Paperview account is required. The app runs locally in the browser for reading and workspace storage, and can optionally use small Vercel-compatible API functions for OpenAI requests and remote PDF downloads to avoid browser CORS issues.
+
+## Try Paperview
+
+Use the hosted app if you do not want to self-host:
+
+**[View Paperview](https://paperview.carstenhanekamp.nl/)**
+
+The hosted version runs on Vercel's free tier, so availability and usage limits may vary.
 
 ## What Paperview does
 
@@ -43,8 +51,10 @@ No account is required. The app still runs locally in the browser for reading an
 
 ### Prerequisites
 
-- Node.js 18+
-- An OpenAI API key
+- Node.js 20.19+
+- npm
+- Chrome or Edge for folder access through the File System Access API
+- An OpenAI API key for AI Q&A, web research, and agent features
 
 ### Setup
 
@@ -53,9 +63,11 @@ git clone https://github.com/Carstenhanekamp/Paperview.git
 cd Paperview
 npm install
 cp .env.example .env.local
-# Add your OpenAI API key to .env.local
+# Add OPENAI_API_KEY to .env.local
 npm run dev
 ```
+
+Then open the local Vite URL shown in your terminal.
 
 ### Environment Variables
 
@@ -65,15 +77,23 @@ VITE_OPENAI_API_KEY=
 VITE_OPENAI_MODEL=gpt-5.4-mini
 ```
 
-For local `npm run dev`, Vite does not serve the Vercel `api/` functions, so set `VITE_OPENAI_API_KEY` if you want to call OpenAI directly from the browser while developing. In deployed environments, prefer `OPENAI_API_KEY` so the backend proxy can keep OpenAI and remote PDF fetches server-side.
+Use `OPENAI_API_KEY` for local development and deployed environments. The Vite dev server mounts the local API middleware from `api/`, so OpenAI requests can stay server-side during `npm run dev`.
+
+`VITE_OPENAI_API_KEY` is only a browser-side development escape hatch. Values prefixed with `VITE_` are exposed to the client bundle, so do not use it for shared deployments or committed examples.
 
 ## Scripts
 
 ```bash
 npm run dev
+npm test
 npm run build
 npm run preview
 ```
+
+- `npm run dev`: start the Vite app with local API middleware
+- `npm test`: run the Vitest suite
+- `npm run build`: create a production build
+- `npm run preview`: preview the production build locally
 
 ## Project Structure
 
@@ -115,13 +135,29 @@ Paperview is local-first, but it does make network requests for:
 - User-initiated web research through OpenAI web search
 - User-initiated direct PDF downloads when importing papers from search results, preferably through the backend PDF proxy when deployed
 
+## Roadmap
+
+Paperview is ready for early open-source use, with a few areas that would make it more robust and contributor-friendly:
+
+- **Hosted app privacy modes**: Make it clearer when AI requests use a server-side key, a user-provided browser key, or no AI at all.
+- **Workspace import/export**: Add a portable archive format for PDFs, annotations, chats, and `.paperview.json` snapshots.
+- **Bibliography metadata**: Detect DOI, arXiv IDs, titles, authors, and publication years for better library search and organization.
+- **Citation review tools**: Let users jump from each answer citation to the exact extracted text span and flag weak or ambiguous citations.
+- **Zotero and BibTeX workflows**: Import/export bibliographic metadata for existing research libraries.
+- **Accessibility and keyboard navigation**: Improve reader, annotation, and chat workflows for keyboard-heavy use.
+- **Smaller app modules**: Split `PaperviewApp.jsx` into focused components and hooks once behavior is covered by tests.
+- **Deployment guide**: Add a step-by-step Vercel self-hosting guide with environment variable setup and privacy notes.
+
 ## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
 1. Fork the repository and create a branch from `main`
 2. Run `npm install` and `npm run dev`
 3. Keep changes focused on a single concern
-4. Test in a Chromium-based browser because File System Access requires Chrome or Edge
-5. Open a pull request with a clear summary of what changed and why
+4. Run `npm test` and `npm run build`
+5. Test folder workflows in Chrome or Edge
+6. Open a pull request with a clear summary of what changed and why
 
 ### Guidelines
 
@@ -129,6 +165,10 @@ Paperview is local-first, but it does make network requests for:
 - PDF.js and Tesseract.js stay on CDNs rather than being bundled through npm
 - `PaperviewApp.jsx` is large, so read surrounding context carefully before editing
 - Prefer direct, readable code over unnecessary abstraction
+
+## Security
+
+Please do not open public issues for security vulnerabilities. See [SECURITY.md](SECURITY.md) for responsible disclosure guidance.
 
 ## License
 

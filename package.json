@@ -1,8 +1,27 @@
 {
   "name": "paperview",
-  "private": true,
   "version": "0.1.0",
+  "description": "Local-first research paper reader and research agent with cited AI answers.",
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Carstenhanekamp/Paperview.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Carstenhanekamp/Paperview/issues"
+  },
+  "homepage": "https://github.com/Carstenhanekamp/Paperview#readme",
+  "keywords": [
+    "research",
+    "pdf",
+    "local-first",
+    "openai",
+    "rag"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
