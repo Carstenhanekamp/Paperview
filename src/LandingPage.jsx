@@ -5,7 +5,10 @@ const FONT_URL =
   "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap";
 
 const GITHUB_URL = "https://github.com/Carstenhanekamp/Paperview/";
+const GITHUB_REPO = "Carstenhanekamp/paperview";
 const OPENAI_KEY_URL = "https://platform.openai.com/api-keys";
+const STAR_CACHE_KEY = "pv.gh.stars.v1";
+const STAR_CACHE_TTL = 60 * 60 * 1000;
 
 const CSS = `
 :root {
@@ -47,6 +50,13 @@ const CSS = `
   backdrop-filter: saturate(140%) blur(10px);
   -webkit-backdrop-filter: saturate(140%) blur(10px);
   border-bottom: 1px solid transparent;
+  gap: 12px;
+}
+@media (max-width: 640px) {
+  .pv-landing .nav { padding: 14px 18px; gap: 10px; }
+  .pv-landing .nav-right { gap: 10px; }
+  .pv-landing .nav-right .nav-link { display: none; }
+  .pv-landing .nav-cta { padding: 8px 13px; font-size: 13px; }
 }
 .pv-landing .nav.scrolled { border-bottom-color: var(--line); }
 .pv-landing .logo {
@@ -82,6 +92,104 @@ const CSS = `
   transition: transform .15s ease, background .15s ease;
 }
 .pv-landing .nav-cta:hover { background: #222; }
+
+/* GitHub star pill — editorial, split-face design */
+.pv-landing .gh-star {
+  display: inline-flex; align-items: stretch;
+  height: 30px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  text-decoration: none;
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+  position: relative;
+}
+.pv-landing .gh-star:hover {
+  border-color: var(--ink-2);
+  box-shadow: 0 4px 14px -8px rgba(20,20,10,.22);
+}
+.pv-landing .gh-star-face {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 0 11px 0 12px;
+  font-size: 12.5px; color: var(--ink-2); font-weight: 500;
+  letter-spacing: -0.003em;
+  transition: color .2s ease;
+}
+.pv-landing .gh-star:hover .gh-star-face { color: var(--ink); }
+.pv-landing .gh-star-face svg { width: 13px; height: 13px; display: block; }
+.pv-landing .gh-star-sep {
+  width: 1px; background: var(--line-2);
+  align-self: stretch;
+}
+.pv-landing .gh-star-count {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 13px 0 11px;
+  font-family: var(--mono);
+  font-size: 12px; color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  position: relative;
+  transition: color .2s ease;
+}
+.pv-landing .gh-star:hover .gh-star-count { color: var(--accent-ink); }
+.pv-landing .gh-star-icon {
+  width: 11px; height: 11px;
+  color: var(--mut-2);
+  transition: color .25s ease, transform .4s cubic-bezier(.3,1.4,.5,1);
+}
+.pv-landing .gh-star:hover .gh-star-icon {
+  color: #D9A43A;
+  transform: rotate(72deg) scale(1.12);
+}
+.pv-landing .gh-star-count .num {
+  display: inline-block;
+  transition: opacity .18s ease;
+}
+.pv-landing .gh-star-count.is-loading .num { opacity: .35; }
+.pv-landing .gh-star-count.is-loading .gh-star-icon {
+  animation: gh-star-pulse 1.4s ease-in-out infinite;
+}
+@keyframes gh-star-pulse {
+  0%, 100% { opacity: .45; }
+  50%      { opacity: 1; }
+}
+.pv-landing .gh-star-reveal {
+  animation: gh-star-fade .5s ease both;
+}
+@keyframes gh-star-fade {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Footer variant — quieter, inline */
+.pv-landing .gh-star-inline {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 12px;
+  color: var(--mut);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  transition: color .2s ease, border-color .2s ease;
+}
+.pv-landing .gh-star-inline:hover {
+  color: var(--ink); border-color: var(--line-2);
+}
+.pv-landing .gh-star-inline svg { width: 11px; height: 11px; color: var(--mut-2); }
+.pv-landing .gh-star-inline:hover svg { color: #D9A43A; }
+
+@media (max-width: 640px) {
+  .pv-landing .gh-star-face .lbl { display: none; }
+  .pv-landing .gh-star-face { padding: 0 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pv-landing .gh-star-count.is-loading .gh-star-icon { animation: none; }
+  .pv-landing .gh-star-reveal { animation: none; }
+  .pv-landing .gh-star:hover .gh-star-icon { transform: none; }
+}
 .pv-landing .nav-cta .arr,
 .pv-landing .btn .arr { display: inline-block; transition: transform .2s ease; margin-left: 4px; }
 .pv-landing .nav-cta:hover .arr,
@@ -92,6 +200,14 @@ const CSS = `
   padding: 72px 24px 0;
   text-align: center;
   overflow: hidden;
+}
+@media (max-width: 640px) {
+  .pv-landing .hero { padding: 48px 18px 0; }
+  .pv-landing .hero-sub { font-size: 16px; margin-bottom: 28px; }
+  .pv-landing .hero-spacer { height: 48px; }
+  .pv-landing h1.hero-title { margin-bottom: 32px; }
+  .pv-landing .cta-row { width: 100%; }
+  .pv-landing .cta-row .btn { flex: 1 1 auto; justify-content: center; }
 }
 .pv-landing .eyebrow {
   display: inline-flex; align-items: center; gap: 8px;
@@ -153,6 +269,23 @@ const CSS = `
   background: transparent; color: var(--ink-2); border-color: var(--line-2);
 }
 .pv-landing .btn-ghost:hover { border-color: var(--ink-2); color: var(--ink); }
+.pv-landing .btn-github {
+  background: #0E0E0C; color: #F6F4ED; border-color: #0E0E0C;
+}
+.pv-landing .btn-github:hover { background: #1c1c19; border-color: #1c1c19; }
+.pv-landing .btn-github svg { width: 15px; height: 15px; }
+.pv-landing .btn-github .gh-count {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 4px; padding-left: 10px;
+  border-left: 1px solid rgba(246,244,237,.22);
+  font-family: var(--mono); font-size: 12.5px;
+  color: rgba(246,244,237,.82);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.pv-landing .btn-github .gh-count svg {
+  width: 11px; height: 11px; color: #E9B766;
+}
 
 .pv-landing .hero-spacer { height: 72px; }
 
@@ -475,15 +608,210 @@ const CSS = `
 @media (max-width: 860px) {
   .pv-landing .app { grid-template-columns: 1fr; height: auto; }
   .pv-landing .side, .pv-landing .chat { display: none; }
+  .pv-landing .reader-canvas { padding: 0 12px 12px; }
+  .pv-landing .page { padding: 24px 22px; }
+}
+@media (max-width: 640px) {
+  .pv-landing .mockup-wrap { padding: 0 14px 56px; }
+  .pv-landing .cols { grid-template-columns: 1fr; gap: 10px; }
+  .pv-landing .page { padding: 20px 18px; }
+  .pv-landing .page-title { font-size: 18px; }
+  .pv-landing .reader-top { padding: 8px 10px; flex-wrap: wrap; gap: 8px; }
+  .pv-landing .reader-tools { font-size: 10px; gap: 6px; }
+  .pv-landing .win-title { font-size: 10px; margin-left: 8px; }
 }
 
 .pv-landing .rule {
   max-width: 1180px; margin: 0 auto;
   border-top: 1px solid var(--line);
 }
+
+/* ── Repo strip ── editorial section-divider with live GitHub data */
+.pv-landing .repo-strip {
+  max-width: 1180px; margin: 0 auto;
+  padding: 28px 24px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 32px;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+}
+.pv-landing .repo-strip::before {
+  content: "";
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+  mask-image: radial-gradient(ellipse 60% 120% at 85% 50%, #000 0%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse 60% 120% at 85% 50%, #000 0%, transparent 70%);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.pv-landing .repo-strip > * { position: relative; z-index: 1; }
+
+.pv-landing .repo-strip-left {
+  display: flex; align-items: center; gap: 18px;
+}
+.pv-landing .repo-mark {
+  width: 44px; height: 44px; border-radius: 10px;
+  background: var(--ink); color: #F6F4ED;
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  box-shadow: 0 6px 14px -8px rgba(20,20,10,.3);
+}
+.pv-landing .repo-mark svg { width: 22px; height: 22px; }
+
+.pv-landing .repo-path {
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0;
+}
+.pv-landing .repo-path-label {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--mut); letter-spacing: 0.14em;
+  text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.pv-landing .repo-path-label::after {
+  content: ""; width: 14px; height: 1px; background: var(--mut-2);
+}
+.pv-landing .repo-path-name {
+  font-family: var(--mono); font-size: 14.5px;
+  color: var(--ink); font-weight: 500;
+  letter-spacing: -0.005em;
+}
+.pv-landing .repo-path-name .owner { color: var(--mut); }
+.pv-landing .repo-path-name .slash { color: var(--mut-2); margin: 0 1px; }
+
+.pv-landing .repo-strip-center {
+  display: flex; align-items: center; gap: 22px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.pv-landing .repo-stat {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  padding: 0 18px;
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+.pv-landing .repo-stat:first-child { border-left: 0; padding-left: 0; }
+.pv-landing .repo-stat-num {
+  font-family: var(--serif); font-weight: 400;
+  font-size: 34px; line-height: 1; color: var(--ink);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: baseline; gap: 5px;
+}
+.pv-landing .repo-stat-num .k {
+  font-size: 18px; color: var(--mut); font-style: italic;
+  letter-spacing: -0.01em;
+}
+.pv-landing .repo-stat-num.is-star { color: var(--accent-ink); }
+.pv-landing .repo-stat-num.is-loading {
+  color: var(--mut-2); font-style: italic;
+}
+.pv-landing .repo-stat-label {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--mut); letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.pv-landing .repo-strip-right {
+  display: flex; align-items: center;
+}
+.pv-landing .repo-cta {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 11px 18px;
+  background: var(--ink); color: #F6F4ED;
+  border-radius: 999px;
+  font-size: 13.5px; font-weight: 500;
+  letter-spacing: -0.005em;
+  text-decoration: none;
+  transition: background .2s ease, transform .2s ease;
+}
+.pv-landing .repo-cta:hover { background: #1c1c19; }
+.pv-landing .repo-cta svg { width: 14px; height: 14px; }
+.pv-landing .repo-cta .arr {
+  display: inline-block; transition: transform .2s ease;
+}
+.pv-landing .repo-cta:hover .arr { transform: translate(2px, -2px); }
+
+.pv-landing .repo-meta-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--mut); letter-spacing: 0.01em;
+}
+.pv-landing .repo-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.pv-landing .repo-chip .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.pv-landing .repo-chip.lang .dot { background: #F1E05A; box-shadow: 0 0 0 2px rgba(241,224,90,0.2); }
+
+@media (max-width: 900px) {
+  .pv-landing .repo-strip {
+    grid-template-columns: 1fr;
+    gap: 22px;
+    padding: 28px 24px;
+    text-align: left;
+  }
+  .pv-landing .repo-strip-center { justify-content: flex-start; gap: 14px; }
+  .pv-landing .repo-stat { padding: 0 14px; }
+  .pv-landing .repo-stat:first-child { padding-left: 0; }
+  .pv-landing .repo-strip-right { justify-content: flex-start; }
+  .pv-landing .repo-strip::before {
+    mask-image: radial-gradient(ellipse 90% 100% at 100% 100%, #000 0%, transparent 70%);
+    -webkit-mask-image: radial-gradient(ellipse 90% 100% at 100% 100%, #000 0%, transparent 70%);
+  }
+}
+@media (max-width: 640px) {
+  .pv-landing .repo-strip { padding: 22px 18px; gap: 16px; }
+  .pv-landing .repo-strip-center {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 18px;
+    align-items: start;
+  }
+  .pv-landing .repo-stat { padding: 0; border-left: 0; }
+  .pv-landing .repo-stat:nth-child(3) {
+    grid-column: 1 / -1;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .pv-landing .repo-meta-row { gap: 6px; }
+  .pv-landing .repo-mark { width: 38px; height: 38px; }
+  .pv-landing .repo-mark svg { width: 18px; height: 18px; }
+}
+@media (max-width: 520px) {
+  .pv-landing .repo-stat-num { font-size: 28px; }
+  .pv-landing .repo-mark { width: 40px; height: 40px; }
+  .pv-landing .repo-path-name { font-size: 13px; }
+  .pv-landing .repo-cta { padding: 10px 16px; font-size: 13px; }
+}
 .pv-landing .section {
   max-width: 1180px; margin: 0 auto;
   padding: 96px 24px;
+}
+@media (max-width: 820px) {
+  .pv-landing .section { padding: 64px 20px; }
+  .pv-landing .section-head { margin-bottom: 36px; }
+}
+@media (max-width: 640px) {
+  .pv-landing .section { padding: 52px 18px; }
+  .pv-landing .section-head { margin-bottom: 28px; }
 }
 .pv-landing .section-head {
   display: grid; grid-template-columns: 1fr 2fr; gap: 48px;
@@ -597,6 +925,11 @@ const CSS = `
   display: flex; flex-direction: column; align-items: center; gap: 2px;
 }
 .pv-landing .priv-arrow .line { width: 24px; height: 1px; background: var(--mut-2); }
+@media (max-width: 640px) {
+  .pv-landing .priv-vis { grid-template-columns: 1fr; gap: 10px; }
+  .pv-landing .priv-arrow { flex-direction: row; gap: 8px; padding: 4px 0; }
+  .pv-landing .priv-arrow .line { width: 40px; }
+}
 
 .pv-landing .chat-vis {
   border: 1px solid var(--line); border-radius: 10px;
@@ -675,13 +1008,6 @@ const CSS = `
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-@media (max-width: 980px) {
-  .pv-landing .features { grid-template-columns: repeat(2, 1fr); }
-  .pv-landing .feat, .pv-landing .feat.wide, .pv-landing .feat.lead, .pv-landing .feat.cta-card { grid-column: span 2; }
-  .pv-landing .cta-card { grid-template-columns: 1fr; }
-  .pv-landing .cta-card-art { display: none; }
-}
-
 .pv-landing .feat.cta-card {
   grid-column: span 4;
   background:
@@ -719,6 +1045,41 @@ const CSS = `
   color: var(--accent-ink);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+@media (max-width: 980px) {
+  .pv-landing .features { grid-template-columns: repeat(2, 1fr); }
+  .pv-landing .feat, .pv-landing .feat.wide, .pv-landing .feat.lead, .pv-landing .feat.cta-card { grid-column: span 2; }
+  .pv-landing .feat.cta-card { grid-template-columns: 1fr; padding: 32px 28px; }
+  .pv-landing .feat.cta-card .cta-card-art {
+    flex-direction: row; flex-wrap: wrap;
+    justify-content: flex-start;
+    padding-left: 0;
+    order: -1;
+    margin-bottom: 4px;
+  }
+}
+@media (max-width: 820px) {
+  .pv-landing .features { grid-template-columns: 1fr; }
+  .pv-landing .feat,
+  .pv-landing .feat.wide,
+  .pv-landing .feat.lead,
+  .pv-landing .feat.cta-card {
+    grid-column: 1 / -1;
+    min-height: 0;
+  }
+}
+@media (max-width: 640px) {
+  .pv-landing .feat, .pv-landing .feat.wide, .pv-landing .feat.lead, .pv-landing .feat.cta-card {
+    padding: 26px 22px;
+  }
+  .pv-landing .feat h3 { font-size: 24px; }
+  .pv-landing .feat.cta-card { padding: 28px 22px; }
+  .pv-landing .feat.cta-card h3 { font-size: 26px; max-width: none; }
+  .pv-landing .feat-visual { padding-top: 18px; }
+  .pv-landing .cta-card-actions { flex-direction: column; align-items: stretch; gap: 8px; }
+  .pv-landing .cta-card-actions .btn { justify-content: center; }
+  .pv-landing .feat.cta-card .cta-card-art .chip { font-size: 10.5px; padding: 5px 10px; }
 }
 
 .pv-landing .empathy-grid {
@@ -761,6 +1122,10 @@ const CSS = `
 @media (max-width: 820px) {
   .pv-landing .empathy-grid { grid-template-columns: 1fr; }
   .pv-landing .empathy-divider { border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 12px 0; }
+}
+@media (max-width: 640px) {
+  .pv-landing .empathy-col { padding: 26px 22px; }
+  .pv-landing .empathy-col li { font-size: 14.5px; }
 }
 
 .pv-landing .steps {
@@ -816,6 +1181,10 @@ const CSS = `
   font-family: var(--mono);
 }
 @media (max-width: 820px) { .pv-landing .steps { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .pv-landing .step { padding: 26px 22px; min-height: 0; }
+  .pv-landing .step-num { font-size: 36px; margin-bottom: 12px; }
+}
 
 .pv-landing .faq {
   border-top: 1px solid var(--line);
@@ -868,6 +1237,15 @@ const CSS = `
   position: relative; z-index: 1;
   max-width: 720px; margin: 0 auto;
 }
+@media (max-width: 820px) {
+  .pv-landing .final-cta { border-radius: 18px; margin: 48px 18px 32px; }
+  .pv-landing .final-cta-inner { padding: 72px 28px; }
+}
+@media (max-width: 640px) {
+  .pv-landing .final-cta { border-radius: 16px; margin: 32px 14px 24px; }
+  .pv-landing .final-cta-inner { padding: 56px 22px; }
+  .pv-landing .final-sub { font-size: 15.5px; }
+}
 .pv-landing .final-cta .section-label { color: rgba(246,244,237,.55); }
 .pv-landing .final-cta .section-label::before { background: rgba(246,244,237,.4); }
 .pv-landing .final-title {
@@ -909,7 +1287,18 @@ const CSS = `
   font-size: 13px; color: var(--mut);
   border-top: 1px solid var(--line);
 }
-.pv-landing footer .f-right { display: flex; gap: 22px; align-items: center; }
+.pv-landing footer .f-right { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .pv-landing footer {
+    padding: 28px 18px 40px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    font-size: 12.5px;
+    text-align: left;
+  }
+  .pv-landing footer .f-right { gap: 14px 18px; row-gap: 10px; }
+}
 .pv-landing footer a, .pv-landing footer button {
   text-decoration: none; color: var(--mut);
   background: none; border: 0; cursor: pointer; font-family: inherit; font-size: 13px; padding: 0;
@@ -922,6 +1311,250 @@ function Paper({ className }) {
     <div className={`paper ${className}`}>
       <i /><i /><i /><i /><i /><i /><i />
     </div>
+  );
+}
+
+function formatStars(n) {
+  if (n == null) return "—";
+  if (n < 1000) return String(n);
+  if (n < 10000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return Math.round(n / 1000) + "k";
+}
+
+function useGitHubRepo(repo) {
+  const [data, setData] = useState(() => {
+    try {
+      const raw = localStorage.getItem(STAR_CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed.repo === repo && Date.now() - parsed.ts < STAR_CACHE_TTL) {
+        return parsed.data;
+      }
+    } catch {}
+    return null;
+  });
+  const [loading, setLoading] = useState(data == null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    fetch(`https://api.github.com/repos/${repo}`, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("gh " + r.status))))
+      .then((json) => {
+        if (cancelled) return;
+        const next = {
+          stars: typeof json.stargazers_count === "number" ? json.stargazers_count : null,
+          forks: typeof json.forks_count === "number" ? json.forks_count : null,
+          language: json.language || null,
+          license: json.license?.spdx_id || null,
+          updatedAt: json.pushed_at || json.updated_at || null,
+        };
+        setData(next);
+        setLoading(false);
+        try {
+          localStorage.setItem(
+            STAR_CACHE_KEY,
+            JSON.stringify({ repo, data: next, ts: Date.now() })
+          );
+        } catch {}
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [repo]);
+
+  return { data, loading };
+}
+
+function useGitHubStars(repo) {
+  const { data, loading } = useGitHubRepo(repo);
+  return { stars: data?.stars ?? null, loading };
+}
+
+function formatRelativeTime(iso) {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const diff = Date.now() - then;
+  const day = 86400000;
+  if (diff < day) return "today";
+  if (diff < 2 * day) return "yesterday";
+  if (diff < 30 * day) return `${Math.floor(diff / day)}d ago`;
+  if (diff < 365 * day) return `${Math.floor(diff / (30 * day))}mo ago`;
+  return `${Math.floor(diff / (365 * day))}y ago`;
+}
+
+function StarIcon(props) {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z" />
+    </svg>
+  );
+}
+
+function GhMarkIcon(props) {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
+}
+
+function GhStar() {
+  const { stars, loading } = useGitHubStars(GITHUB_REPO);
+  const display = loading && stars == null ? "…" : formatStars(stars);
+  const showCount = stars != null || loading;
+
+  return (
+    <a
+      className="gh-star gh-star-reveal"
+      href={GITHUB_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`Star Paperview on GitHub${stars != null ? ` — ${stars.toLocaleString()} stars` : ""}`}
+    >
+      <span className="gh-star-face">
+        <GhMarkIcon />
+        <span className="lbl">Star</span>
+      </span>
+      {showCount && (
+        <>
+          <span className="gh-star-sep" aria-hidden="true" />
+          <span className={`gh-star-count${loading ? " is-loading" : ""}`}>
+            <StarIcon className="gh-star-icon" />
+            <span className="num">{display}</span>
+          </span>
+        </>
+      )}
+    </a>
+  );
+}
+
+function GhStarInline() {
+  const { stars } = useGitHubStars(GITHUB_REPO);
+  if (stars == null) return null;
+  return (
+    <a
+      className="gh-star-inline"
+      href={GITHUB_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`${stars.toLocaleString()} GitHub stars`}
+    >
+      <StarIcon />
+      <span>{formatStars(stars)}</span>
+    </a>
+  );
+}
+
+function GhHeroButton() {
+  const { stars } = useGitHubStars(GITHUB_REPO);
+  return (
+    <a
+      className="btn btn-github"
+      href={GITHUB_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <GhMarkIcon />
+      <span>View on GitHub</span>
+      {stars != null && (
+        <span className="gh-count">
+          <StarIcon />
+          <span>{formatStars(stars)}</span>
+        </span>
+      )}
+    </a>
+  );
+}
+
+function RepoStrip() {
+  const { data, loading } = useGitHubRepo(GITHUB_REPO);
+  const [owner, name] = GITHUB_REPO.split("/");
+  const stars = data?.stars;
+  const forks = data?.forks;
+  const relative = formatRelativeTime(data?.updatedAt);
+
+  const renderStars = () => {
+    if (loading && stars == null) return <span className="repo-stat-num is-loading">…</span>;
+    if (stars == null) return <span className="repo-stat-num is-loading">—</span>;
+    if (stars >= 1000) {
+      const value = (stars / 1000).toFixed(1).replace(/\.0$/, "");
+      return (
+        <span className="repo-stat-num is-star">
+          {value}<span className="k">k</span>
+        </span>
+      );
+    }
+    return <span className="repo-stat-num is-star">{stars}</span>;
+  };
+
+  return (
+    <section className="repo-strip" aria-label="Open-source repository">
+      <div className="repo-strip-left">
+        <div className="repo-mark">
+          <GhMarkIcon />
+        </div>
+        <div className="repo-path">
+          <span className="repo-path-label">Open source</span>
+          <span className="repo-path-name">
+            <span className="owner">{owner}</span>
+            <span className="slash">/</span>
+            <span>{name}</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="repo-strip-center">
+        <div className="repo-stat">
+          {renderStars()}
+          <span className="repo-stat-label">Stars</span>
+        </div>
+        <div className="repo-stat">
+          <span className="repo-stat-num">
+            {forks == null ? (loading ? "…" : "—") : forks}
+          </span>
+          <span className="repo-stat-label">Forks</span>
+        </div>
+        <div className="repo-stat">
+          <div className="repo-meta-row">
+            {data?.language && (
+              <span className="repo-chip lang"><span className="dot" />{data.language}</span>
+            )}
+            {data?.license && (
+              <span className="repo-chip">{data.license}</span>
+            )}
+            {relative && (
+              <span className="repo-chip"><span className="dot" />updated {relative}</span>
+            )}
+            {!data?.language && !data?.license && !relative && (
+              <span className="repo-chip">MIT · React + Vite</span>
+            )}
+          </div>
+          <span className="repo-stat-label">Repository</span>
+        </div>
+      </div>
+
+      <div className="repo-strip-right">
+        <a
+          className="repo-cta"
+          href={GITHUB_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <GhMarkIcon />
+          <span>View repository</span>
+          <span className="arr">↗</span>
+        </a>
+      </div>
+    </section>
   );
 }
 
@@ -975,7 +1608,7 @@ export default function LandingPage() {
         </div>
         <div className="nav-right">
           <a className="nav-link" href="#features" onClick={scrollToFeatures}>Features</a>
-          <a className="nav-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
+          <GhStar />
           <button className="nav-cta" onClick={openApp}>
             Open app <span className="arr">→</span>
           </button>
@@ -1012,6 +1645,7 @@ export default function LandingPage() {
           <button className="btn btn-primary" onClick={openApp}>
             Open Paperview <span className="arr">→</span>
           </button>
+          <GhHeroButton />
           <a className="btn btn-ghost" href="#features" onClick={scrollToFeatures} style={{ lineHeight: 1.5 }}>
             See how it works
           </a>
@@ -1132,7 +1766,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <div className="rule" />
+      <RepoStrip />
 
       <section className="section" id="features">
         <div className="section-head">
@@ -1415,6 +2049,7 @@ export default function LandingPage() {
         <div className="f-right">
           <button onClick={openApp}>Open app</button>
           <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
+          <GhStarInline />
           <a href={OPENAI_KEY_URL} target="_blank" rel="noopener noreferrer">Get an OpenAI key ↗</a>
         </div>
       </footer>
