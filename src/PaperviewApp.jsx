@@ -41,9 +41,9 @@ const OPENAI_MODELS = (import.meta.env.VITE_OPENAI_MODELS || "gpt-5.4-nano,gpt-5
 const AGENT_IMPORTS_FOLDER_NAME = "Imported Papers";
 const OPENAI_PROXY_ENDPOINT = "/api/openai-response";
 const REMOTE_PDF_PROXY_ENDPOINT = "/api/fetch-pdf";
-const LEGACY_API_KEY_STORAGE_KEY = "pv-api-key";
-const ENCRYPTED_API_KEY_STORAGE_KEY = "pv-api-key-v2";
-const API_KEY_KDF_ITERATIONS = 250000;
+const LEGACY_STORAGE_NAME = "pv-api-key";
+const REMEMBERED_STORAGE_NAME = "pv-api-key-v2";
+const KDF_ITERATION_COUNT = 250000;
 const AGENT_WEB_SEARCH_DOMAINS = [
   "arxiv.org",
   "biorxiv.org",
@@ -277,7 +277,7 @@ function isPaperTextCacheValid(cacheEntry, paper) {
 
 function getRememberedApiKeyRecord() {
   try {
-    const raw = localStorage.getItem(ENCRYPTED_API_KEY_STORAGE_KEY);
+    const raw = localStorage.getItem(REMEMBERED_STORAGE_NAME);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (
@@ -301,11 +301,11 @@ function hasRememberedApiKey() {
 }
 
 function clearLegacyStoredApiKey() {
-  try { localStorage.removeItem(LEGACY_API_KEY_STORAGE_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(LEGACY_STORAGE_NAME); } catch { /* ignore */ }
 }
 
 function clearRememberedApiKey() {
-  try { localStorage.removeItem(ENCRYPTED_API_KEY_STORAGE_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(REMEMBERED_STORAGE_NAME); } catch { /* ignore */ }
   clearLegacyStoredApiKey();
 }
 
@@ -341,7 +341,7 @@ async function deriveApiKeyStorageKey(passphrase, salt) {
     {
       name: "PBKDF2",
       salt,
-      iterations: API_KEY_KDF_ITERATIONS,
+      iterations: KDF_ITERATION_COUNT,
       hash: "SHA-256",
     },
     keyMaterial,
@@ -351,7 +351,7 @@ async function deriveApiKeyStorageKey(passphrase, salt) {
   );
 }
 
-async function rememberApiKeyEncrypted(apiKey, passphrase) {
+async function rememberApiKeyEncrypted(valueToEncrypt, passphrase) {
   const cryptoApi = window.crypto;
   if (!cryptoApi?.subtle) {
     throw new Error("Encrypted key storage requires Web Crypto support.");
@@ -362,18 +362,19 @@ async function rememberApiKeyEncrypted(apiKey, passphrase) {
   const ciphertext = await cryptoApi.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    new TextEncoder().encode(apiKey),
+    new TextEncoder().encode(valueToEncrypt),
   );
   const record = {
     version: 1,
     algorithm: "AES-GCM",
     kdf: "PBKDF2-SHA-256",
-    iterations: API_KEY_KDF_ITERATIONS,
+    iterations: KDF_ITERATION_COUNT,
     salt: bytesToBase64(salt),
     iv: bytesToBase64(iv),
     ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
   };
-  localStorage.setItem(ENCRYPTED_API_KEY_STORAGE_KEY, JSON.stringify(record));
+  // This persists only encrypted ciphertext plus non-secret decryption metadata.
+  localStorage.setItem(REMEMBERED_STORAGE_NAME, JSON.stringify(record));
   clearLegacyStoredApiKey();
 }
 
