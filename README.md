@@ -1,4 +1,4 @@
-<img width="183" height="54" alt="image" src="https://github.com/user-attachments/assets/0d7a7fc0-4c49-457f-ba6b-509019c376ad" /># Paperview
+# Paperview
 
 Paperview is a local-first research paper reader and research agent. Open local folders of PDFs, read and annotate papers, ask grounded questions with citations, search for papers online, and import promising PDFs back onto your own disk.
 
