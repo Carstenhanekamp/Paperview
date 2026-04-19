@@ -1,557 +1,935 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 const FONT_URL =
-  "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Spectral:ital,wght@0,400;0,600;1,400&display=swap";
+  "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap";
 
-const colors = {
-  bg: "#f6f5f1",
-  surface: "#ffffff",
-  text: "#121212",
-  text2: "#4e4b45",
-  text3: "#8a867c",
-  border: "#e8e4db",
-  border2: "#d8d2c6",
-  accent: "#2563eb",
-};
+const GITHUB_URL = "https://github.com/Carstenhanekamp/Paperview/";
+const OPENAI_KEY_URL = "https://platform.openai.com/api-keys";
 
-const s = {
-  page: {
-    fontFamily: "'Manrope', sans-serif",
-    background: colors.bg,
-    color: colors.text,
-    minHeight: "100vh",
-    overflowX: "hidden",
-  },
-  nav: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "0 40px",
-    height: 64,
-    background: colors.bg,
-    borderBottom: `1px solid ${colors.border}`,
-    position: "sticky",
-    top: 0,
-    zIndex: 100,
-  },
-  navLogo: {
-    fontSize: 18,
-    fontWeight: 800,
-    color: colors.text,
-    letterSpacing: "-0.4px",
-    textDecoration: "none",
-  },
-  navCta: {
-    background: colors.text,
-    color: "#fff",
-    border: "none",
-    borderRadius: 8,
-    padding: "9px 18px",
-    fontSize: 14,
-    fontWeight: 700,
-    cursor: "pointer",
-    fontFamily: "inherit",
-    letterSpacing: "-0.2px",
-  },
-  hero: {
-    maxWidth: 720,
-    margin: "0 auto",
-    padding: "96px 24px 80px",
-    textAlign: "center",
-  },
-  badge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    background: colors.surface,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 20,
-    padding: "5px 14px",
-    fontSize: 12,
-    fontWeight: 600,
-    color: colors.text2,
-    marginBottom: 28,
-  },
-  h1: {
-    fontFamily: "'Spectral', Georgia, serif",
-    fontSize: "clamp(38px, 5.5vw, 62px)",
-    fontWeight: 600,
-    lineHeight: 1.08,
-    letterSpacing: "-0.5px",
-    color: colors.text,
-    marginBottom: 20,
-  },
-  heroSub: {
-    fontSize: 18,
-    lineHeight: 1.6,
-    color: colors.text2,
-    maxWidth: 560,
-    margin: "0 auto 40px",
-    fontWeight: 500,
-  },
-  heroCtaRow: {
-    display: "flex",
-    gap: 12,
-    justifyContent: "center",
-    flexWrap: "wrap",
-  },
-  btnPrimary: {
-    background: colors.text,
-    color: "#fff",
-    border: "none",
-    borderRadius: 10,
-    padding: "13px 28px",
-    fontSize: 15,
-    fontWeight: 700,
-    cursor: "pointer",
-    fontFamily: "inherit",
-    letterSpacing: "-0.2px",
-  },
-  btnSecondary: {
-    background: "transparent",
-    color: colors.text,
-    border: `1.5px solid ${colors.border2}`,
-    borderRadius: 10,
-    padding: "12px 28px",
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: "pointer",
-    fontFamily: "inherit",
-    letterSpacing: "-0.2px",
-  },
-  mockup: {
-    maxWidth: 900,
-    margin: "0 auto 0",
-    padding: "0 24px",
-  },
-  mockupInner: {
-    background: colors.surface,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 16,
-    overflow: "hidden",
-    boxShadow: "0 4px 32px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04)",
-  },
-  mockupBar: {
-    background: "#f3f2ee",
-    borderBottom: `1px solid ${colors.border}`,
-    padding: "10px 16px",
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  },
-  dot: (c) => ({
-    width: 10,
-    height: 10,
-    borderRadius: "50%",
-    background: c,
-  }),
-  mockupBody: {
-    display: "flex",
-    height: 340,
-  },
-  mockupSidebar: {
-    width: 200,
-    borderRight: `1px solid ${colors.border}`,
-    background: "#faf9f6",
-    padding: 16,
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-  },
-  mockupSidebarTitle: {
-    fontSize: 11,
-    fontWeight: 700,
-    color: colors.text3,
-    textTransform: "uppercase",
-    letterSpacing: "0.6px",
-    marginBottom: 4,
-  },
-  mockupFile: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "6px 8px",
-    borderRadius: 6,
-    fontSize: 12,
-    color: colors.text2,
-    fontWeight: 500,
-  },
-  mockupFileActive: {
-    background: "rgba(37,99,235,0.10)",
-    color: "#2563eb",
-  },
-  mockupPdf: {
-    flex: 1,
-    background: "#ece9e1",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "column",
-    gap: 8,
-    padding: 24,
-  },
-  mockupPage: {
-    background: "#fff",
-    borderRadius: 6,
-    width: "100%",
-    maxWidth: 220,
-    padding: 16,
-    boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
-  },
-  mockupLine: (w, opacity) => ({
-    height: 6,
-    borderRadius: 3,
-    background: "#e0ddd6",
-    width: w,
-    marginBottom: 6,
-    opacity: opacity || 1,
-  }),
-  mockupChat: {
-    width: 240,
-    borderLeft: `1px solid ${colors.border}`,
-    background: colors.surface,
-    padding: 12,
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    overflow: "hidden",
-  },
-  mockupChatTitle: {
-    fontSize: 11,
-    fontWeight: 700,
-    color: colors.text3,
-    textTransform: "uppercase",
-    letterSpacing: "0.6px",
-    marginBottom: 2,
-  },
-  userBubble: {
-    background: "#f4f1ea",
-    borderRadius: "10px 10px 3px 10px",
-    padding: "8px 10px",
-    fontSize: 11,
-    color: colors.text,
-    alignSelf: "flex-end",
-    maxWidth: "85%",
-    lineHeight: 1.4,
-  },
-  aiBubble: {
-    background: "#f9f8f5",
-    border: `1px solid ${colors.border}`,
-    borderRadius: "10px 10px 10px 3px",
-    padding: "8px 10px",
-    fontSize: 11,
-    color: colors.text2,
-    alignSelf: "flex-start",
-    maxWidth: "90%",
-    lineHeight: 1.4,
-  },
-  citChip: {
-    display: "inline",
-    background: "rgba(37,99,235,0.10)",
-    color: "#2563eb",
-    borderRadius: 4,
-    padding: "1px 4px",
-    fontSize: 10,
-    fontWeight: 700,
-  },
-  section: {
-    maxWidth: 960,
-    margin: "0 auto",
-    padding: "80px 24px",
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: 700,
-    color: colors.text3,
-    textTransform: "uppercase",
-    letterSpacing: "1px",
-    marginBottom: 12,
-  },
-  h2: {
-    fontFamily: "'Spectral', Georgia, serif",
-    fontSize: "clamp(26px, 3.5vw, 38px)",
-    fontWeight: 600,
-    letterSpacing: "-0.3px",
-    lineHeight: 1.12,
-    marginBottom: 16,
-  },
-  sectionSub: {
-    fontSize: 16,
-    color: colors.text2,
-    lineHeight: 1.6,
-    maxWidth: 520,
-    marginBottom: 48,
-    fontWeight: 500,
-  },
-  featureGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-    gap: 20,
-  },
-  featureCard: {
-    background: colors.surface,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 14,
-    padding: 28,
-  },
-  featureIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    background: "#f3f2ee",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 16,
-    fontSize: 18,
-  },
-  featureTitle: {
-    fontSize: 15,
-    fontWeight: 700,
-    color: colors.text,
-    marginBottom: 8,
-    letterSpacing: "-0.2px",
-  },
-  featureDesc: {
-    fontSize: 13,
-    color: colors.text2,
-    lineHeight: 1.6,
-    fontWeight: 500,
-  },
-  stepsRow: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: 32,
-    marginTop: 8,
-  },
-  stepNum: {
-    fontSize: 11,
-    fontWeight: 800,
-    color: colors.text3,
-    letterSpacing: "1px",
-    textTransform: "uppercase",
-    marginBottom: 12,
-  },
-  stepTitle: {
-    fontSize: 17,
-    fontWeight: 700,
-    color: colors.text,
-    marginBottom: 8,
-    letterSpacing: "-0.3px",
-  },
-  stepDesc: {
-    fontSize: 13,
-    color: colors.text2,
-    lineHeight: 1.6,
-    fontWeight: 500,
-  },
-  privacyBox: {
-    background: colors.surface,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 16,
-    padding: 40,
-    maxWidth: 720,
-    margin: "0 auto",
-  },
-  privacyGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 20,
-    marginTop: 28,
-  },
-  privacyItem: {
-    display: "flex",
-    gap: 12,
-    alignItems: "flex-start",
-  },
-  privacyDot: (green) => ({
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: green ? "#16a34a" : "#dc2626",
-    marginTop: 5,
-    flexShrink: 0,
-  }),
-  privacyText: {
-    fontSize: 13,
-    color: colors.text2,
-    lineHeight: 1.5,
-    fontWeight: 500,
-  },
-  browserNotice: {
-    background: "#fffbeb",
-    border: "1px solid #fde68a",
-    borderRadius: 10,
-    padding: "12px 18px",
-    fontSize: 13,
-    color: "#92400e",
-    fontWeight: 500,
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    maxWidth: 560,
-    margin: "32px auto 0",
-  },
-  divider: {
-    borderTop: `1px solid ${colors.border}`,
-    margin: "0 24px",
-  },
-  ctaBanner: {
-    textAlign: "center",
-    padding: "80px 24px",
-    maxWidth: 600,
-    margin: "0 auto",
-  },
-  footer: {
-    borderTop: `1px solid ${colors.border}`,
-    padding: "32px 40px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 12,
-  },
-  footerLeft: {
-    fontSize: 13,
-    color: colors.text3,
-    fontWeight: 500,
-  },
-  footerRight: {
-    display: "flex",
-    gap: 20,
-    alignItems: "center",
-  },
-  footerLink: {
-    fontSize: 13,
-    color: colors.text3,
-    fontWeight: 500,
-    textDecoration: "none",
-    cursor: "pointer",
-    background: "none",
-    border: "none",
-    fontFamily: "inherit",
-    padding: 0,
-  },
-};
-
-function FileIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-      <path d="M9 1H4a1 1 0 00-1 1v12a1 1 0 001 1h8a1 1 0 001-1V6L9 1z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-      <path d="M9 1v5h5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-    </svg>
-  );
+const CSS = `
+:root {
+  --bg: #FBFAF7;
+  --bg-2: #F3F1EA;
+  --surface: #FFFFFF;
+  --ink: #0E0E0C;
+  --ink-2: #2B2A26;
+  --mut: #6B6960;
+  --mut-2: #9A9789;
+  --line: #E7E4DB;
+  --line-2: #D8D3C6;
+  --accent: oklch(0.52 0.08 145);
+  --accent-2: oklch(0.92 0.03 145);
+  --accent-ink: oklch(0.35 0.07 145);
+  --radius: 14px;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --serif: "Instrument Serif", "Times New Roman", serif;
+  --sans: "Inter", -apple-system, system-ui, sans-serif;
 }
 
-function AppMockup() {
+.pv-landing, .pv-landing * { box-sizing: border-box; }
+.pv-landing {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+  line-height: 1.5;
+  min-height: 100vh;
+}
+.pv-landing a { color: inherit; }
+
+.pv-landing .nav {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 32px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  border-bottom: 1px solid transparent;
+}
+.pv-landing .nav.scrolled { border-bottom-color: var(--line); }
+.pv-landing .logo {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 600; font-size: 16px; letter-spacing: -0.01em;
+}
+.pv-landing .logo-mark {
+  width: 22px; height: 22px; border-radius: 5px;
+  background: var(--ink);
+  display: grid; place-items: center;
+  position: relative;
+}
+.pv-landing .logo-mark::before, .pv-landing .logo-mark::after{
+  content:""; position:absolute; inset:4px 5px;
+  border-radius: 1px;
+  background: #fff;
+}
+.pv-landing .logo-mark::after{
+  inset: 7px 7px auto 7px; height: 1px;
+  background: var(--ink); box-shadow: 0 3px 0 0 var(--ink), 0 6px 0 0 var(--ink);
+}
+.pv-landing .nav-right { display: flex; align-items: center; gap: 22px; }
+.pv-landing .nav-link {
+  font-size: 14px; color: var(--ink-2); text-decoration: none; font-weight: 450;
+  background: none; border: 0; cursor: pointer; font-family: inherit; padding: 0;
+}
+.pv-landing .nav-link:hover { color: var(--ink); }
+.pv-landing .nav-cta {
+  background: var(--ink); color: #fff; border: 0;
+  padding: 9px 16px; font-size: 13.5px; font-weight: 500;
+  border-radius: 999px; cursor: pointer; font-family: inherit;
+  letter-spacing: -0.005em;
+  transition: transform .15s ease, background .15s ease;
+}
+.pv-landing .nav-cta:hover { background: #222; }
+.pv-landing .nav-cta .arr,
+.pv-landing .btn .arr { display: inline-block; transition: transform .2s ease; margin-left: 4px; }
+.pv-landing .nav-cta:hover .arr,
+.pv-landing .btn:hover .arr { transform: translateX(2px); }
+
+.pv-landing .hero {
+  position: relative;
+  padding: 72px 24px 0;
+  text-align: center;
+  overflow: hidden;
+}
+.pv-landing .eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 500; color: var(--mut);
+  letter-spacing: 0.02em;
+  padding: 6px 12px 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  margin-bottom: 28px;
+}
+.pv-landing .eyebrow .pill-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.pv-landing .eyebrow strong { color: var(--ink-2); font-weight: 500; }
+
+.pv-landing h1.hero-title {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(44px, 6.8vw, 88px);
+  line-height: 1.12;
+  letter-spacing: -0.022em;
+  margin: 0 auto 48px;
+  max-width: 15ch;
+  color: var(--ink);
+  padding-bottom: 0.12em;
+}
+.pv-landing h1.hero-title .ital { font-style: italic; color: var(--accent-ink); }
+
+.pv-landing .hero-sub {
+  max-width: 58ch;
+  margin: 0 auto 36px;
+  font-size: 17.5px;
+  line-height: 1.55;
+  color: var(--mut);
+  font-weight: 450;
+  text-wrap: balance;
+}
+.pv-landing .hero-sub strong { color: var(--ink-2); font-weight: 500; }
+
+.pv-landing .cta-row {
+  display: inline-flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+  margin-bottom: 18px;
+}
+.pv-landing .btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: inherit; font-size: 14.5px; font-weight: 500;
+  padding: 12px 20px;
+  border-radius: 999px; border: 1px solid transparent; cursor: pointer;
+  letter-spacing: -0.005em;
+  text-decoration: none;
+  transition: transform .15s ease, background .15s ease, border-color .15s ease;
+}
+.pv-landing .btn-primary { background: var(--ink); color: #fff; }
+.pv-landing .btn-primary:hover { background: #222; }
+.pv-landing .btn-ghost {
+  background: transparent; color: var(--ink-2); border-color: var(--line-2);
+}
+.pv-landing .btn-ghost:hover { border-color: var(--ink-2); color: var(--ink); }
+
+.pv-landing .hero-spacer { height: 72px; }
+
+.pv-landing .hero-art {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.pv-landing .hero-art .grid-bg {
+  position: absolute; inset: -20% -10% auto -10%; height: 90%;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse at 50% 35%, #000 0%, transparent 65%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 35%, #000 0%, transparent 65%);
+  opacity: 0.6;
+}
+.pv-landing .hero > * { position: relative; z-index: 1; }
+
+.pv-landing .paper {
+  position: absolute;
+  width: 150px; height: 200px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 18px 40px -20px rgba(20,20,10,.18), 0 2px 6px -2px rgba(20,20,10,.08);
+  padding: 14px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  overflow: hidden;
+}
+.pv-landing .paper::before {
+  content:""; display:block; height: 8px; width: 60%;
+  background: var(--ink); border-radius: 2px; margin-bottom: 4px;
+}
+.pv-landing .paper i {
+  display: block; height: 3px; border-radius: 2px; background: var(--line-2);
+}
+.pv-landing .paper i:nth-child(2) { width: 94%; }
+.pv-landing .paper i:nth-child(3) { width: 88%; }
+.pv-landing .paper i:nth-child(4) { width: 76%; }
+.pv-landing .paper i:nth-child(5) { width: 92%; }
+.pv-landing .paper i:nth-child(6) { width: 64%; }
+.pv-landing .paper i:nth-child(7) { width: 84%; }
+.pv-landing .paper i:nth-child(8) { width: 48%; opacity: .5; }
+
+.pv-landing .paper.p1 { top: 60px;  left: 7%;  transform: rotate(-9deg); }
+.pv-landing .paper.p2 { top: 110px; left: 16%; transform: rotate(-3deg); opacity: .85; }
+.pv-landing .paper.p3 { top: 80px;  right: 8%; transform: rotate(8deg); }
+.pv-landing .paper.p4 { top: 160px; right: 17%; transform: rotate(2deg); opacity: .85; }
+
+@media (max-width: 900px) {
+  .pv-landing .paper.p2, .pv-landing .paper.p4 { display: none; }
+  .pv-landing .paper.p1 { left: -4%; top: 30px; }
+  .pv-landing .paper.p3 { right: -4%; top: 40px; }
+}
+@media (max-width: 640px) {
+  .pv-landing .paper { display: none; }
+}
+
+.pv-landing .mockup-wrap {
+  max-width: 1180px; margin: 0 auto; padding: 0 24px 96px;
+  position: relative;
+}
+.pv-landing .mockup-wrap::before {
+  content: "";
+  position: absolute; left: 10%; right: 10%; top: 70%; bottom: -20px;
+  background: radial-gradient(ellipse at center, rgba(20,20,10,.18), transparent 70%);
+  filter: blur(30px);
+  z-index: 0;
+}
+.pv-landing .mockup {
+  position: relative; z-index: 1;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.5) inset,
+    0 40px 80px -40px rgba(20,20,10,.28),
+    0 8px 20px -8px rgba(20,20,10,.08);
+}
+.pv-landing .win-bar {
+  height: 34px;
+  background: #F6F4EF;
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; padding: 0 14px;
+  gap: 7px;
+}
+.pv-landing .win-dot { width: 11px; height: 11px; border-radius: 50%; background: #D9D4C7; }
+.pv-landing .win-dot.r { background: #E87C6E; }
+.pv-landing .win-dot.y { background: #E9B766; }
+.pv-landing .win-dot.g { background: #7DB08A; }
+.pv-landing .win-title {
+  margin-left: 14px; font-family: var(--mono); font-size: 11px; color: var(--mut);
+  letter-spacing: 0.01em;
+}
+
+.pv-landing .app {
+  display: grid;
+  grid-template-columns: 232px 1fr 300px;
+  height: 520px;
+  font-size: 12px;
+}
+
+.pv-landing .side {
+  border-right: 1px solid var(--line);
+  background: #FAF8F3;
+  display: flex; flex-direction: column;
+}
+.pv-landing .side-head {
+  padding: 14px 14px 8px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.pv-landing .side-brand {
+  display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px;
+}
+.pv-landing .side-brand .mini {
+  width: 16px; height: 16px; border-radius: 4px; background: var(--ink);
+}
+.pv-landing .side-close { color: var(--mut); font-size: 14px; }
+.pv-landing .side-nav { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pv-landing .side-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 6px;
+  color: var(--ink-2); font-weight: 450;
+}
+.pv-landing .side-item .ico { width: 14px; height: 14px; color: var(--mut); }
+.pv-landing .side-item.active { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); font-weight: 500; }
+
+.pv-landing .side-search {
+  margin: 10px 12px 6px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--mut-2); font-size: 11.5px;
+}
+
+.pv-landing .side-folders-head {
+  padding: 10px 16px 6px; font-size: 10.5px; color: var(--mut);
+  text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500;
+}
+.pv-landing .folder {
+  padding: 5px 12px 5px 14px;
+  color: var(--ink-2); font-weight: 500;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px;
+}
+.pv-landing .folder .chev { color: var(--mut); font-size: 9px; }
+.pv-landing .folder .count { margin-left: auto; color: var(--mut-2); font-size: 10.5px; }
+.pv-landing .files { padding: 0 12px 6px 28px; display: flex; flex-direction: column; }
+.pv-landing .file {
+  font-size: 11px; color: var(--mut); padding: 4px 8px;
+  border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pv-landing .file.active {
+  background: var(--accent-2); color: var(--accent-ink); font-weight: 500;
+}
+.pv-landing .side-foot {
+  margin-top: auto; border-top: 1px solid var(--line);
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  background: #0E0E0C; color: #EDEAE0;
+}
+.pv-landing .side-api {
+  display: flex; align-items: center; gap: 8px; font-family: var(--mono);
+  font-size: 10.5px;
+}
+.pv-landing .side-api .gdot { width:6px; height:6px; border-radius: 50%; background: #6FCF97; }
+.pv-landing .side-btn {
+  display:flex; align-items:center; gap: 8px;
+  padding: 7px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 500;
+  background: rgba(255,255,255,.06); color: #fff;
+}
+.pv-landing .side-btn.ghost { background: transparent; color: rgba(255,255,255,.72); font-weight: 450;}
+
+.pv-landing .reader { display: flex; flex-direction: column; background: #EEEBE3; }
+.pv-landing .reader-top {
+  display: flex; align-items: center; padding: 10px 14px;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+  gap: 10px;
+}
+.pv-landing .doc-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; background: var(--bg-2); border-radius: 6px;
+  font-size: 11.5px; color: var(--ink-2); font-weight: 500;
+}
+.pv-landing .doc-chip .x { color: var(--mut); margin-left: 4px; }
+.pv-landing .reader-tools { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--mut); font-size: 11px; }
+.pv-landing .reader-tools .tool { padding: 4px 6px; border-radius: 5px; }
+.pv-landing .pages { padding: 18px 20px; font-size: 11px; color: var(--mut-2); text-align: center; }
+.pv-landing .reader-canvas { flex: 1; padding: 0 16px 16px; display: flex; align-items: stretch; justify-content: center; overflow: hidden; }
+.pv-landing .page {
+  width: 100%;
+  background: #fff;
+  border-radius: 3px;
+  box-shadow: 0 2px 0 rgba(0,0,0,0.03), 0 18px 40px -20px rgba(0,0,0,.15);
+  padding: 32px 44px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #2B2A26;
+  position: relative;
+  display: flex; flex-direction: column;
+}
+.pv-landing .page-meta {
+  text-align:center; font-size: 8px; letter-spacing: .12em;
+  color: var(--mut); text-transform: uppercase;
+  border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 14px;
+}
+.pv-landing .page-title {
+  font-family: var(--serif); font-size: 22px; line-height: 1.12;
+  font-weight: 400; margin: 10px 0 12px; letter-spacing: -0.012em;
+}
+.pv-landing .page-authors { font-size: 10px; color: var(--mut); margin-bottom: 18px; }
+.pv-landing .page-section {
+  font-size: 9.5px; letter-spacing: .22em; text-align: center; color: var(--ink-2);
+  font-weight: 600; margin: 14px 0 10px;
+}
+.pv-landing .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; flex: 1; }
+.pv-landing .lines i { display:block; height: 4px; background: #E3DFD5; border-radius: 1px; margin-bottom: 5px; }
+.pv-landing .lines i:nth-child(5n) { width: 72%; }
+.pv-landing .lines i:nth-child(3n) { width: 88%; }
+.pv-landing .lines i:nth-child(7n) { width: 95%; }
+.pv-landing .hl {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  padding: 0 2px; border-radius: 1px;
+  height: 4px; display:block; margin-bottom: 5px;
+}
+
+.pv-landing .chat {
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  display: flex; flex-direction: column;
+}
+.pv-landing .chat-head {
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.pv-landing .chat-title { font-size: 12.5px; font-weight: 600; letter-spacing: -.01em; }
+.pv-landing .chat-sub { font-size: 10.5px; color: var(--mut); }
+.pv-landing .chat-body {
+  flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+  overflow: hidden;
+}
+.pv-landing .msg-user {
+  align-self: flex-end; background: var(--ink); color: #fff;
+  padding: 8px 11px; border-radius: 12px 12px 4px 12px;
+  font-size: 11px; max-width: 85%;
+}
+.pv-landing .msg-ai {
+  align-self: flex-start; background: var(--bg-2);
+  padding: 10px 12px; border-radius: 12px 12px 12px 4px;
+  font-size: 11px; max-width: 92%; color: var(--ink-2); line-height: 1.5;
+}
+.pv-landing .cite {
+  display: inline-flex; align-items: center;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent-ink);
+  font-family: var(--mono); font-size: 9.5px; font-weight: 500;
+  padding: 0 5px; border-radius: 4px; margin: 0 1px;
+  vertical-align: 1px;
+}
+.pv-landing .msg-ai .src-row {
+  margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap;
+}
+.pv-landing .src-chip {
+  display:inline-flex; align-items:center; gap: 6px;
+  padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 10px; color: var(--mut); background: var(--surface);
+}
+.pv-landing .src-chip .pg { color: var(--accent-ink); font-family: var(--mono); }
+.pv-landing .chat-input-form {
+  margin: 8px 12px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pv-landing .chat-input-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.pv-landing .chat-input-bar:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.pv-landing .chat-input-bar input {
+  flex: 1; border: 0; outline: 0; background: transparent;
+  font-family: inherit; font-size: 11.5px; color: var(--ink);
+  padding: 4px 0;
+}
+.pv-landing .chat-input-bar input::placeholder { color: var(--mut-2); }
+.pv-landing .send-btn {
+  width: 24px; height: 24px; border-radius: 8px; border: 0;
+  background: var(--ink); color: #fff; font-size: 13px; line-height: 1;
+  cursor: pointer; display: grid; place-items: center;
+  font-family: inherit;
+}
+.pv-landing .chat-input-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 4px;
+}
+.pv-landing .chat-input-meta .model {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px; color: var(--mut);
+  padding: 2px 7px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg);
+}
+.pv-landing .chat-input-meta .ctx {
+  font-size: 10.5px; color: var(--mut);
+}
+
+@media (max-width: 1080px) {
+  .pv-landing .app { grid-template-columns: 200px 1fr 260px; height: 460px; }
+}
+@media (max-width: 860px) {
+  .pv-landing .app { grid-template-columns: 1fr; height: auto; }
+  .pv-landing .side, .pv-landing .chat { display: none; }
+}
+
+.pv-landing .rule {
+  max-width: 1180px; margin: 0 auto;
+  border-top: 1px solid var(--line);
+}
+.pv-landing .section {
+  max-width: 1180px; margin: 0 auto;
+  padding: 96px 24px;
+}
+.pv-landing .section-head {
+  display: grid; grid-template-columns: 1fr 2fr; gap: 48px;
+  align-items: end; margin-bottom: 56px;
+}
+@media (max-width: 820px) { .pv-landing .section-head { grid-template-columns: 1fr; gap: 20px; align-items: start;} }
+
+.pv-landing .section-label {
+  font-family: var(--mono);
+  font-size: 11px; color: var(--mut);
+  letter-spacing: 0.14em; text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: 10px;
+}
+.pv-landing .section-label::before {
+  content: ""; width: 18px; height: 1px; background: var(--mut-2);
+}
+
+.pv-landing h2 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(34px, 4.2vw, 52px);
+  line-height: 1.02;
+  letter-spacing: -0.018em;
+  margin: 14px 0 0; color: var(--ink);
+  max-width: 20ch;
+  text-wrap: balance;
+}
+.pv-landing h2 em { color: var(--accent-ink); font-style: italic; }
+
+.pv-landing .section-sub {
+  font-size: 16px; color: var(--mut); line-height: 1.55; font-weight: 450;
+  max-width: 46ch; text-wrap: pretty;
+}
+
+.pv-landing .features {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 16px; overflow: hidden;
+}
+.pv-landing .feat {
+  grid-column: span 2;
+  background: var(--surface);
+  padding: 32px 28px 32px;
+  position: relative;
+  min-height: 280px;
+  display: flex; flex-direction: column;
+}
+.pv-landing .feat.wide { grid-column: span 3; }
+.pv-landing .feat.lead { grid-column: span 3; background: #0E0E0C; color: #F6F4ED; }
+.pv-landing .feat.lead .feat-label { color: rgba(246,244,237,.55); }
+.pv-landing .feat.lead h3 { color: #F6F4ED; }
+.pv-landing .feat.lead p { color: rgba(246,244,237,.72); }
+
+.pv-landing .feat-label {
+  font-family: var(--mono); font-size: 10.5px; color: var(--mut);
+  text-transform: uppercase; letter-spacing: 0.14em;
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-bottom: 16px;
+}
+.pv-landing .feat-num { font-variant-numeric: tabular-nums; }
+.pv-landing .feat h3 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: 28px; line-height: 1.16; letter-spacing: -0.012em;
+  margin: 0 0 16px;
+  color: var(--ink);
+  max-width: 18ch;
+}
+.pv-landing .feat p {
+  font-size: 14px; color: var(--mut); line-height: 1.55;
+  margin: 0; font-weight: 450; max-width: 42ch;
+}
+.pv-landing .feat-visual { margin-top: auto; padding-top: 24px; }
+
+.pv-landing .key-vis {
+  font-family: var(--mono); font-size: 11px;
+  display: flex; flex-direction: column; gap: 8px;
+  color: rgba(246,244,237,.85);
+}
+.pv-landing .key-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.pv-landing .key-row .lbl { color: rgba(246,244,237,.5); }
+.pv-landing .key-row .val { margin-left: auto; color: #C9E4CE; }
+
+.pv-landing .priv-vis {
+  display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px;
+  align-items: center;
+}
+.pv-landing .priv-col {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 12px; background: var(--bg);
+  display: flex; flex-direction: column; gap: 7px;
+}
+.pv-landing .priv-col .head { font-size: 10.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 2px; letter-spacing: -.005em;}
+.pv-landing .priv-col .itm {
+  font-size: 11px; color: var(--mut); display: flex; gap: 6px; align-items: flex-start;
+}
+.pv-landing .priv-col .itm::before {
+  content: ""; width: 6px; height: 6px; margin-top: 5px;
+  border-radius: 50%; background: var(--accent);
+  flex-shrink: 0;
+}
+.pv-landing .priv-col.off .itm::before { background: #D88B6A; }
+.pv-landing .priv-arrow {
+  font-family: var(--mono); color: var(--mut-2); font-size: 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.pv-landing .priv-arrow .line { width: 24px; height: 1px; background: var(--mut-2); }
+
+.pv-landing .chat-vis {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; background: var(--bg);
+  display: flex; flex-direction: column; gap: 8px;
+  font-size: 11px;
+}
+.pv-landing .chat-vis .q {
+  align-self: flex-end; background: var(--ink); color: #fff;
+  padding: 6px 10px; border-radius: 10px 10px 3px 10px;
+  max-width: 80%;
+}
+.pv-landing .chat-vis .a {
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 8px 10px; border-radius: 10px 10px 10px 3px;
+  color: var(--ink-2); max-width: 92%;
+  line-height: 1.45;
+}
+
+.pv-landing .search-vis {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  padding: 10px 12px; font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pv-landing .search-vis .q { color: var(--mut); }
+.pv-landing .search-vis .hit {
+  display:flex; gap: 8px; font-size: 10.5px; align-items: baseline;
+}
+.pv-landing .search-vis .hit .p { color: var(--accent-ink); }
+.pv-landing .search-vis .hit mark {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--ink); padding: 0 3px; border-radius: 2px;
+}
+
+.pv-landing .ann-vis {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+  padding: 14px; display: flex; flex-direction: column; gap: 6px;
+  position: relative;
+}
+.pv-landing .ann-vis .tl { display: block; height: 4px; border-radius: 2px; background: var(--bg-2);}
+.pv-landing .ann-vis .tl.w1 { width: 94%; }
+.pv-landing .ann-vis .tl.w2 { width: 82%; }
+.pv-landing .ann-vis .tl.w3 { width: 90%; }
+.pv-landing .ann-vis .tl.hl {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  position: relative;
+}
+.pv-landing .ann-vis .note {
+  margin-top: 8px;
+  align-self: flex-end; max-width: 60%;
+  background: #FFF9E8; border: 1px solid #EBDFAF;
+  font-size: 10.5px; color: #6A5A1F;
+  padding: 6px 8px; border-radius: 6px;
+  box-shadow: 0 2px 6px -2px rgba(0,0,0,.08);
+}
+.pv-landing .ann-vis .note::before {
+  content: ""; position: absolute; width: 1px; height: 14px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  right: 44%; top: 28px;
+}
+
+.pv-landing .folder-vis {
+  display: flex; gap: 10px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  background: var(--bg);
+}
+.pv-landing .folder-tree { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--ink-2); display:flex; flex-direction: column; gap: 3px; }
+.pv-landing .folder-tree .dir { color: var(--ink); font-weight: 500; }
+.pv-landing .folder-tree .f { color: var(--mut); padding-left: 14px; }
+.pv-landing .folder-tree .f.active { color: var(--accent-ink); }
+.pv-landing .folder-badge {
+  align-self: flex-start; padding: 4px 8px; border-radius: 6px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .04em;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-ink);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+@media (max-width: 980px) {
+  .pv-landing .features { grid-template-columns: repeat(2, 1fr); }
+  .pv-landing .feat, .pv-landing .feat.wide, .pv-landing .feat.lead, .pv-landing .feat.cta-card { grid-column: span 2; }
+  .pv-landing .cta-card { grid-template-columns: 1fr; }
+  .pv-landing .cta-card-art { display: none; }
+}
+
+.pv-landing .feat.cta-card {
+  grid-column: span 4;
+  background:
+    radial-gradient(120% 80% at 100% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 55%),
+    var(--surface);
+  display: grid; grid-template-columns: 1.4fr 1fr; gap: 28px;
+  padding: 36px 36px;
+  align-items: stretch;
+}
+.pv-landing .cta-card-inner { display: flex; flex-direction: column; }
+.pv-landing .cta-eyebrow {
+  font-family: var(--mono); font-size: 10.5px; color: var(--mut);
+  text-transform: uppercase; letter-spacing: .14em;
+  margin-bottom: 14px;
+}
+.pv-landing .feat.cta-card h3 { font-size: 32px; max-width: 22ch; margin-bottom: 12px; }
+.pv-landing .feat.cta-card p { max-width: 40ch; margin-bottom: auto; }
+.pv-landing .cta-card-actions {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px;
+}
+.pv-landing .cta-card-art {
+  display: flex; flex-wrap: wrap; gap: 8px; align-content: center; justify-content: flex-end;
+  padding-left: 8px;
+}
+.pv-landing .cta-card-art .chip {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--ink-2);
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  letter-spacing: -.005em;
+}
+.pv-landing .cta-card-art .chip:nth-child(odd) {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.pv-landing .empathy-grid {
+  display: grid; grid-template-columns: 1fr 64px 1fr; gap: 0;
+  border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+  background: var(--surface);
+}
+.pv-landing .empathy-col {
+  padding: 36px 32px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.pv-landing .empathy-col.before { background: #F7F4ED; }
+.pv-landing .empathy-col.after { background: var(--surface); }
+.pv-landing .empathy-tag {
+  font-family: var(--mono); font-size: 10.5px; color: var(--mut);
+  text-transform: uppercase; letter-spacing: .14em;
+  margin-bottom: 8px;
+}
+.pv-landing .empathy-col ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+.pv-landing .empathy-col li {
+  font-size: 15px; line-height: 1.5; color: var(--ink-2);
+  padding-left: 22px; position: relative;
+  text-wrap: pretty;
+}
+.pv-landing .empathy-col.before li::before {
+  content: "✕"; position: absolute; left: 0; top: 1px;
+  color: #B86B5A; font-size: 12px; font-weight: 600;
+}
+.pv-landing .empathy-col.after li::before {
+  content: "✓"; position: absolute; left: 0; top: 1px;
+  color: var(--accent); font-size: 12px; font-weight: 700;
+}
+.pv-landing .empathy-divider {
+  display: grid; place-items: center;
+  color: var(--mut-2); font-size: 18px;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+@media (max-width: 820px) {
+  .pv-landing .empathy-grid { grid-template-columns: 1fr; }
+  .pv-landing .empathy-divider { border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 12px 0; }
+}
+
+.pv-landing .steps {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+}
+.pv-landing .step {
+  background: var(--surface);
+  padding: 32px 28px;
+  display: flex; flex-direction: column;
+  min-height: 280px;
+}
+.pv-landing .step-num {
+  font-family: var(--serif); font-size: 44px; line-height: 1;
+  color: var(--accent-ink); margin-bottom: 18px; letter-spacing: -.02em;
+}
+.pv-landing .step h3 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: 24px; line-height: 1.1; letter-spacing: -.012em;
+  margin: 0 0 10px; color: var(--ink); max-width: 18ch;
+}
+.pv-landing .step p {
+  font-size: 14px; color: var(--mut); line-height: 1.55; margin: 0; max-width: 38ch;
+}
+.pv-landing .step-vis {
+  margin-top: auto; padding-top: 24px;
+  font-family: var(--mono); font-size: 11.5px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+}
+.pv-landing .step-vis .prefix, .pv-landing .step-vis .tail { color: var(--ink-2); }
+.pv-landing .step-vis .dots { color: var(--mut-2); }
+.pv-landing .step-vis .step-ok {
+  margin-left: auto; padding: 3px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink); font-size: 10.5px;
+}
+.pv-landing .folder-step .path { color: var(--ink); }
+.pv-landing .folder-step .meta { margin-left: auto; color: var(--mut); }
+.pv-landing .ask-step { flex-direction: column; align-items: flex-start; gap: 10px; }
+.pv-landing .ask-step .q {
+  font-family: var(--serif); font-style: italic; font-size: 16px; color: var(--ink-2);
+  line-height: 1.4;
+}
+.pv-landing .ask-step .cites { display: flex; gap: 6px; }
+.pv-landing .step-note {
+  margin-top: 10px;
+  font-size: 11.5px; line-height: 1.5; color: var(--mut);
+  padding: 8px 10px;
+  border: 1px dashed var(--line-2); border-radius: 8px;
+  background: var(--bg);
+  font-family: var(--mono);
+}
+@media (max-width: 820px) { .pv-landing .steps { grid-template-columns: 1fr; } }
+
+.pv-landing .faq {
+  border-top: 1px solid var(--line);
+  max-width: 820px;
+}
+.pv-landing .faq-item {
+  border-bottom: 1px solid var(--line);
+  padding: 22px 4px;
+}
+.pv-landing .faq-item summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+  font-family: var(--serif); font-size: 22px; line-height: 1.2; color: var(--ink);
+  letter-spacing: -.01em;
+}
+.pv-landing .faq-item summary::-webkit-details-marker { display: none; }
+.pv-landing .faq-toggle {
+  font-family: var(--sans); font-size: 22px; color: var(--mut);
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 50%;
+  transition: transform .2s ease, background .2s ease;
+  flex-shrink: 0;
+}
+.pv-landing .faq-item[open] .faq-toggle { transform: rotate(45deg); background: var(--bg-2); }
+.pv-landing .faq-item p {
+  margin: 14px 0 0; max-width: 64ch;
+  font-size: 15px; line-height: 1.6; color: var(--mut);
+  text-wrap: pretty;
+}
+.pv-landing .faq-item p + p { margin-top: 10px; }
+.pv-landing .faq-item code,
+.pv-landing .feat p code {
+  font-family: var(--mono); font-size: 12.5px;
+  background: var(--bg-2); padding: 1px 6px; border-radius: 4px;
+  color: var(--accent-ink);
+}
+
+.pv-landing .final-cta {
+  background: #0E0E0C; color: #F6F4ED;
+  border-radius: 24px;
+  overflow: hidden;
+  position: relative;
+  max-width: 1180px;
+  margin: 72px auto 40px;
+}
+.pv-landing .final-cta-inner {
+  padding: 96px 48px;
+  text-align: center;
+  position: relative; z-index: 1;
+  max-width: 720px; margin: 0 auto;
+}
+.pv-landing .final-cta .section-label { color: rgba(246,244,237,.55); }
+.pv-landing .final-cta .section-label::before { background: rgba(246,244,237,.4); }
+.pv-landing .final-title {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(36px, 4.6vw, 60px); line-height: 1.04;
+  letter-spacing: -.02em;
+  color: #F6F4ED; max-width: none; margin: 16px auto 18px;
+  text-wrap: balance;
+}
+.pv-landing .final-title em { color: #C9E4CE; font-style: italic; }
+.pv-landing .final-sub {
+  color: rgba(246,244,237,.7); font-size: 17px; line-height: 1.55;
+  max-width: 50ch; margin: 0 auto 32px;
+}
+.pv-landing .btn-light { background: #F6F4ED; color: var(--ink); }
+.pv-landing .btn-light:hover { background: #fff; }
+.pv-landing .btn-ghost-dark { background: transparent; color: rgba(246,244,237,.85); border: 1px solid rgba(246,244,237,.25); text-decoration: none; }
+.pv-landing .btn-ghost-dark:hover { border-color: rgba(246,244,237,.55); color: #F6F4ED; }
+.pv-landing .final-cta-art {
+  position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  overflow: hidden;
+  opacity: .14;
+}
+.pv-landing .final-cta-art .paper {
+  background: #1F1E1A; border-color: rgba(255,255,255,.08);
+  box-shadow: none;
+}
+.pv-landing .final-cta-art .paper::before { background: rgba(255,255,255,.6); }
+.pv-landing .final-cta-art .paper i { background: rgba(255,255,255,.18); }
+.pv-landing .final-cta-art .paper.p1 { top: 24px; left: 4%; transform: rotate(-12deg); }
+.pv-landing .final-cta-art .paper.p2 { bottom: 24px; right: 8%; transform: rotate(7deg); }
+.pv-landing .final-cta-art .paper.p3 { top: 50%; right: 4%; transform: translateY(-50%) rotate(-3deg); }
+
+.pv-landing footer {
+  max-width: 1180px; margin: 0 auto;
+  padding: 40px 24px 60px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 14px;
+  font-size: 13px; color: var(--mut);
+  border-top: 1px solid var(--line);
+}
+.pv-landing footer .f-right { display: flex; gap: 22px; align-items: center; }
+.pv-landing footer a, .pv-landing footer button {
+  text-decoration: none; color: var(--mut);
+  background: none; border: 0; cursor: pointer; font-family: inherit; font-size: 13px; padding: 0;
+}
+.pv-landing footer a:hover, .pv-landing footer button:hover { color: var(--ink); }
+`;
+
+function Paper({ className }) {
   return (
-    <div style={s.mockup}>
-      <div style={s.mockupInner}>
-        <div style={s.mockupBar}>
-          <div style={s.dot("#ff5f56")} />
-          <div style={s.dot("#ffbd2e")} />
-          <div style={s.dot("#27c93f")} />
-        </div>
-        <div style={s.mockupBody}>
-          {/* Sidebar */}
-          <div style={s.mockupSidebar}>
-            <div style={s.mockupSidebarTitle}>Library</div>
-            {["Research Papers", "Clinical Trials", "Reviews"].map((name, i) => (
-              <div key={name} style={{ ...s.mockupFile, ...(i === 0 ? s.mockupFileActive : {}) }}>
-                <FileIcon />
-                {name}
-              </div>
-            ))}
-          </div>
-          {/* PDF area */}
-          <div style={s.mockupPdf}>
-            <div style={s.mockupPage}>
-              <div style={s.mockupLine("60%")} />
-              <div style={s.mockupLine("90%")} />
-              <div style={s.mockupLine("75%")} />
-              <div style={s.mockupLine("40%", 0.5)} />
-            </div>
-            <div style={{ ...s.mockupPage, maxWidth: 220 }}>
-              <div style={s.mockupLine("80%")} />
-              <div style={s.mockupLine("55%")} />
-              <div style={s.mockupLine("90%")} />
-            </div>
-          </div>
-          {/* Chat area */}
-          <div style={s.mockupChat}>
-            <div style={s.mockupChatTitle}>AI Chat</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
-              <div style={s.userBubble}>What does this study conclude?</div>
-              <div style={s.aiBubble}>
-                The study concludes that treatment X significantly reduces symptoms.{" "}
-                <span style={s.citChip}>[1]</span>
-              </div>
-              <div style={s.userBubble}>How large was the sample?</div>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div className={`paper ${className}`}>
+      <i /><i /><i /><i /><i /><i /><i />
     </div>
   );
 }
 
-const features = [
-  {
-    icon: "📄",
-    title: "Local PDF Processing",
-    desc: "PDFs are rendered and extracted entirely in your browser using PDF.js. Your files never touch our servers.",
-  },
-  {
-    icon: "🤖",
-    title: "AI-Powered Chat",
-    desc: "Ask questions across one or many papers and get answers with cited passages and page numbers.",
-  },
-  {
-    icon: "📁",
-    title: "No Account Needed",
-    desc: "Link a folder on your machine or upload files directly. Everything is stored locally in your browser.",
-  },
-  {
-    icon: "✏️",
-    title: "Annotations",
-    desc: "Highlight text, add comments, and save notes directly on any PDF — all stored locally.",
-  },
-  {
-    icon: "🔍",
-    title: "Full-Text Search",
-    desc: "Search across all your papers at once, including scanned PDFs via built-in OCR.",
-  },
-  {
-    icon: "🔑",
-    title: "Bring Your Own Key",
-    desc: "Use your own OpenAI API key. We never see it — it goes straight from your browser to OpenAI.",
-  },
-];
-
-const steps = [
-  {
-    num: "Step 01",
-    title: "Add your PDFs",
-    desc: "Link a folder on your machine (Chrome/Edge) or upload individual papers. Everything stays in your browser.",
-  },
-  {
-    num: "Step 02",
-    title: "Ask questions",
-    desc: "Open the AI chat and ask anything. Select which papers to include as context — one, several, or all.",
-  },
-  {
-    num: "Step 03",
-    title: "Get cited answers",
-    desc: "Every answer links back to the exact page and passage in your PDFs. Click any citation to jump there.",
-  },
-];
-
 export default function LandingPage() {
   const navigate = useNavigate();
+  const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    // Inject Google Fonts
     if (!document.querySelector('link[data-paperview-font]')) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
@@ -559,155 +937,485 @@ export default function LandingPage() {
       link.setAttribute("data-paperview-font", "1");
       document.head.appendChild(link);
     }
-    // Reset body overflow for the landing page
+    if (!document.querySelector('style[data-paperview-landing]')) {
+      const style = document.createElement("style");
+      style.setAttribute("data-paperview-landing", "1");
+      style.textContent = CSS;
+      document.head.appendChild(style);
+    }
     document.body.style.overflow = "auto";
     document.body.style.height = "auto";
-    document.body.style.background = colors.bg;
+    document.body.style.background = "#FBFAF7";
+
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+
     return () => {
       document.body.style.overflow = "";
       document.body.style.height = "";
+      window.removeEventListener("scroll", onScroll);
     };
   }, []);
 
+  const openApp = () => navigate("/app");
+
+  const scrollToFeatures = (e) => {
+    e.preventDefault();
+    const el = document.getElementById("features");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
-    <div style={s.page}>
-      {/* Nav */}
-      <nav style={s.nav}>
-        <span style={s.navLogo}>Paperview</span>
-        <button style={s.navCta} onClick={() => navigate("/app")}>
-          Open App →
-        </button>
+    <div className="pv-landing">
+      <nav className={`nav${scrolled ? " scrolled" : ""}`}>
+        <div className="logo">
+          <div className="logo-mark" />
+          <span>Paperview</span>
+        </div>
+        <div className="nav-right">
+          <a className="nav-link" href="#features" onClick={scrollToFeatures}>Features</a>
+          <a className="nav-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
+          <button className="nav-cta" onClick={openApp}>
+            Open app <span className="arr">→</span>
+          </button>
+        </div>
       </nav>
 
-      {/* Hero */}
-      <div style={s.hero}>
-        <div style={s.badge}>
-          <span>✦</span>
-          <span>Free · No account required</span>
+      <header className="hero">
+        <div className="hero-art" aria-hidden="true">
+          <div className="grid-bg" />
+          <Paper className="p1" />
+          <Paper className="p2" />
+          <Paper className="p3" />
+          <Paper className="p4" />
         </div>
-        <h1 style={s.h1}>
-          AI research assistant<br />for your PDFs
+
+        <span className="eyebrow">
+          <span className="pill-dot" />
+          <strong>v1.0</strong>
+          <span>·&nbsp; Free, open, &amp; local-first</span>
+        </span>
+
+        <h1 className="hero-title">
+          The AI research desk<br />
+          that <span className="ital">never leaves</span> your browser.
         </h1>
-        <p style={s.heroSub}>
-          Upload papers, link a folder, and chat with your research using AI — with automatic citations back to the source page.
+
+        <p className="hero-sub">
+          Paperview reads, annotates, and answers questions about your PDFs —
+          with citations back to the source page. <strong>Bring your own OpenAI key.</strong>{" "}
+          Your files, chats, and notes never touch our servers.
         </p>
-        <div style={s.heroCtaRow}>
-          <button style={s.btnPrimary} onClick={() => navigate("/app")}>
-            Try it free →
+
+        <div className="cta-row">
+          <button className="btn btn-primary" onClick={openApp}>
+            Open Paperview <span className="arr">→</span>
           </button>
-          <a
-            href="#how-it-works"
-            style={{ ...s.btnSecondary, textDecoration: "none" }}
-          >
+          <a className="btn btn-ghost" href="#features" onClick={scrollToFeatures} style={{ lineHeight: 1.5 }}>
             See how it works
           </a>
         </div>
-      </div>
 
-      {/* App mockup */}
-      <AppMockup />
+        <div className="hero-spacer" />
+      </header>
 
-      <div style={{ height: 80 }} />
-      <div style={s.divider} />
-
-      {/* Features */}
-      <section style={s.section}>
-        <div style={s.sectionLabel}>Features</div>
-        <h2 style={s.h2}>Everything you need for serious research</h2>
-        <p style={s.sectionSub}>
-          Built for academics, researchers, and students who want AI assistance without giving up control of their data.
-        </p>
-        <div style={s.featureGrid}>
-          {features.map((f) => (
-            <div key={f.title} style={s.featureCard}>
-              <div style={s.featureIcon}>{f.icon}</div>
-              <div style={s.featureTitle}>{f.title}</div>
-              <div style={s.featureDesc}>{f.desc}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <div style={s.divider} />
-
-      {/* How it works */}
-      <section id="how-it-works" style={s.section}>
-        <div style={s.sectionLabel}>How it works</div>
-        <h2 style={s.h2}>From PDF to insight in seconds</h2>
-        <div style={s.stepsRow}>
-          {steps.map((step) => (
-            <div key={step.num}>
-              <div style={s.stepNum}>{step.num}</div>
-              <div style={s.stepTitle}>{step.title}</div>
-              <div style={s.stepDesc}>{step.desc}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <div style={s.divider} />
-
-      {/* Privacy/transparency */}
-      <section style={{ ...s.section, textAlign: "center" }}>
-        <div style={s.sectionLabel}>Privacy</div>
-        <h2 style={s.h2}>Your data stays yours</h2>
-        <p style={{ ...s.sectionSub, margin: "0 auto 0" }}>
-          We have no backend. No servers storing your files. Here's exactly what leaves your browser — and what doesn't.
-        </p>
-        <div style={s.privacyBox}>
-          <div style={s.privacyGrid}>
-            {[
-              { green: true, text: "PDF files — processed locally, never uploaded to us" },
-              { green: true, text: "Folder access — read-only, sandboxed by your browser" },
-              { green: true, text: "Chat history & annotations — stored in your browser's IndexedDB" },
-              { green: true, text: "API key — stored in your browser's localStorage only" },
-              { green: false, text: "PDF text — sent to OpenAI when you send a chat message" },
-              { green: false, text: "API key — sent in request headers to OpenAI (via HTTPS)" },
-            ].map((item, i) => (
-              <div key={i} style={s.privacyItem}>
-                <div style={s.privacyDot(item.green)} />
-                <div style={s.privacyText}>{item.text}</div>
-              </div>
-            ))}
+      <section className="mockup-wrap">
+        <div className="mockup">
+          <div className="win-bar">
+            <div className="win-dot r" />
+            <div className="win-dot y" />
+            <div className="win-dot g" />
+            <span className="win-title">paperview.app  —  Climate Tipping Points</span>
           </div>
-          <p style={{ fontSize: 12, color: colors.text3, marginTop: 24, lineHeight: 1.5, fontWeight: 500 }}>
-            Green = stays on your device. Red = leaves your browser (encrypted over HTTPS to OpenAI's API). We never see any of it.
-          </p>
-        </div>
-        <div style={s.browserNotice}>
-          <span>⚠️</span>
-          <span>
-            <strong>Folder access</strong> requires Chrome or Edge. Firefox and Safari users can still upload individual PDFs.
-          </span>
+          <div className="app">
+            <aside className="side">
+              <div className="side-head">
+                <div className="side-brand"><div className="mini" />Paperview</div>
+                <span className="side-close">‹</span>
+              </div>
+              <div className="side-nav">
+                <div className="side-item"><span className="ico">📖</span>Reader</div>
+                <div className="side-item active"><span className="ico">▦</span>Library</div>
+                <div className="side-item"><span className="ico">✦</span>Agent</div>
+              </div>
+              <div className="side-search">
+                <span>⌕</span> Search…
+              </div>
+              <div className="side-folders-head">Folders</div>
+              <div className="folder"><span className="chev">▾</span>Climate Tipping Points<span className="count">12</span></div>
+              <div className="files">
+                <div className="file active">Lenton-2008-tipping-elements.pdf</div>
+                <div className="file">Armstrong-McKay-2022-Science.pdf</div>
+                <div className="file">IPCC-AR6-WG1-Ch4.pdf</div>
+                <div className="file">Steffen-2018-Hothouse-Earth.pdf</div>
+                <div className="file">Boers-2021-AMOC-decline.pdf</div>
+                <div className="file">Wang-2023-Amazon-dieback.pdf</div>
+                <div className="file">Notz-Stroeve-2018-sea-ice.pdf</div>
+                <div className="file">Rockstrom-2009-boundaries.pdf</div>
+                <div className="file">Lenton-2019-Nature-comment.pdf</div>
+                <div className="file">Ritchie-2021-overshoot…</div>
+              </div>
+              <div className="side-foot">
+                <div className="side-api"><span className="gdot" />API key · • • • • – 15UA</div>
+                <div className="side-btn">📁 Open Folder</div>
+                <div className="side-btn ghost">⬆ Upload PDF</div>
+                <div className="side-btn ghost">+ New Folder</div>
+              </div>
+            </aside>
+
+            <main className="reader">
+              <div className="reader-top">
+                <div className="doc-chip">📄 Lenton-2008-tipping-elements.pdf <span className="x">×</span></div>
+                <div className="reader-tools">
+                  <span className="tool">⌕</span>
+                  <span className="tool">−</span>
+                  <span>140%</span>
+                  <span className="tool">＋</span>
+                  <span className="tool">⟲</span>
+                </div>
+              </div>
+              <div className="pages">2 of 14  ›</div>
+              <div className="reader-canvas">
+                <article className="page">
+                  <div className="page-meta">Proceedings of the National Academy of Sciences · 105 (6) · 1786–1793</div>
+                  <h3 className="page-title">Tipping elements in the Earth's climate system</h3>
+                  <div className="page-authors">Timothy M. Lenton<sup>a,*</sup>, Hermann Held<sup>b</sup>, Elmar Kriegler<sup>b</sup>, Hans Joachim Schellnhuber<sup>b,c</sup></div>
+                  <div className="page-section">A B S T R A C T</div>
+                  <div className="cols">
+                    <div className="lines">
+                      <i /><i /><i /><i /><i /><i />
+                      <span className="hl" />
+                      <i /><i /><i /><i /><i /><i /><i /><i /><i />
+                    </div>
+                    <div className="lines">
+                      <i /><i /><i /><i /><i />
+                      <span className="hl" />
+                      <i /><i /><i /><i /><i /><i /><i /><i /><i /><i />
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </main>
+
+            <aside className="chat">
+              <div className="chat-head">
+                <div className="chat-title">Which tipping elements does Lenton identify?</div>
+                <div className="chat-sub">3 messages · 2 apr</div>
+              </div>
+              <div className="chat-body">
+                <div className="msg-user">Which tipping elements does Lenton identify?</div>
+                <div className="msg-ai">
+                  Lenton et&nbsp;al. flag nine policy-relevant tipping elements, including the Greenland ice sheet, AMOC, Amazon rainforest, and Arctic sea-ice <span className="cite">p.3</span>, ranked by proximity to threshold <span className="cite">p.5</span>.
+                  <div className="src-row">
+                    <span className="src-chip"><span className="pg">p.3</span> Introduction</span>
+                    <span className="src-chip"><span className="pg">p.5</span> Table&nbsp;1</span>
+                  </div>
+                </div>
+                <div className="msg-user">What temperature thresholds do they give?</div>
+                <div className="msg-ai">
+                  Most elements have estimated thresholds in the 1–2 °C range above pre-industrial; the Greenland ice sheet sits near 1–2 °C, AMOC at 3–5 °C <span className="cite">p.7</span>.
+                </div>
+              </div>
+              <form className="chat-input-form" onSubmit={(e) => e.preventDefault()}>
+                <div className="chat-input-bar">
+                  <input type="text" placeholder="Ask about this PDF…" readOnly />
+                  <button type="submit" className="send-btn" aria-label="Send">↑</button>
+                </div>
+                <div className="chat-input-meta">
+                  <span className="model">gpt-5 · mini</span>
+                  <span className="ctx">📎 1 file in context</span>
+                </div>
+              </form>
+            </aside>
+          </div>
         </div>
       </section>
 
-      <div style={s.divider} />
+      <div className="rule" />
 
-      {/* CTA banner */}
-      <div style={s.ctaBanner}>
-        <h2 style={{ ...s.h2, marginBottom: 12 }}>Start reading smarter</h2>
-        <p style={{ ...s.sectionSub, margin: "0 auto 32px" }}>
-          Free, open, and runs entirely in your browser. Bring your own OpenAI key — no subscription required.
-        </p>
-        <button style={s.btnPrimary} onClick={() => navigate("/app")}>
-          Open Paperview →
-        </button>
-      </div>
+      <section className="section" id="features">
+        <div className="section-head">
+          <span className="section-label">§ 01 &nbsp; Features</span>
+          <div>
+            <h2>Built for <em>serious</em> research, not locked behind a paywall.</h2>
+          </div>
+        </div>
 
-      {/* Footer */}
-      <footer style={s.footer}>
-        <span style={s.footerLeft}>© {new Date().getFullYear()} Paperview. No account, no tracking, no backend.</span>
-        <div style={s.footerRight}>
-          <button style={s.footerLink} onClick={() => navigate("/app")}>Open App</button>
-          <a
-            href="https://platform.openai.com/api-keys"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={s.footerLink}
-          >
-            Get an API key
-          </a>
+        <div className="features">
+          <div className="feat lead">
+            <div className="feat-label"><span className="feat-num">01</span>· &nbsp;THE USP</div>
+            <h3>Bring your own key.<br />Pay only for what you actually use.</h3>
+            <p>Paperview plugs directly into your OpenAI account. Every request goes from your browser to OpenAI — we never proxy, log, or meter it. No subscription, no seat tiers, no rate limits from us.</p>
+            <div className="feat-visual">
+              <div className="key-vis">
+                <div className="key-row"><span className="lbl">provider</span><span className="val">openai.com</span></div>
+                <div className="key-row"><span className="lbl">sk-proj-</span><span className="val">••••••••••••15UA</span></div>
+                <div className="key-row"><span className="lbl">stored in</span><span className="val">browser localStorage</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="feat wide">
+            <div className="feat-label"><span className="feat-num">02</span>· &nbsp;LOCAL-FIRST</div>
+            <h3>Your files stay on your machine.</h3>
+            <p>PDFs are rendered, indexed, and OCR'd entirely in your browser. Annotations and chats live in IndexedDB — and in an optional <code>.paperview.json</code> that travels with your folder. There is literally no backend to breach.</p>
+            <div className="feat-visual">
+              <div className="priv-vis">
+                <div className="priv-col">
+                  <div className="head">On your device</div>
+                  <div className="itm">PDFs &amp; folder contents</div>
+                  <div className="itm">Highlights &amp; notes</div>
+                  <div className="itm">Chat history</div>
+                  <div className="itm">Your API key</div>
+                </div>
+                <div className="priv-arrow">
+                  <div className="line" />
+                  <span>HTTPS</span>
+                  <div className="line" />
+                </div>
+                <div className="priv-col off">
+                  <div className="head">Sent to OpenAI only</div>
+                  <div className="itm">Selected passage text</div>
+                  <div className="itm">Your question</div>
+                  <div className="itm">Your key in headers</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="feat">
+            <div className="feat-label"><span className="feat-num">03</span>· &nbsp;CITATIONS</div>
+            <h3>Every answer, sourced to a page.</h3>
+            <p>Click any citation to jump straight to the highlighted passage in the PDF.</p>
+            <div className="feat-visual">
+              <div className="chat-vis">
+                <div className="q">What does Lenton 2008 conclude?</div>
+                <div className="a">Nine policy-relevant climate tipping elements are identified <span className="cite">p.3</span>; thresholds for several are within reach this century <span className="cite">p.7</span>.</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="feat">
+            <div className="feat-label"><span className="feat-num">04</span>· &nbsp;FULL-TEXT SEARCH</div>
+            <h3>Grep your entire library — including scans.</h3>
+            <p>Built-in OCR for scanned PDFs. Search across every paper in milliseconds.</p>
+            <div className="feat-visual">
+              <div className="search-vis">
+                <div className="q">⌕ "sample size"</div>
+                <div className="hit"><span className="p">p.3</span> &nbsp;Larson 2022: insufficient <mark>sample size</mark> in 78%…</div>
+                <div className="hit"><span className="p">p.11</span>&nbsp;Carbine 2019: a priori <mark>sample size</mark> calc…</div>
+                <div className="hit"><span className="p">p.2</span> &nbsp;Baker 2020: reporting of <mark>sample size</mark>…</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="feat">
+            <div className="feat-label"><span className="feat-num">05</span>· &nbsp;ANNOTATIONS</div>
+            <h3>Highlight, margin-note, done.</h3>
+            <p>Saved per PDF with text, page, position, color, comment, and timestamp. Reopen a paper and every highlight is exactly where you left it.</p>
+            <div className="feat-visual">
+              <div className="ann-vis">
+                <span className="tl w1" />
+                <span className="tl hl w2" />
+                <span className="tl w3" />
+                <span className="tl w1" />
+                <div className="note">← check for pre-reg</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="feat">
+            <div className="feat-label"><span className="feat-num">06</span>· &nbsp;PORTABLE NOTES</div>
+            <h3>Your notes travel with the folder.</h3>
+            <p>Link a writable folder and Paperview drops a tiny <code>.paperview.json</code> alongside your PDFs — chats and annotations follow the folder across sessions, machines, or a Dropbox sync.</p>
+            <div className="feat-visual">
+              <div className="folder-vis">
+                <div className="folder-tree">
+                  <div className="dir">▾ ~/Research/Climate</div>
+                  <div className="f">Lenton-2008.pdf</div>
+                  <div className="f active">McKay-2022.pdf</div>
+                  <div className="f">Steffen-2018.pdf</div>
+                  <div className="f" style={{ color: "var(--accent-ink)" }}>.paperview.json</div>
+                </div>
+                <span className="folder-badge">syncs</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="feat cta-card">
+            <div className="cta-card-inner">
+              <span className="cta-eyebrow">— Ready when you are</span>
+              <h3>Start reading <em>smarter</em>.<br />It takes thirty seconds.</h3>
+              <p>Open Paperview, paste your OpenAI key, drop in a folder. That's the whole onboarding.</p>
+              <div className="cta-card-actions">
+                <button className="btn btn-primary" onClick={openApp}>
+                  Open Paperview <span className="arr">→</span>
+                </button>
+                <a className="btn btn-ghost" href={OPENAI_KEY_URL} target="_blank" rel="noopener noreferrer">
+                  Get an OpenAI key ↗
+                </a>
+              </div>
+            </div>
+            <div className="cta-card-art" aria-hidden="true">
+              <span className="chip">no account</span>
+              <span className="chip">no subscription</span>
+              <span className="chip">no telemetry</span>
+              <span className="chip">no servers</span>
+              <span className="chip">no lock-in</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="rule" />
+
+      <section className="section empathy">
+        <div className="section-head">
+          <span className="section-label">§ 02 &nbsp; Why Paperview</span>
+          <div>
+            <h2>Now you actually know <em>where</em> the answer came from.</h2>
+          </div>
+        </div>
+
+        <div className="empathy-grid">
+          <div className="empathy-col before">
+            <div className="empathy-tag">Before</div>
+            <ul>
+              <li>Twelve PDFs open across three windows. The one you need is, of course, in window two.</li>
+              <li>An AI confidently summarises a paper it has clearly never read.</li>
+              <li>You paste the same passage into a chat for the eighth time today.</li>
+              <li>A subscription quietly renews. You used the tool twice this month.</li>
+              <li>You wonder, briefly, whether your unpublished draft is now training data.</li>
+            </ul>
+          </div>
+          <div className="empathy-divider" aria-hidden="true">
+            <span>→</span>
+          </div>
+          <div className="empathy-col after">
+            <div className="empathy-tag">With Paperview</div>
+            <ul>
+              <li>Point it at your folder. Every paper, every page, indexed in the browser.</li>
+              <li>Every claim links back to the exact passage. Click to verify in one second.</li>
+              <li>Your key, your call. Pay OpenAI cents per question, not us $20 a month.</li>
+              <li>Nothing leaves your machine except the question and the passage you chose to send.</li>
+              <li>Open it offline tomorrow. Your annotations are still there — they never went anywhere.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <div className="rule" />
+
+      <section className="section how">
+        <div className="section-head">
+          <span className="section-label">§ 03 &nbsp; How it works</span>
+          <div>
+            <h2>From folder to <em>cited</em> answer in three steps.</h2>
+          </div>
+        </div>
+
+        <ol className="steps">
+          <li className="step">
+            <div className="step-num">01</div>
+            <h3>Paste your OpenAI key</h3>
+            <p>Stored only in your browser's localStorage. Never sent to us. Rotate or revoke from the OpenAI dashboard any time.</p>
+            <div className="step-vis key-step">
+              <span className="prefix">sk-proj-</span><span className="dots">••••••••••••</span><span className="tail">15UA</span>
+              <span className="step-ok">✓ valid</span>
+            </div>
+          </li>
+          <li className="step">
+            <div className="step-num">02</div>
+            <h3>Open a folder of PDFs</h3>
+            <p>Link any local folder via the File System Access API. Paperview reads the files in-place — no copies, no uploads, fully sandboxed.</p>
+            <div className="step-vis folder-step">
+              <span className="path">~/Research/Climate</span>
+              <span className="meta">12 PDFs · read-only</span>
+            </div>
+            <div className="step-note">Folder access requires Chrome, Edge, Arc, or Brave. Firefox/Safari users can still upload individual PDFs.</div>
+          </li>
+          <li className="step">
+            <div className="step-num">03</div>
+            <h3>Ask. Verify. Repeat.</h3>
+            <p>Pick the papers to include as context, ask in plain language, and click any citation to jump to the exact passage in the PDF.</p>
+            <div className="step-vis ask-step">
+              <span className="q">“Which tipping elements are closest to threshold?”</span>
+              <span className="cites"><span className="cite">p.3</span> <span className="cite">p.5</span> <span className="cite">p.7</span></span>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <div className="rule" />
+
+      <section className="section faq-section">
+        <div className="section-head">
+          <span className="section-label">§ 04 &nbsp; FAQ</span>
+          <div>
+            <h2>Honest answers to the questions you'd actually ask.</h2>
+          </div>
+        </div>
+
+        <div className="faq">
+          <details className="faq-item" open>
+            <summary><span>Is Paperview really free?</span><span className="faq-toggle">+</span></summary>
+            <p>Yes. The app itself is free and open. You'll pay OpenAI directly for the questions you ask — typically a fraction of a cent per query. We never take a cut and we never see your usage.</p>
+          </details>
+          <details className="faq-item">
+            <summary><span>Where is my data stored?</span><span className="faq-toggle">+</span></summary>
+            <p>Paperview stores everything locally in your browser first.</p>
+            <p><strong>Annotations</strong> are saved per PDF with the selected text, page number, highlight position, color, optional comment, and timestamp. When you reopen the same paper, Paperview reloads those annotations and places the highlights back on the PDF.</p>
+            <p><strong>Chat history</strong> is saved as conversation threads. Each thread stores its title, messages, the related paper or folder, and the last updated time, so you can close the app and continue later.</p>
+            <p>If you open a <strong>writable folder</strong>, Paperview also writes a small <code>.paperview.json</code> file into that folder. It contains the saved chats and annotations for the papers in that folder, so your notes and history can travel with the folder across sessions or devices.</p>
+            <p>The PDFs themselves are processed locally in the browser and never uploaded. Only the text needed for an AI question is sent to OpenAI when you ask something.</p>
+          </details>
+          <details className="faq-item">
+            <summary><span>What gets sent to OpenAI?</span><span className="faq-toggle">+</span></summary>
+            <p>Only the passages you choose to include as context, plus your question and your API key in the request headers. Everything else — file lists, folder names, annotations — stays on your machine.</p>
+          </details>
+          <details className="faq-item">
+            <summary><span>Which browsers does it work in?</span><span className="faq-toggle">+</span></summary>
+            <p>Folder linking requires the File System Access API — Chrome, Edge, Arc, and Brave. Firefox and Safari users can still upload individual PDFs.</p>
+          </details>
+          <details className="faq-item">
+            <summary><span>Can I use a model other than OpenAI?</span><span className="faq-toggle">+</span></summary>
+            <p>Today, OpenAI only — the chat is built around its tool-calling API. Anthropic and local model support is on the roadmap.</p>
+          </details>
+          <details className="faq-item">
+            <summary><span>What about scanned PDFs?</span><span className="faq-toggle">+</span></summary>
+            <p>Built-in OCR runs in a Web Worker. Scanned papers are searchable and citable just like native PDFs.</p>
+          </details>
+        </div>
+      </section>
+
+      <section className="final-cta">
+        <div className="final-cta-art" aria-hidden="true">
+          <Paper className="p1" />
+          <Paper className="p2" />
+          <Paper className="p3" />
+        </div>
+        <div className="final-cta-inner">
+          <span className="section-label">§ 05 &nbsp; Get started</span>
+          <h2 className="final-title">Read smarter, in your browser.<br /><em>Without giving up your data.</em></h2>
+          <p className="final-sub">Open Paperview, paste your OpenAI key, link a folder. The whole setup takes under a minute.</p>
+          <div className="cta-row">
+            <button className="btn btn-light" onClick={openApp}>
+              Open Paperview <span className="arr">→</span>
+            </button>
+            <a className="btn btn-ghost-dark" href={OPENAI_KEY_URL} target="_blank" rel="noopener noreferrer">
+              Get an OpenAI key ↗
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span>© {new Date().getFullYear()} Paperview · No account, no tracking, no backend.</span>
+        <div className="f-right">
+          <button onClick={openApp}>Open app</button>
+          <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href={OPENAI_KEY_URL} target="_blank" rel="noopener noreferrer">Get an OpenAI key ↗</a>
         </div>
       </footer>
     </div>
