@@ -12,6 +12,7 @@ Use the hosted app if you do not want to self-host:
 
 The hosted version runs on Vercel's free tier, so availability and usage limits may vary.
 The hosted app does not include a shared OpenAI API key. Reading, folder storage, and local workspace features run in the browser; AI features require your own OpenAI API key.
+Keys entered in Settings are kept in memory by default. If you choose to remember a key on a device, Paperview stores an encrypted copy in browser storage using a passphrase that is never stored.
 
 ## What Paperview does
 
@@ -64,7 +65,7 @@ git clone https://github.com/Carstenhanekamp/Paperview.git
 cd Paperview
 npm install
 cp .env.example .env.local
-# Add OPENAI_API_KEY to .env.local
+# Optional: add OPENAI_API_KEY to .env.local for the local backend proxy
 npm run dev
 ```
 
@@ -76,11 +77,14 @@ Then open the local Vite URL shown in your terminal.
 OPENAI_API_KEY=your_openai_api_key
 VITE_OPENAI_API_KEY=
 VITE_OPENAI_MODEL=gpt-5.4-mini
+VITE_OPENAI_MODELS=gpt-5.4-nano,gpt-5.4-mini,gpt-5.4
 ```
 
-Use `OPENAI_API_KEY` for local development and deployed environments. The Vite dev server mounts the local API middleware from `api/`, so OpenAI requests can stay server-side during `npm run dev`.
+Use `OPENAI_API_KEY` for local development and deployed environments when you want requests to go through the backend proxy. The Vite dev server mounts the local API middleware from `api/`, so OpenAI requests can stay server-side during `npm run dev`.
 
 `VITE_OPENAI_API_KEY` is only a browser-side development escape hatch. Values prefixed with `VITE_` are exposed to the client bundle, so do not use it for shared deployments or committed examples.
+
+`VITE_OPENAI_MODEL` sets the default model. `VITE_OPENAI_MODELS` controls the comma-separated list shown in model pickers.
 
 ## Scripts
 
@@ -100,7 +104,9 @@ npm run preview
 
 ```text
 src/
+|- __tests are colocated as *.test.js files
 |- App.jsx
+|- DesktopGate.jsx
 |- PaperviewApp.jsx
 |- LandingPage.jsx
 |- PdfViewer.jsx
@@ -109,11 +115,17 @@ src/
 |- chatUtils.js
 |- ragUtils.js
 |- pdfUtils.js
+|- pdfViewerUtils.js
+|- paperPayloadUtils.js
 |- openaiPricing.js
 |- db.js
 |- icons.jsx
 |- styles.js
 `- main.jsx
+
+api/
+|- openai-response.js
+`- fetch-pdf.js
 ```
 
 ## Data Storage
@@ -125,6 +137,7 @@ Paperview stores state locally using IndexedDB and folder snapshots:
 - **annotations**: Highlights and notes with page numbers and timestamps
 - **folderHandles**: Persisted File System Access API handles for local folders
 - **.paperview.json**: Folder snapshot containing chats, agent chats, and annotations
+- **remembered API key**: Optional encrypted browser-storage record, only when a user enables "remember this key" and provides a passphrase
 
 Imported PDFs are written as real files into the selected folder, or into an `Imported Papers` subfolder under the active root.
 
@@ -132,7 +145,7 @@ Imported PDFs are written as real files into the selected folder, or into an `Im
 
 Paperview is local-first, but it does make network requests for:
 
-- OpenAI API inference and tool calls, either directly from the browser or through the optional backend proxy
+- OpenAI API inference and tool calls, either through the backend proxy or directly from the browser when a user supplies a client-side key
 - User-initiated web research through OpenAI web search
 - User-initiated direct PDF downloads when importing papers from search results, preferably through the backend PDF proxy when deployed
 
@@ -140,14 +153,14 @@ Paperview is local-first, but it does make network requests for:
 
 Paperview is ready for early open-source use, with a few areas that would make it more robust and contributor-friendly:
 
-- **Hosted app privacy modes**: Make it clearer when AI requests use a server-side key, a user-provided browser key, or no AI at all.
+- **Self-hosting and privacy guide**: Add a step-by-step Vercel guide with environment variable setup, API-key handling, and privacy notes.
 - **Workspace import/export**: Add a portable archive format for PDFs, annotations, chats, and `.paperview.json` snapshots.
 - **Bibliography metadata**: Detect DOI, arXiv IDs, titles, authors, and publication years for better library search and organization.
 - **Citation review tools**: Let users jump from each answer citation to the exact extracted text span and flag weak or ambiguous citations.
 - **Zotero and BibTeX workflows**: Import/export bibliographic metadata for existing research libraries.
 - **Accessibility and keyboard navigation**: Improve reader, annotation, and chat workflows for keyboard-heavy use.
 - **Smaller app modules**: Split `PaperviewApp.jsx` into focused components and hooks once behavior is covered by tests.
-- **Deployment guide**: Add a step-by-step Vercel self-hosting guide with environment variable setup and privacy notes.
+- **Dependency maintenance**: Keep the Vite, React, and GitHub Actions toolchain current without broad major-version jumps.
 
 ## Contributing
 
