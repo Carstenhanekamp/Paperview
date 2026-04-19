@@ -1,4 +1,4 @@
-# Paperview
+<img width="183" height="54" alt="image" src="https://github.com/user-attachments/assets/0d7a7fc0-4c49-457f-ba6b-509019c376ad" /># Paperview
 
 Paperview is a local-first research paper reader and research agent. Open local folders of PDFs, read and annotate papers, ask grounded questions with citations, search for papers online, and import promising PDFs back onto your own disk.
 
@@ -11,6 +11,7 @@ Use the hosted app if you do not want to self-host:
 **[View Paperview](https://paperview.carstenhanekamp.nl/)**
 
 The hosted version runs on Vercel's free tier, so availability and usage limits may vary.
+The hosted app does not include a shared OpenAI API key. Reading, folder storage, and local workspace features run in the browser; AI features require your own OpenAI API key.
 
 ## What Paperview does
 
