@@ -713,6 +713,7 @@ const CSS = `
 .pv-landing .repo-stat-num.is-star { color: var(--accent-ink); }
 .pv-landing .repo-stat-num.is-loading {
   color: var(--mut); font-style: italic; opacity: .7;
+  color: var(--mut-2); font-style: italic;
 }
 .pv-landing .repo-stat-label {
   font-family: var(--mono); font-size: 10px;
@@ -1338,6 +1339,12 @@ function useGitHubRepo(repo) {
     if (BUILD_TIME_REPO_SNAPSHOT && BUILD_TIME_REPO_SNAPSHOT.stars != null) {
       return BUILD_TIME_REPO_SNAPSHOT;
     }
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed.repo === repo && Date.now() - parsed.ts < STAR_CACHE_TTL) {
+        return parsed.data;
+      }
+    } catch {}
     return null;
   });
   const [loading, setLoading] = useState(data == null);
