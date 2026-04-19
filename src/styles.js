@@ -566,6 +566,13 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);hei
 .settings-toggle-vis{background:none;border:1px solid var(--border);border-radius:5px;padding:5px 8px;cursor:pointer;font-size:11px;color:#666;font-family:inherit;}
 .settings-toggle-vis:hover{background:#f5f5f5;}
 .settings-info{font-size:11px;color:#888;line-height:1.55;margin-top:6px;}
+.settings-panel{margin-top:10px;border:1px solid var(--border);border-radius:8px;background:#fafafa;padding:10px;display:flex;flex-direction:column;gap:8px;}
+.settings-panel-title{font-size:12px;font-weight:700;color:#333;}
+.settings-option{display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12px;color:#4f4b45;line-height:1.45;font-weight:500;}
+.settings-option input{margin-top:2px;accent-color:#111;flex-shrink:0;}
+.settings-subfield{display:flex;flex-direction:column;gap:6px;margin-top:2px;}
+.settings-inline-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.settings-error{margin-top:8px;border:1px solid #f3c4c4;background:#fff5f5;color:#9f1d1d;border-radius:7px;padding:8px 10px;font-size:12px;line-height:1.4;}
 .settings-select{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:#fafafa;color:var(--text);cursor:pointer;}
 .settings-select:focus{outline:none;border-color:var(--accent);}
 .sb-settings-bar{padding:8px 12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:12px;}
