@@ -41,6 +41,9 @@ const OPENAI_MODELS = (import.meta.env.VITE_OPENAI_MODELS || "gpt-5.4-nano,gpt-5
 const AGENT_IMPORTS_FOLDER_NAME = "Imported Papers";
 const OPENAI_PROXY_ENDPOINT = "/api/openai-response";
 const REMOTE_PDF_PROXY_ENDPOINT = "/api/fetch-pdf";
+const LEGACY_STORAGE_NAME = "pv-api-key";
+const REMEMBERED_STORAGE_NAME = "pv-api-key-v2";
+const KDF_ITERATION_COUNT = 250000;
 const AGENT_WEB_SEARCH_DOMAINS = [
   "arxiv.org",
   "biorxiv.org",
@@ -272,11 +275,123 @@ function isPaperTextCacheValid(cacheEntry, paper) {
   );
 }
 
-function getStoredApiKey() {
-  try { return localStorage.getItem('pv-api-key') || ''; } catch { return ''; }
+function getRememberedApiKeyRecord() {
+  try {
+    const raw = localStorage.getItem(REMEMBERED_STORAGE_NAME);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed?.version !== 1 ||
+      parsed?.algorithm !== "AES-GCM" ||
+      parsed?.kdf !== "PBKDF2-SHA-256" ||
+      !parsed?.salt ||
+      !parsed?.iv ||
+      !parsed?.ciphertext
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
 }
-function setStoredApiKey(key) {
-  try { localStorage.setItem('pv-api-key', key); } catch { /* ignore */ }
+
+function hasRememberedApiKey() {
+  return Boolean(getRememberedApiKeyRecord());
+}
+
+function clearLegacyStoredApiKey() {
+  try { localStorage.removeItem(LEGACY_STORAGE_NAME); } catch { /* ignore */ }
+}
+
+function clearRememberedApiKey() {
+  try { localStorage.removeItem(REMEMBERED_STORAGE_NAME); } catch { /* ignore */ }
+  clearLegacyStoredApiKey();
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return window.btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function deriveApiKeyStorageKey(passphrase, salt) {
+  const cryptoApi = window.crypto;
+  if (!cryptoApi?.subtle) {
+    throw new Error("Encrypted key storage requires Web Crypto support.");
+  }
+  const encoder = new TextEncoder();
+  const keyMaterial = await cryptoApi.subtle.importKey(
+    "raw",
+    encoder.encode(passphrase),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  return cryptoApi.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: KDF_ITERATION_COUNT,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function rememberApiKeyEncrypted(valueToEncrypt, passphrase) {
+  const cryptoApi = window.crypto;
+  if (!cryptoApi?.subtle) {
+    throw new Error("Encrypted key storage requires Web Crypto support.");
+  }
+  const salt = cryptoApi.getRandomValues(new Uint8Array(16));
+  const iv = cryptoApi.getRandomValues(new Uint8Array(12));
+  const key = await deriveApiKeyStorageKey(passphrase, salt);
+  const ciphertext = await cryptoApi.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(valueToEncrypt),
+  );
+  const record = {
+    version: 1,
+    algorithm: "AES-GCM",
+    kdf: "PBKDF2-SHA-256",
+    iterations: KDF_ITERATION_COUNT,
+    salt: bytesToBase64(salt),
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+  };
+  // This persists only encrypted ciphertext plus non-secret decryption metadata.
+  localStorage.setItem(REMEMBERED_STORAGE_NAME, JSON.stringify(record));
+  clearLegacyStoredApiKey();
+}
+
+async function unlockRememberedApiKey(passphrase) {
+  const record = getRememberedApiKeyRecord();
+  if (!record) {
+    throw new Error("No remembered API key was found on this device.");
+  }
+  const salt = base64ToBytes(record.salt);
+  const iv = base64ToBytes(record.iv);
+  const key = await deriveApiKeyStorageKey(passphrase, salt);
+  const plaintext = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    key,
+    base64ToBytes(record.ciphertext),
+  );
+  return new TextDecoder().decode(plaintext);
 }
 
 function stripPdfExtension(name) {
@@ -950,12 +1065,21 @@ export default function PaperviewApp() {
   const [scale, setScale] = useState(1.4);
   const [chatWidth, setChatWidth] = useState(480);
   const [sidebarWidth, setSidebarWidth] = useState(260);
-  const [apiKey, setApiKey] = useState(() => getStoredApiKey() || ENV_API_KEY);
+  const [apiKey, setApiKey] = useState(() => ENV_API_KEY);
+  const [apiKeySource, setApiKeySource] = useState(() => (ENV_API_KEY ? "env" : "none"));
+  const [rememberedApiKeyAvailable, setRememberedApiKeyAvailable] = useState(() => hasRememberedApiKey());
   const [privacyAccepted, setPrivacyAccepted] = useState(() => !!localStorage.getItem('pv-privacy-ok'));
   const [showFolderPermModal, setShowFolderPermModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsKey, setSettingsKey] = useState('');
   const [settingsKeyVisible, setSettingsKeyVisible] = useState(false);
+  const [rememberApiKey, setRememberApiKey] = useState(false);
+  const [settingsPassphrase, setSettingsPassphrase] = useState('');
+  const [settingsPassphraseVisible, setSettingsPassphraseVisible] = useState(false);
+  const [unlockPassphrase, setUnlockPassphrase] = useState('');
+  const [unlockPassphraseVisible, setUnlockPassphraseVisible] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsBusy, setSettingsBusy] = useState(false);
   const [edgeToast, setEdgeToast] = useState(false);
   const [annotations, setAnnotations] = useState([]);
   const [annPopover, setAnnPopover] = useState(null);
@@ -1022,6 +1146,95 @@ export default function PaperviewApp() {
     chatRequestRef.current.controller?.abort();
     agentRequestRef.current.controller?.abort();
   }, []);
+  useEffect(() => {
+    clearLegacyStoredApiKey();
+    setRememberedApiKeyAvailable(hasRememberedApiKey());
+  }, []);
+
+  const resetSettingsInputs = useCallback(() => {
+    setSettingsKey("");
+    setSettingsKeyVisible(false);
+    setRememberApiKey(false);
+    setSettingsPassphrase("");
+    setSettingsPassphraseVisible(false);
+    setUnlockPassphrase("");
+    setUnlockPassphraseVisible(false);
+    setSettingsError("");
+  }, []);
+
+  const openSettingsModal = useCallback((prefill = "") => {
+    resetSettingsInputs();
+    setSettingsKey(prefill);
+    setShowSettings(true);
+  }, [resetSettingsInputs]);
+
+  const closeSettingsModal = useCallback(() => {
+    if (settingsBusy) return;
+    setShowSettings(false);
+    resetSettingsInputs();
+  }, [resetSettingsInputs, settingsBusy]);
+
+  const handleRemoveApiKey = useCallback(() => {
+    setApiKey("");
+    setApiKeySource("none");
+    clearRememberedApiKey();
+    setRememberedApiKeyAvailable(false);
+    resetSettingsInputs();
+  }, [resetSettingsInputs]);
+
+  const handleUnlockRememberedApiKey = useCallback(async () => {
+    const passphrase = unlockPassphrase.trim();
+    if (!passphrase) {
+      setSettingsError("Enter the passphrase used to remember this key.");
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsError("");
+    try {
+      const unlocked = await unlockRememberedApiKey(passphrase);
+      setApiKey(unlocked);
+      setApiKeySource("remembered");
+      setShowSettings(false);
+      resetSettingsInputs();
+    } catch {
+      setSettingsError("Could not unlock the remembered key. Check the passphrase and try again.");
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [resetSettingsInputs, unlockPassphrase]);
+
+  const handleSaveSettingsApiKey = useCallback(async () => {
+    const trimmed = settingsKey.trim();
+    const passphrase = settingsPassphrase.trim();
+    if (!trimmed) {
+      setSettingsError("Enter an OpenAI API key first.");
+      return;
+    }
+    if (rememberApiKey && passphrase.length < 8) {
+      setSettingsError("Use at least 8 characters for the encryption passphrase.");
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsError("");
+    try {
+      if (rememberApiKey) {
+        await rememberApiKeyEncrypted(trimmed, passphrase);
+        setRememberedApiKeyAvailable(true);
+        setApiKeySource("remembered");
+      } else {
+        clearRememberedApiKey();
+        setRememberedApiKeyAvailable(false);
+        setApiKeySource("memory");
+      }
+      setApiKey(trimmed);
+      setShowSettings(false);
+      resetSettingsInputs();
+    } catch (error) {
+      setSettingsError(error?.message || "Could not save this API key securely.");
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [rememberApiKey, resetSettingsInputs, settingsKey, settingsPassphrase]);
 
   // Restore previously opened folders from IndexedDB (runs after scanDirHandle is defined)
   useEffect(() => {
@@ -2956,9 +3169,7 @@ export default function PaperviewApp() {
         return;
       }
       if (/No OpenAI API key is configured/i.test(e?.message || "")) {
-        setShowSettings(true);
-        setSettingsKey("");
-        setSettingsKeyVisible(false);
+        openSettingsModal("");
       }
       appendMessageToChat(targetChatId, {
         id: createChatMessageId(),
@@ -3641,9 +3852,7 @@ export default function PaperviewApp() {
       }
       const rawMessage = error?.message || String(error);
       if (/No OpenAI API key is configured/i.test(rawMessage)) {
-        setShowSettings(true);
-        setSettingsKey("");
-        setSettingsKeyVisible(false);
+        openSettingsModal("");
       }
       const friendlyMessage = /web_search|unsupported|not supported/i.test(rawMessage)
         ? `The selected model (${selectedModel}) could not use web search. Choose a model with tool support and try again.`
@@ -4721,9 +4930,9 @@ export default function PaperviewApp() {
             </div>
 
             <div className="sb-settings-bar">
-              <span className="sb-settings-dot" style={{ background: apiKey ? '#22c55e' : '#ef4444' }} />
-              <span className="sb-settings-label">{apiKey ? `API key ••••${apiKey.slice(-4)}` : 'No API key'}</span>
-              <button className="sb-settings-gear" onClick={() => { setSettingsKey(apiKey); setSettingsKeyVisible(false); setShowSettings(true); }} title="Settings"><IGear size={14} /></button>
+              <span className="sb-settings-dot" style={{ background: apiKey ? '#22c55e' : rememberedApiKeyAvailable ? '#f59e0b' : '#ef4444' }} />
+              <span className="sb-settings-label">{apiKey ? `API key ••••${apiKey.slice(-4)}` : rememberedApiKeyAvailable ? 'API key saved (locked)' : 'No API key'}</span>
+              <button className="sb-settings-gear" onClick={() => openSettingsModal(apiKey)} title="Settings"><IGear size={14} /></button>
             </div>
 
             <div className="sb-footer">
@@ -6123,51 +6332,156 @@ export default function PaperviewApp() {
         )}
 
         {showSettings && (
-          <div className="ov" onClick={() => setShowSettings(false)}>
+          <div className="ov" onClick={closeSettingsModal}>
             <div className="modal" onClick={(e) => e.stopPropagation()}>
               <div className="m-hd">
                 <span className="m-title">Settings</span>
-                <button className="m-x" onClick={() => setShowSettings(false)}><IClose /></button>
+                <button className="m-x" onClick={closeSettingsModal}><IClose /></button>
               </div>
 
               <div className="settings-field">
                 <label className="settings-label">OpenAI API Key</label>
                 {apiKey ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="settings-input" style={{ flex: 1, display: 'flex', alignItems: 'center', background: '#fff', cursor: 'default', color: 'var(--text2)' }}>
-                      {'•'.repeat(Math.min(apiKey.length, 20))}{'…' + apiKey.slice(-4)}
-                    </span>
-                    <button className="btn-sec" style={{ whiteSpace: 'nowrap', flexShrink: 0 }} onClick={() => {
-                      setApiKey('');
-                      setStoredApiKey('');
-                    }}>Remove</button>
-                  </div>
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="settings-input" style={{ flex: 1, display: 'flex', alignItems: 'center', background: '#fff', cursor: 'default', color: 'var(--text2)' }}>
+                        {'•'.repeat(Math.min(apiKey.length, 20))}{'…' + apiKey.slice(-4)}
+                      </span>
+                      <button className="btn-sec" style={{ whiteSpace: 'nowrap', flexShrink: 0 }} onClick={handleRemoveApiKey} disabled={settingsBusy}>Remove</button>
+                    </div>
+                    <p className="settings-info">
+                      {apiKeySource === "remembered"
+                        ? "This key was unlocked from encrypted browser storage for the current session."
+                        : "This key is available in memory for the current browser session."}
+                    </p>
+                    {apiKeySource !== "remembered" && (
+                      <div className="settings-panel">
+                        <label className="settings-option">
+                          <input
+                            type="checkbox"
+                            checked={rememberApiKey}
+                            onChange={(e) => {
+                              setRememberApiKey(e.target.checked);
+                              setSettingsError("");
+                            }}
+                          />
+                          <span>Remember this key on this device with passphrase encryption.</span>
+                        </label>
+                        {rememberApiKey && (
+                          <div className="settings-subfield">
+                            <label className="settings-label">Encryption passphrase</label>
+                            <div className="settings-input-wrap">
+                              <input
+                                className="settings-input"
+                                type={settingsPassphraseVisible ? "text" : "password"}
+                                value={settingsPassphrase}
+                                onChange={(e) => setSettingsPassphrase(e.target.value)}
+                                placeholder="At least 8 characters"
+                                autoComplete="new-password"
+                              />
+                              <button className="settings-toggle-vis" onClick={() => setSettingsPassphraseVisible((v) => !v)} type="button">
+                                {settingsPassphraseVisible ? "Hide" : "Show"}
+                              </button>
+                            </div>
+                            <p className="settings-info">The passphrase is not stored. You will need it to unlock this key after reloading Paperview.</p>
+                          </div>
+                        )}
+                        <button className="btn-sec" type="button" disabled={!rememberApiKey || settingsBusy} onClick={handleSaveSettingsApiKey}>
+                          {settingsBusy ? "Saving..." : "Remember key"}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 ) : (
-                  <div className="settings-input-wrap">
-                    <input
-                      className="settings-input"
-                      type="password"
-                      value={settingsKey}
-                      onChange={(e) => setSettingsKey(e.target.value)}
-                      placeholder="sk-..."
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </div>
+                  <>
+                    {rememberedApiKeyAvailable && (
+                      <div className="settings-panel">
+                        <div className="settings-panel-title">Encrypted key saved on this device</div>
+                        <p className="settings-info">Enter the passphrase you used when saving it. The passphrase is not stored and cannot be recovered.</p>
+                        <div className="settings-input-wrap">
+                          <input
+                            className="settings-input"
+                            type={unlockPassphraseVisible ? "text" : "password"}
+                            value={unlockPassphrase}
+                            onChange={(e) => setUnlockPassphrase(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleUnlockRememberedApiKey();
+                            }}
+                            placeholder="Passphrase"
+                            autoComplete="current-password"
+                          />
+                          <button className="settings-toggle-vis" onClick={() => setUnlockPassphraseVisible((v) => !v)} type="button">
+                            {unlockPassphraseVisible ? "Hide" : "Show"}
+                          </button>
+                        </div>
+                        <div className="settings-inline-actions">
+                          <button className="btn-sec" type="button" onClick={handleUnlockRememberedApiKey} disabled={settingsBusy}>
+                            {settingsBusy ? "Unlocking..." : "Unlock"}
+                          </button>
+                          <button className="btn-sec" type="button" onClick={() => {
+                            clearRememberedApiKey();
+                            setRememberedApiKeyAvailable(false);
+                            setUnlockPassphrase("");
+                            setSettingsError("");
+                          }} disabled={settingsBusy}>Forget saved key</button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="settings-input-wrap">
+                      <input
+                        className="settings-input"
+                        type={settingsKeyVisible ? "text" : "password"}
+                        value={settingsKey}
+                        onChange={(e) => setSettingsKey(e.target.value)}
+                        placeholder="sk-..."
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <button className="settings-toggle-vis" onClick={() => setSettingsKeyVisible((v) => !v)} type="button">
+                        {settingsKeyVisible ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                    <label className="settings-option">
+                      <input
+                        type="checkbox"
+                        checked={rememberApiKey}
+                        onChange={(e) => {
+                          setRememberApiKey(e.target.checked);
+                          setSettingsError("");
+                        }}
+                      />
+                      <span>Remember this key on this device with passphrase encryption.</span>
+                    </label>
+                    {rememberApiKey && (
+                      <div className="settings-subfield">
+                        <label className="settings-label">Encryption passphrase</label>
+                        <div className="settings-input-wrap">
+                          <input
+                            className="settings-input"
+                            type={settingsPassphraseVisible ? "text" : "password"}
+                            value={settingsPassphrase}
+                            onChange={(e) => setSettingsPassphrase(e.target.value)}
+                            placeholder="At least 8 characters"
+                            autoComplete="new-password"
+                          />
+                          <button className="settings-toggle-vis" onClick={() => setSettingsPassphraseVisible((v) => !v)} type="button">
+                            {settingsPassphraseVisible ? "Hide" : "Show"}
+                          </button>
+                        </div>
+                        <p className="settings-info">The passphrase is not stored. You will need it to unlock this key after reloading Paperview.</p>
+                      </div>
+                    )}
+                  </>
                 )}
-                <p className="settings-info">To use AI features, add your OpenAI API key in Settings. It stays in this browser. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
+                <p className="settings-info">To use AI features, add your own OpenAI API key. By default it is kept in memory only. If you choose to remember it, Paperview stores an encrypted copy in this browser and you should only use that on trusted devices. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
+                {settingsError && <div className="settings-error">{settingsError}</div>}
               </div>
 
               <div className="m-acts">
-                <button className="btn-sec" onClick={() => setShowSettings(false)}>Cancel</button>
-                {!apiKey && <button className="btn-pri" onClick={() => {
-                  const trimmed = settingsKey.trim();
-                  if (trimmed) {
-                    setApiKey(trimmed);
-                    setStoredApiKey(trimmed);
-                  }
-                  setShowSettings(false);
-                }}>Save</button>}
+                <button className="btn-sec" onClick={closeSettingsModal} disabled={settingsBusy}>Cancel</button>
+                {!apiKey && <button className="btn-pri" onClick={handleSaveSettingsApiKey} disabled={settingsBusy}>
+                  {settingsBusy ? "Saving..." : "Save"}
+                </button>}
               </div>
             </div>
           </div>
@@ -6222,7 +6536,7 @@ export default function PaperviewApp() {
                 {[
                   { green:true,  text:'Your PDF files are processed locally and never uploaded to us.' },
                   { green:true,  text:'Chat history and annotations are saved in your browser and synced to a .paperview.json file inside your folder.' },
-                  { green:true,  text:'Your API key is stored in your browser\'s localStorage only.' },
+                  { green:true,  text:'Your API key is kept in memory by default; remembered keys are encrypted in this browser with your passphrase.' },
                   { green:false, text:'PDF text is sent to OpenAI when you send a message.' },
                   { green:false, text:'Your API key is sent from the browser only when you use a client-side key instead of the backend proxy.' },
                 ].map((item, i) => (
