@@ -75,11 +75,40 @@ function createDevApiPlugin() {
   };
 }
 
-export default defineConfig(({ mode }) => {
+async function fetchRepoSnapshot() {
+  const repo = "Carstenhanekamp/paperview";
+  try {
+    const headers = { Accept: "application/vnd.github+json" };
+    if (process.env.GITHUB_TOKEN) {
+      headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+    const res = await fetch(`https://api.github.com/repos/${repo}`, { headers });
+    if (!res.ok) throw new Error(`gh ${res.status}`);
+    const json = await res.json();
+    return {
+      stars: typeof json.stargazers_count === "number" ? json.stargazers_count : null,
+      forks: typeof json.forks_count === "number" ? json.forks_count : null,
+      language: json.language || null,
+      license: json.license?.spdx_id || null,
+      updatedAt: json.pushed_at || json.updated_at || null,
+      fetchedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    console.warn("[vite] GitHub repo snapshot failed:", err?.message || err);
+    return null;
+  }
+}
+
+export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   Object.assign(process.env, env);
 
+  const repoSnapshot = await fetchRepoSnapshot();
+
   return {
+    define: {
+      __GH_REPO_SNAPSHOT__: JSON.stringify(repoSnapshot),
+    },
     plugins: [
       react(),
       createDevApiPlugin(),

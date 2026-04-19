@@ -712,7 +712,7 @@ const CSS = `
 }
 .pv-landing .repo-stat-num.is-star { color: var(--accent-ink); }
 .pv-landing .repo-stat-num.is-loading {
-  color: var(--mut-2); font-style: italic;
+  color: var(--mut); font-style: italic; opacity: .7;
 }
 .pv-landing .repo-stat-label {
   font-family: var(--mono); font-size: 10px;
@@ -1321,21 +1321,32 @@ function formatStars(n) {
   return Math.round(n / 1000) + "k";
 }
 
+const BUILD_TIME_REPO_SNAPSHOT =
+  typeof __GH_REPO_SNAPSHOT__ !== "undefined" ? __GH_REPO_SNAPSHOT__ : null;
+
 function useGitHubRepo(repo) {
   const [data, setData] = useState(() => {
     try {
       const raw = localStorage.getItem(STAR_CACHE_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed.repo === repo && Date.now() - parsed.ts < STAR_CACHE_TTL) {
-        return parsed.data;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.repo === repo && Date.now() - parsed.ts < STAR_CACHE_TTL) {
+          return parsed.data;
+        }
       }
     } catch {}
+    if (BUILD_TIME_REPO_SNAPSHOT && BUILD_TIME_REPO_SNAPSHOT.stars != null) {
+      return BUILD_TIME_REPO_SNAPSHOT;
+    }
     return null;
   });
   const [loading, setLoading] = useState(data == null);
 
   useEffect(() => {
+    if (data && data.stars != null) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     const controller = new AbortController();
     fetch(`https://api.github.com/repos/${repo}`, {
