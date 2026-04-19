@@ -1339,12 +1339,6 @@ function useGitHubRepo(repo) {
     if (BUILD_TIME_REPO_SNAPSHOT && BUILD_TIME_REPO_SNAPSHOT.stars != null) {
       return BUILD_TIME_REPO_SNAPSHOT;
     }
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed.repo === repo && Date.now() - parsed.ts < STAR_CACHE_TTL) {
-        return parsed.data;
-      }
-    } catch {}
     return null;
   });
   const [loading, setLoading] = useState(data == null);
