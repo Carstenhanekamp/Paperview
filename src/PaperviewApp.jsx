@@ -2649,6 +2649,34 @@ export default function PaperviewApp() {
     });
   };
 
+  // Insert or update a step in-place by id (used for live token streaming).
+  const upsertStep = (setSteps, stepsRef, step) => {
+    setSteps((prev) => {
+      const idx = prev.findIndex((s) => s.id === step.id);
+      const next = idx === -1
+        ? [...prev, step]
+        : prev.map((s, i) => (i === idx ? { ...s, ...step } : s));
+      stepsRef.current = next;
+      return next;
+    });
+  };
+
+  // Build an onChunk handler that streams <think> tokens into a single live
+  // reasoning step, updating it in place as tokens arrive. For the OpenAI path
+  // (no streaming) getText() returns "" so callers fall back to the post-response
+  // reasoning summary.
+  const createThinkingStreamer = (setSteps, stepsRef, chatId, label = "Reasoning") => {
+    let body = "";
+    let stepId = null;
+    const onChunk = ({ type, token }) => {
+      if (type !== "thinking" || !token) return;
+      body += token;
+      if (!stepId) stepId = `ts-live-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      upsertStep(setSteps, stepsRef, { id: stepId, chatId, type: "reasoning", label, body });
+    };
+    return { onChunk, getText: () => body };
+  };
+
   const beginRequestRun = useCallback((requestRef, chatId) => {
     requestRef.current.controller?.abort();
     const controller = new AbortController();
@@ -2733,12 +2761,7 @@ export default function PaperviewApp() {
         reasoning: { effort: "low", summary: "detailed" },
       };
 
-      let streamedThinking = '';
-      const onChunk = ({ type, token }) => {
-        if (type === 'thinking') streamedThinking += token;
-      };
-
-      streamedThinking = '';
+      let streamer = createThinkingStreamer(setThinkingSteps, thinkingStepsRef, targetChatId, "Reasoning");
       let data = await requestModelResponse({
         ...basePayload,
         input: [
@@ -2751,11 +2774,15 @@ export default function PaperviewApp() {
             content: `Available documents: ${availableDocumentNames}\n\nQuestion: ${text}\n\nUse the search_document tool to retrieve evidence before answering. Respond in JSON format.`,
           },
         ],
-      }, { apiKey, signal: controller.signal, onChunk });
+      }, { apiKey, signal: controller.signal, onChunk: streamer.onChunk });
       ensureRequestRunActive(chatRequestRef, token);
       addUsageTotals(usageTotals, data?.usage);
-      const reasoning1 = streamedThinking || extractReasoningSummary(data);
-      if (reasoning1) pushThinkingStep({ id: `ts-${Date.now()}-r1`, chatId: targetChatId, type: "reasoning", label: "Reasoning", body: reasoning1 });
+      // Live streaming already rendered the reasoning in place; only fall back to
+      // the post-response summary for the non-streaming (OpenAI) path.
+      if (!streamer.getText()) {
+        const reasoning1 = extractReasoningSummary(data);
+        if (reasoning1) pushThinkingStep({ id: `ts-${Date.now()}-r1`, chatId: targetChatId, type: "reasoning", label: "Reasoning", body: reasoning1 });
+      }
 
       let rounds = 0;
       while (rounds < MAX_SEARCH_TOOL_ROUNDS) {
@@ -2827,16 +2854,18 @@ export default function PaperviewApp() {
           pushThinkingStep({ id: `ts-${Date.now()}-r${rounds}-${r.paperName}`, chatId: targetChatId, type: "result", label: r.notFound ? `Document not found: "${r.paperName}"` : `Found ${r.passageCount} passage${r.passageCount !== 1 ? "s" : ""} in "${r.paperName}"` });
         }
 
-        streamedThinking = '';
+        streamer = createThinkingStreamer(setThinkingSteps, thinkingStepsRef, targetChatId, "Continued reasoning");
         data = await requestModelResponse({
           ...basePayload,
           previous_response_id: data.id,
           input: toolOutputs,
-        }, { apiKey, signal: controller.signal, onChunk });
+        }, { apiKey, signal: controller.signal, onChunk: streamer.onChunk });
         ensureRequestRunActive(chatRequestRef, token);
         addUsageTotals(usageTotals, data?.usage);
-        const reasoningN = streamedThinking || extractReasoningSummary(data);
-        if (reasoningN) pushThinkingStep({ id: `ts-${Date.now()}-rn${rounds}`, chatId: targetChatId, type: "reasoning", label: "Continued reasoning", body: reasoningN });
+        if (!streamer.getText()) {
+          const reasoningN = extractReasoningSummary(data);
+          if (reasoningN) pushThinkingStep({ id: `ts-${Date.now()}-rn${rounds}`, chatId: targetChatId, type: "reasoning", label: "Continued reasoning", body: reasoningN });
+        }
       }
 
       // If still tool calls after max rounds, proceed anyway with the last response that has text
@@ -3038,69 +3067,16 @@ export default function PaperviewApp() {
         reasoning: { effort: reasoningEffort, summary: "detailed" },
         ...(enabledTools.length ? { tools: enabledTools, tool_choice: "auto" } : {}),
       };
-      const normalizeParsedAgentResponse = (responseData) => {
-        const raw = extractResponseOutputText(responseData);
-        const tryParseJson = (str) => {
-          try {
-            const parsed = JSON.parse(str);
-            if (parsed?.answer) return parsed;
-          } catch {}
-          try {
-            const parsed = JSON.parse(sanitizeJsonNewlines(str));
-            if (parsed?.answer) return parsed;
-          } catch {}
-          return null;
-        };
-        // Find the { that begins the actual JSON response object by scanning all { positions.
-        // The greedy /\{[\s\S]*\}/ fails when the model prefixes the JSON with prose containing
-        // curly braces (e.g. "{EEG markers}"), so we try each { from last to first.
-        const lastBrace = raw.lastIndexOf('}');
-        if (lastBrace !== -1) {
-          let pos = raw.indexOf('{');
-          const starts = [];
-          while (pos !== -1 && pos <= lastBrace) {
-            starts.push(pos);
-            pos = raw.indexOf('{', pos + 1);
-          }
-          for (let i = starts.length - 1; i >= 0; i--) {
-            const result = tryParseJson(raw.slice(starts[i], lastBrace + 1));
-            if (result) {
-              return {
-                parsed: result,
-                parsedJson: true,
-                raw,
-              };
-            }
-          }
-        }
-        return {
-          parsed: { answer: raw.replace(/```json|```/g, "").trim(), citations: [], paper_results: [] },
-          parsedJson: false,
-          raw,
-        };
-      };
-
-      const normalizePaperResults = (paperResults = []) =>
-        paperResults
-          .map((result, index) => {
-            const sourceUrl = normalizeAgentSourceUrl(result?.source_url || result?.sourceUrl || result?.url || result?.landing_url || "");
-            const pdfUrl = normalizeAgentSourceUrl(result?.pdf_url || result?.pdfUrl || "");
-            return {
-              id: result?.id || `paper-result-${targetChatId}-${Date.now()}-${index}`,
-              title: String(result?.title || `Paper ${index + 1}`),
-              authors: Array.isArray(result?.authors)
-                ? result.authors.map((author) => String(author || "").trim()).filter(Boolean)
-                : String(result?.authors || "").split(/,\s*/).filter(Boolean),
-              year: result?.year ? String(result.year) : "",
-              venue: String(result?.venue || result?.journal || result?.source || ""),
-              abstract: String(result?.abstract || ""),
-              summary: summarizeToWordLimit(result?.summary || result?.abstract || ""),
-              sourceUrl,
-              pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
-              doi: String(result?.doi || ""),
-            };
-          })
-          .filter((result) => result.title || result.sourceUrl);
+      // normalizeParsedAgentResponse and normalizePaperResults are imported from
+      // ./agentUtils. Bind the workspace-specific dependencies here so the call
+      // sites stay terse.
+      const normalizeAgentPaperResults = (paperResults = []) =>
+        normalizePaperResults(paperResults, {
+          targetChatId,
+          normalizeUrl: normalizeAgentSourceUrl,
+          summarize: summarizeToWordLimit,
+          isPdf: isPdfUrl,
+        });
 
       const collectWebSources = (responseData, label, type = "search") => {
         const passSources = extractWebSearchSources(responseData);
@@ -3144,7 +3120,7 @@ export default function PaperviewApp() {
             label: attempt === 0 ? "Finalizing the answer cleanly..." : "Retrying final answer formatting...",
           });
 
-          let finalStreamedThinking = '';
+          const finalStreamer = createThinkingStreamer(setAgentThinkingSteps, agentThinkingStepsRef, targetChatId, "Final answer reasoning");
           current = await requestModelResponse({
             model: selectedModel,
             previous_response_id: current.id,
@@ -3162,10 +3138,10 @@ export default function PaperviewApp() {
                 content: "Return the final answer again from scratch as one complete JSON object only. Keep the citations and paper_results complete, and if you need to save tokens, compress the answer wording before omitting citations. Do not call any more tools.",
               },
             ],
-          }, { apiKey, signal: controller.signal, onChunk: ({ type, token }) => { if (type === 'thinking') finalStreamedThinking += token; } });
+          }, { apiKey, signal: controller.signal, onChunk: finalStreamer.onChunk });
           ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, current?.usage);
-          const finalReasoning = finalStreamedThinking || extractReasoningSummary(current);
+          const finalReasoning = finalStreamer.getText() ? "" : extractReasoningSummary(current);
           if (finalReasoning) {
             pushAgentThinkingStep({
               id: `ats-${Date.now()}-finalize-reason-${attempt + 1}`,
@@ -3182,12 +3158,12 @@ export default function PaperviewApp() {
       };
 
       const runAgentPass = async ({ input: passInput, previousResponseId = null, passNumber = 1 }) => {
-        let passStreamedThinking = '';
+        const passStreamer = createThinkingStreamer(setAgentThinkingSteps, agentThinkingStepsRef, targetChatId, passNumber === 1 ? "Reasoning" : `Reasoning pass ${passNumber}`);
         let responseData = await requestModelResponse({
           ...basePayload,
           ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           input: passInput,
-        }, { apiKey, signal: controller.signal, onChunk: ({ type, token }) => { if (type === 'thinking') passStreamedThinking += token; } });
+        }, { apiKey, signal: controller.signal, onChunk: passStreamer.onChunk });
         ensureRequestRunActive(agentRequestRef, token);
         addUsageTotals(usageTotals, responseData?.usage);
         collectWebSources(
@@ -3196,7 +3172,7 @@ export default function PaperviewApp() {
             ? `Web search discovered ${extractWebSearchSources(responseData).length} candidate source${extractWebSearchSources(responseData).length === 1 ? "" : "s"}.`
             : `Research pass ${passNumber} discovered ${extractWebSearchSources(responseData).length} more candidate source${extractWebSearchSources(responseData).length === 1 ? "" : "s"}.`
         );
-        const initialReasoning = passStreamedThinking || extractReasoningSummary(responseData);
+        const initialReasoning = passStreamer.getText() ? "" : extractReasoningSummary(responseData);
         if (initialReasoning) {
           pushAgentThinkingStep({
             id: `ats-${Date.now()}-reason-${passNumber}`,
@@ -3332,12 +3308,12 @@ export default function PaperviewApp() {
             });
           }
 
-          let cycleStreamedThinking = '';
+          const cycleStreamer = createThinkingStreamer(setAgentThinkingSteps, agentThinkingStepsRef, targetChatId, "Continued reasoning");
           responseData = await requestModelResponse({
             ...basePayload,
             previous_response_id: responseData.id,
             input: toolOutputs,
-          }, { apiKey, signal: controller.signal, onChunk: ({ type, token }) => { if (type === 'thinking') cycleStreamedThinking += token; } });
+          }, { apiKey, signal: controller.signal, onChunk: cycleStreamer.onChunk });
           ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, responseData?.usage);
           collectWebSources(
@@ -3345,7 +3321,7 @@ export default function PaperviewApp() {
             `Web search now has ${extractWebSearchSources(responseData).length} consulted source${extractWebSearchSources(responseData).length === 1 ? "" : "s"} in play.`,
             "result"
           );
-          const continuedReasoning = cycleStreamedThinking || extractReasoningSummary(responseData);
+          const continuedReasoning = cycleStreamer.getText() ? "" : extractReasoningSummary(responseData);
           if (continuedReasoning) {
             pushAgentThinkingStep({
               id: `ats-${Date.now()}-reason-next-${toolCycles}`,
@@ -3379,7 +3355,7 @@ export default function PaperviewApp() {
 
       let parseResult = normalizeParsedAgentResponse(data);
       let parsed = parseResult.parsed;
-      collectedPaperResults = normalizePaperResults(parsed.paper_results || []);
+      collectedPaperResults = normalizeAgentPaperResults(parsed.paper_results || []);
       let foundSourcesMeta = buildFoundSources({
         paperResults: collectedPaperResults,
         webSources: collectedWebSources,
@@ -3413,7 +3389,7 @@ export default function PaperviewApp() {
         parsed = parseResult.parsed;
         collectedPaperResults = [
           ...collectedPaperResults,
-          ...normalizePaperResults(parsed.paper_results || []),
+          ...normalizeAgentPaperResults(parsed.paper_results || []),
         ];
         foundSourcesMeta = buildFoundSources({
           paperResults: collectedPaperResults,
@@ -3445,7 +3421,7 @@ export default function PaperviewApp() {
       parsed = parseResult.parsed;
       collectedPaperResults = [
         ...collectedPaperResults,
-        ...normalizePaperResults(parsed.paper_results || []),
+        ...normalizeAgentPaperResults(parsed.paper_results || []),
       ];
       foundSourcesMeta = buildFoundSources({
         paperResults: collectedPaperResults,
