@@ -30,6 +30,26 @@ import PdfViewer from './PdfViewer';
 import { selectRelevantPassages } from './ragUtils';
 import { addUsageTotals, createUsageTotals, getUsageBreakdown, formatTokenCount, formatUsd } from './openaiPricing';
 import { evictUnpinnedPayloads, mergePaperWithPayload, pickPaperPayload, stripPaperPayload } from './paperPayloadUtils';
+import {
+  PROVIDERS,
+  getProviderConfig,
+  requestModelResponse,
+  extractResponseOutputText,
+  extractFunctionCalls,
+  extractWebSearchSources,
+  extractReasoningSummary,
+  isResponseIncompleteForMaxOutput,
+} from './llmProvider';
+import { normalizeParsedAgentResponse, normalizePaperResults, formatAvailableDocuments } from './agentUtils';
+import SettingsModal from './SettingsModal';
+import ThinkingTrace from './ThinkingTrace';
+import {
+  hasRememberedApiKey,
+  clearRememberedApiKey,
+  clearLegacyStoredApiKey,
+  rememberApiKeyEncrypted,
+  unlockRememberedApiKey,
+} from './cryptoStorage';
 
 const ENV_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || '';
 const OPENAI_MODEL = import.meta.env.VITE_OPENAI_MODEL || "gpt-5.4-mini";
@@ -37,13 +57,14 @@ const OPENAI_MODELS = (import.meta.env.VITE_OPENAI_MODELS || "gpt-5.4-nano,gpt-5
   .split(",")
   .map((m) => m.trim())
   .filter(Boolean);
+const OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL || "gemma4:12b";
+const OLLAMA_MODELS = (import.meta.env.VITE_OLLAMA_MODELS || "gemma4:12b")
+  .split(",")
+  .map((m) => m.trim())
+  .filter(Boolean);
 
 const AGENT_IMPORTS_FOLDER_NAME = "Imported Papers";
-const OPENAI_PROXY_ENDPOINT = "/api/openai-response";
 const REMOTE_PDF_PROXY_ENDPOINT = "/api/fetch-pdf";
-const LEGACY_STORAGE_NAME = "pv-api-key";
-const REMEMBERED_STORAGE_NAME = "pv-api-key-v2";
-const KDF_ITERATION_COUNT = 250000;
 const AGENT_WEB_SEARCH_DOMAINS = [
   "arxiv.org",
   "biorxiv.org",
@@ -273,125 +294,6 @@ function isPaperTextCacheValid(cacheEntry, paper) {
     Array.isArray(cacheEntry.pageTexts) &&
     Number.isFinite(cacheEntry.totalPages)
   );
-}
-
-function getRememberedApiKeyRecord() {
-  try {
-    const raw = localStorage.getItem(REMEMBERED_STORAGE_NAME);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (
-      parsed?.version !== 1 ||
-      parsed?.algorithm !== "AES-GCM" ||
-      parsed?.kdf !== "PBKDF2-SHA-256" ||
-      !parsed?.salt ||
-      !parsed?.iv ||
-      !parsed?.ciphertext
-    ) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function hasRememberedApiKey() {
-  return Boolean(getRememberedApiKeyRecord());
-}
-
-function clearLegacyStoredApiKey() {
-  try { localStorage.removeItem(LEGACY_STORAGE_NAME); } catch { /* ignore */ }
-}
-
-function clearRememberedApiKey() {
-  try { localStorage.removeItem(REMEMBERED_STORAGE_NAME); } catch { /* ignore */ }
-  clearLegacyStoredApiKey();
-}
-
-function bytesToBase64(bytes) {
-  let binary = "";
-  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-  return window.btoa(binary);
-}
-
-function base64ToBytes(value) {
-  const binary = window.atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-async function deriveApiKeyStorageKey(passphrase, salt) {
-  const cryptoApi = window.crypto;
-  if (!cryptoApi?.subtle) {
-    throw new Error("Encrypted key storage requires Web Crypto support.");
-  }
-  const encoder = new TextEncoder();
-  const keyMaterial = await cryptoApi.subtle.importKey(
-    "raw",
-    encoder.encode(passphrase),
-    "PBKDF2",
-    false,
-    ["deriveKey"],
-  );
-  return cryptoApi.subtle.deriveKey(
-    {
-      name: "PBKDF2",
-      salt,
-      iterations: KDF_ITERATION_COUNT,
-      hash: "SHA-256",
-    },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
-  );
-}
-
-async function rememberApiKeyEncrypted(valueToEncrypt, passphrase) {
-  const cryptoApi = window.crypto;
-  if (!cryptoApi?.subtle) {
-    throw new Error("Encrypted key storage requires Web Crypto support.");
-  }
-  const salt = cryptoApi.getRandomValues(new Uint8Array(16));
-  const iv = cryptoApi.getRandomValues(new Uint8Array(12));
-  const key = await deriveApiKeyStorageKey(passphrase, salt);
-  const ciphertext = await cryptoApi.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    new TextEncoder().encode(valueToEncrypt),
-  );
-  const record = {
-    version: 1,
-    algorithm: "AES-GCM",
-    kdf: "PBKDF2-SHA-256",
-    iterations: KDF_ITERATION_COUNT,
-    salt: bytesToBase64(salt),
-    iv: bytesToBase64(iv),
-    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
-  };
-  // This persists only encrypted ciphertext plus non-secret decryption metadata.
-  localStorage.setItem(REMEMBERED_STORAGE_NAME, JSON.stringify(record));
-  clearLegacyStoredApiKey();
-}
-
-async function unlockRememberedApiKey(passphrase) {
-  const record = getRememberedApiKeyRecord();
-  if (!record) {
-    throw new Error("No remembered API key was found on this device.");
-  }
-  const salt = base64ToBytes(record.salt);
-  const iv = base64ToBytes(record.iv);
-  const key = await deriveApiKeyStorageKey(passphrase, salt);
-  const plaintext = await window.crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    key,
-    base64ToBytes(record.ciphertext),
-  );
-  return new TextDecoder().decode(plaintext);
 }
 
 function stripPdfExtension(name) {
@@ -734,45 +636,6 @@ async function fetchWithCorsProxy(url) {
   return res;
 }
 
-function extractOutputTextPart(part) {
-  if (!part || typeof part !== "object") return "";
-  if (typeof part.text === "string") return part.text.trim();
-  if (typeof part.value === "string") return part.value.trim();
-  if (typeof part?.text?.value === "string") return part.text.value.trim();
-  if (typeof part?.value?.text === "string") return part.value.text.trim();
-  return "";
-}
-
-function extractResponseOutputText(data) {
-  const chunks = [];
-  const seen = new Set();
-
-  if (typeof data?.output_text === "string" && data.output_text.trim()) {
-    const text = data.output_text.trim();
-    chunks.push(text);
-    seen.add(text);
-  }
-
-  for (const item of data?.output || []) {
-    if (!Array.isArray(item?.content)) continue;
-    for (const part of item.content) {
-      if ((part?.type === "output_text" || part?.type === "text") && extractOutputTextPart(part)) {
-        const text = extractOutputTextPart(part);
-        if (!seen.has(text)) {
-          chunks.push(text);
-          seen.add(text);
-        }
-      }
-    }
-  }
-
-  return chunks.join("\n").trim();
-}
-
-function extractFunctionCalls(data) {
-  return (data?.output || []).filter((item) => item?.type === "function_call" && item?.name);
-}
-
 function formatSearchToolResult(paper, query, passages) {
   if (!passages.length) {
     return [
@@ -788,36 +651,6 @@ function formatSearchToolResult(paper, query, passages) {
     "Retrieved passages:",
     ...passages.map(({ page, text }) => `--- Page ${page} ---\n${text}`),
   ].join("\n\n");
-}
-
-function extractWebSearchSources(data) {
-  const sources = [];
-  for (const item of data?.output || []) {
-    if (item?.type !== "web_search_call") continue;
-    const nextSources = item?.action?.sources;
-    if (Array.isArray(nextSources)) {
-      sources.push(...nextSources);
-    }
-  }
-  return sources;
-}
-
-function extractReasoningSummary(data) {
-  const texts = [];
-  for (const item of data?.output || []) {
-    if (item?.type === "reasoning" && Array.isArray(item.summary)) {
-      for (const s of item.summary) {
-        if (s?.type === "summary_text" && typeof s.text === "string" && s.text.trim()) {
-          texts.push(s.text.trim());
-        }
-      }
-    }
-  }
-  return texts.join("\n\n").trim();
-}
-
-function isResponseIncompleteForMaxOutput(data) {
-  return data?.status === "incomplete" && data?.incomplete_details?.reason === "max_output_tokens";
 }
 
 function getUrlFileStem(url) {
@@ -874,64 +707,6 @@ function mergeFoldersByRoot(prevFolders, nextFolders, rootFolderId) {
   return merged;
 }
 
-async function requestOpenAIResponse(apiKey, payload, options = {}) {
-  const { signal } = options;
-  try {
-    const proxyHeaders = {
-      "Content-Type": "application/json",
-    };
-    if (apiKey) proxyHeaders["x-openai-api-key"] = apiKey;
-
-    const proxyResponse = await fetch(OPENAI_PROXY_ENDPOINT, {
-      method: "POST",
-      headers: proxyHeaders,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    const proxyContentType = String(proxyResponse.headers.get("content-type") || "").toLowerCase();
-    const proxyBody = await proxyResponse.text();
-    const looksLikeAppShell = proxyContentType.includes("text/html") && /<!doctype html|<html/i.test(proxyBody);
-
-    if (proxyResponse.ok && !looksLikeAppShell) {
-      return JSON.parse(proxyBody);
-    }
-
-    if (!looksLikeAppShell) {
-      if (!apiKey) {
-        throw new Error(proxyBody || "OpenAI request failed");
-      }
-    }
-  } catch (err) {
-    if (!apiKey) {
-      if (err instanceof TypeError) {
-        throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
-      }
-      throw err;
-    }
-  }
-
-  if (!apiKey) {
-    throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
-  }
-
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
-    signal,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(errText || "OpenAI request failed");
-  }
-
-  return res.json();
-}
-
 function createStoppedError(message = "Request stopped.") {
   const error = new Error(message);
   error.name = "AbortError";
@@ -940,67 +715,6 @@ function createStoppedError(message = "Request stopped.") {
 
 function isAbortLikeError(error) {
   return error?.name === "AbortError" || /aborted|aborterror|request stopped/i.test(String(error?.message || ""));
-}
-
-function ThinkingTrace({ steps, isLive, expanded, onToggle }) {
-  if (!steps?.length) return null;
-  const searchCount = steps.filter(s => s.type === "search").length;
-  const icons = { reasoning: "o", search: ">", result: "+" };
-  const panelRef = React.useRef(null);
-
-  React.useEffect(() => {
-    if (!isLive || !panelRef.current) return;
-    panelRef.current.scrollTop = panelRef.current.scrollHeight;
-  }, [isLive, steps]);
-
-  const stepsEl = (
-    <div className="thinking-trace-panel">
-      <div ref={panelRef} className="thinking-trace-panel-scroll">
-        <div className="thinking-trace-steps">
-          {steps.map(s => (
-            <div key={s.id} className={`thinking-step thinking-step-${s.type}`}>
-              <div className="thinking-step-header">
-                <span className="thinking-step-icon">{icons[s.type] || "-"}</span>
-                <span className="thinking-step-label">{s.label}</span>
-              </div>
-              {s.body && (
-                <div className="thinking-step-body">{s.body}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
-  if (isLive) {
-    return (
-      <div className="thinking-trace thinking-trace-live">
-        <div className="thinking-trace-summary">
-          <span className="thinking-trace-summary-icon">*</span>
-          <span className="thinking-trace-summary-label">Thinking</span>
-          {searchCount > 0 && (
-            <span className="thinking-trace-toggle-count">{searchCount} search{searchCount !== 1 ? "es" : ""}</span>
-          )}
-        </div>
-        {stepsEl}
-      </div>
-    );
-  }
-
-  return (
-    <div className="thinking-trace">
-      <button className="thinking-trace-toggle" type="button" onClick={onToggle}>
-        <span className="thinking-trace-toggle-icon">*</span>
-        <span className="thinking-trace-toggle-label">Thinking</span>
-        {searchCount > 0 && (
-          <span className="thinking-trace-toggle-count">{searchCount} search{searchCount !== 1 ? "es" : ""}</span>
-        )}
-        <span className="thinking-trace-chevron">{expanded ? "^" : "v"}</span>
-      </button>
-      {expanded && stepsEl}
-    </div>
-  );
 }
 
 export default function PaperviewApp() {
@@ -1042,7 +756,12 @@ export default function PaperviewApp() {
   const [agentSidebarOpen, setAgentSidebarOpen] = useState(true);
   const [chatPaneMode, setChatPaneMode] = useState("chat");
   const [currentView, setCurrentView] = useState("library");
-  const [selectedModel, setSelectedModel] = useState(OPENAI_MODEL);
+  const [provider, setProvider] = useState(() => getProviderConfig().provider);
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState(() => getProviderConfig().ollamaBaseUrl);
+  const [selectedModel, setSelectedModel] = useState(() => {
+    const cfg = getProviderConfig();
+    return cfg.provider === PROVIDERS.LOCAL ? cfg.ollamaModel : OPENAI_MODEL;
+  });
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [agentAttachMenuOpen, setAgentAttachMenuOpen] = useState(false);
@@ -1235,6 +954,21 @@ export default function PaperviewApp() {
       setSettingsBusy(false);
     }
   }, [rememberApiKey, resetSettingsInputs, settingsKey, settingsPassphrase]);
+
+  const handleForgetSavedKey = useCallback(() => {
+    clearRememberedApiKey();
+    setRememberedApiKeyAvailable(false);
+    resetSettingsInputs();
+  }, [resetSettingsInputs]);
+
+  const handleProviderChange = useCallback((next) => {
+    setProvider(next);
+    if (next === PROVIDERS.LOCAL) {
+      setSelectedModel(getProviderConfig().ollamaModel || OLLAMA_MODEL);
+    } else {
+      setSelectedModel(OPENAI_MODEL);
+    }
+  }, []);
 
   // Restore previously opened folders from IndexedDB (runs after scanDirHandle is defined)
   useEffect(() => {
@@ -2999,7 +2733,13 @@ export default function PaperviewApp() {
         reasoning: { effort: "low", summary: "detailed" },
       };
 
-      let data = await requestOpenAIResponse(apiKey, {
+      let streamedThinking = '';
+      const onChunk = ({ type, token }) => {
+        if (type === 'thinking') streamedThinking += token;
+      };
+
+      streamedThinking = '';
+      let data = await requestModelResponse({
         ...basePayload,
         input: [
           ...conversationHistory.map((message) => ({
@@ -3011,11 +2751,10 @@ export default function PaperviewApp() {
             content: `Available documents: ${availableDocumentNames}\n\nQuestion: ${text}\n\nUse the search_document tool to retrieve evidence before answering. Respond in JSON format.`,
           },
         ],
-      }, { signal: controller.signal });
+      }, { apiKey, signal: controller.signal, onChunk });
       ensureRequestRunActive(chatRequestRef, token);
       addUsageTotals(usageTotals, data?.usage);
-      console.log("[reasoning debug] first response output:", JSON.stringify(data?.output?.map(o => ({ type: o.type, summary: o.summary })), null, 2));
-      const reasoning1 = extractReasoningSummary(data);
+      const reasoning1 = streamedThinking || extractReasoningSummary(data);
       if (reasoning1) pushThinkingStep({ id: `ts-${Date.now()}-r1`, chatId: targetChatId, type: "reasoning", label: "Reasoning", body: reasoning1 });
 
       let rounds = 0;
@@ -3088,14 +2827,15 @@ export default function PaperviewApp() {
           pushThinkingStep({ id: `ts-${Date.now()}-r${rounds}-${r.paperName}`, chatId: targetChatId, type: "result", label: r.notFound ? `Document not found: "${r.paperName}"` : `Found ${r.passageCount} passage${r.passageCount !== 1 ? "s" : ""} in "${r.paperName}"` });
         }
 
-        data = await requestOpenAIResponse(apiKey, {
+        streamedThinking = '';
+        data = await requestModelResponse({
           ...basePayload,
           previous_response_id: data.id,
           input: toolOutputs,
-        }, { signal: controller.signal });
+        }, { apiKey, signal: controller.signal, onChunk });
         ensureRequestRunActive(chatRequestRef, token);
         addUsageTotals(usageTotals, data?.usage);
-        const reasoningN = extractReasoningSummary(data);
+        const reasoningN = streamedThinking || extractReasoningSummary(data);
         if (reasoningN) pushThinkingStep({ id: `ts-${Date.now()}-rn${rounds}`, chatId: targetChatId, type: "reasoning", label: "Continued reasoning", body: reasoningN });
       }
 
@@ -3388,13 +3128,6 @@ export default function PaperviewApp() {
         ...threadRemotePapers.filter((paper) => hasExtractedPaperText(paper)),
       ];
 
-      const formatAvailableDocuments = () => {
-        const documents = getSearchableDocuments();
-        return documents.length
-          ? documents.map((paper) => `"${paper.name}"`).join(", ")
-          : "none";
-      };
-
       const finalizeAgentJsonResponse = async (responseData) => {
         let current = responseData;
         let parseResult = normalizeParsedAgentResponse(current);
@@ -3411,7 +3144,8 @@ export default function PaperviewApp() {
             label: attempt === 0 ? "Finalizing the answer cleanly..." : "Retrying final answer formatting...",
           });
 
-          current = await requestOpenAIResponse(apiKey, {
+          let finalStreamedThinking = '';
+          current = await requestModelResponse({
             model: selectedModel,
             previous_response_id: current.id,
             max_output_tokens: AGENT_FINALIZE_MAX_OUTPUT_TOKENS,
@@ -3428,10 +3162,10 @@ export default function PaperviewApp() {
                 content: "Return the final answer again from scratch as one complete JSON object only. Keep the citations and paper_results complete, and if you need to save tokens, compress the answer wording before omitting citations. Do not call any more tools.",
               },
             ],
-          }, { signal: controller.signal });
+          }, { apiKey, signal: controller.signal, onChunk: ({ type, token }) => { if (type === 'thinking') finalStreamedThinking += token; } });
           ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, current?.usage);
-          const finalReasoning = extractReasoningSummary(current);
+          const finalReasoning = finalStreamedThinking || extractReasoningSummary(current);
           if (finalReasoning) {
             pushAgentThinkingStep({
               id: `ats-${Date.now()}-finalize-reason-${attempt + 1}`,
@@ -3448,11 +3182,12 @@ export default function PaperviewApp() {
       };
 
       const runAgentPass = async ({ input: passInput, previousResponseId = null, passNumber = 1 }) => {
-        let responseData = await requestOpenAIResponse(apiKey, {
+        let passStreamedThinking = '';
+        let responseData = await requestModelResponse({
           ...basePayload,
           ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           input: passInput,
-        }, { signal: controller.signal });
+        }, { apiKey, signal: controller.signal, onChunk: ({ type, token }) => { if (type === 'thinking') passStreamedThinking += token; } });
         ensureRequestRunActive(agentRequestRef, token);
         addUsageTotals(usageTotals, responseData?.usage);
         collectWebSources(
@@ -3461,7 +3196,7 @@ export default function PaperviewApp() {
             ? `Web search discovered ${extractWebSearchSources(responseData).length} candidate source${extractWebSearchSources(responseData).length === 1 ? "" : "s"}.`
             : `Research pass ${passNumber} discovered ${extractWebSearchSources(responseData).length} more candidate source${extractWebSearchSources(responseData).length === 1 ? "" : "s"}.`
         );
-        const initialReasoning = extractReasoningSummary(responseData);
+        const initialReasoning = passStreamedThinking || extractReasoningSummary(responseData);
         if (initialReasoning) {
           pushAgentThinkingStep({
             id: `ats-${Date.now()}-reason-${passNumber}`,
@@ -3516,7 +3251,7 @@ export default function PaperviewApp() {
                     remotePaper.hydrationStatus === "ready"
                       ? `The paper is now searchable with search_document under the exact document name "${remotePaper.name}".`
                       : "The PDF is available for preview, but text extraction did not complete, so search_document may not find passages.",
-                    `Available searchable documents: ${formatAvailableDocuments()}.`,
+                    `Available searchable documents: ${formatAvailableDocuments(getSearchableDocuments())}.`,
                   ].join("\n"),
                 });
               } catch (fetchError) {
@@ -3561,12 +3296,12 @@ export default function PaperviewApp() {
                 chatId: targetChatId,
                 type: "result",
                 label: `Document not available: "${requestedDocument || "unknown"}"`,
-                body: `Available searchable documents: ${formatAvailableDocuments()}.`,
+                body: `Available searchable documents: ${formatAvailableDocuments(getSearchableDocuments())}.`,
               });
               toolOutputs.push({
                 type: "function_call_output",
                 call_id: call.call_id,
-                output: `Document "${requestedDocument}" was not found. Available searchable documents: ${formatAvailableDocuments()}.`,
+                output: `Document "${requestedDocument}" was not found. Available searchable documents: ${formatAvailableDocuments(getSearchableDocuments())}.`,
               });
               continue;
             }
@@ -3597,11 +3332,12 @@ export default function PaperviewApp() {
             });
           }
 
-          responseData = await requestOpenAIResponse(apiKey, {
+          let cycleStreamedThinking = '';
+          responseData = await requestModelResponse({
             ...basePayload,
             previous_response_id: responseData.id,
             input: toolOutputs,
-          }, { signal: controller.signal });
+          }, { apiKey, signal: controller.signal, onChunk: ({ type, token }) => { if (type === 'thinking') cycleStreamedThinking += token; } });
           ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, responseData?.usage);
           collectWebSources(
@@ -3609,7 +3345,7 @@ export default function PaperviewApp() {
             `Web search now has ${extractWebSearchSources(responseData).length} consulted source${extractWebSearchSources(responseData).length === 1 ? "" : "s"} in play.`,
             "result"
           );
-          const continuedReasoning = extractReasoningSummary(responseData);
+          const continuedReasoning = cycleStreamedThinking || extractReasoningSummary(responseData);
           if (continuedReasoning) {
             pushAgentThinkingStep({
               id: `ats-${Date.now()}-reason-next-${toolCycles}`,
@@ -5582,7 +5318,7 @@ export default function PaperviewApp() {
                                 </button>
                                 {modelMenuOpen ? (
                                   <div className="model-menu">
-                                    {OPENAI_MODELS.map((modelName) => (
+                                    {(provider === PROVIDERS.LOCAL ? OLLAMA_MODELS : OPENAI_MODELS).map((modelName) => (
                                       <button
                                         key={modelName}
                                         className={`model-option ${selectedModel === modelName ? "active" : ""}`}
@@ -6146,7 +5882,7 @@ export default function PaperviewApp() {
                                   </button>
                                   {modelMenuOpen && (
                                     <div className="model-menu">
-                                      {OPENAI_MODELS.map((modelName) => (
+                                      {(provider === PROVIDERS.LOCAL ? OLLAMA_MODELS : OPENAI_MODELS).map((modelName) => (
                                         <button
                                           key={modelName}
                                           className={`model-option ${selectedModel === modelName ? "active" : ""}`}
@@ -6331,161 +6067,37 @@ export default function PaperviewApp() {
           </div>
         )}
 
-        {showSettings && (
-          <div className="ov" onClick={closeSettingsModal}>
-            <div className="modal" onClick={(e) => e.stopPropagation()}>
-              <div className="m-hd">
-                <span className="m-title">Settings</span>
-                <button className="m-x" onClick={closeSettingsModal}><IClose /></button>
-              </div>
-
-              <div className="settings-field">
-                <label className="settings-label">OpenAI API Key</label>
-                {apiKey ? (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="settings-input" style={{ flex: 1, display: 'flex', alignItems: 'center', background: '#fff', cursor: 'default', color: 'var(--text2)' }}>
-                        {'•'.repeat(Math.min(apiKey.length, 20))}{'…' + apiKey.slice(-4)}
-                      </span>
-                      <button className="btn-sec" style={{ whiteSpace: 'nowrap', flexShrink: 0 }} onClick={handleRemoveApiKey} disabled={settingsBusy}>Remove</button>
-                    </div>
-                    <p className="settings-info">
-                      {apiKeySource === "remembered"
-                        ? "This key was unlocked from encrypted browser storage for the current session."
-                        : "This key is available in memory for the current browser session."}
-                    </p>
-                    {apiKeySource !== "remembered" && (
-                      <div className="settings-panel">
-                        <label className="settings-option">
-                          <input
-                            type="checkbox"
-                            checked={rememberApiKey}
-                            onChange={(e) => {
-                              setRememberApiKey(e.target.checked);
-                              setSettingsError("");
-                            }}
-                          />
-                          <span>Remember this key on this device with passphrase encryption.</span>
-                        </label>
-                        {rememberApiKey && (
-                          <div className="settings-subfield">
-                            <label className="settings-label">Encryption passphrase</label>
-                            <div className="settings-input-wrap">
-                              <input
-                                className="settings-input"
-                                type={settingsPassphraseVisible ? "text" : "password"}
-                                value={settingsPassphrase}
-                                onChange={(e) => setSettingsPassphrase(e.target.value)}
-                                placeholder="At least 8 characters"
-                                autoComplete="new-password"
-                              />
-                              <button className="settings-toggle-vis" onClick={() => setSettingsPassphraseVisible((v) => !v)} type="button">
-                                {settingsPassphraseVisible ? "Hide" : "Show"}
-                              </button>
-                            </div>
-                            <p className="settings-info">The passphrase is not stored. You will need it to unlock this key after reloading Paperview.</p>
-                          </div>
-                        )}
-                        <button className="btn-sec" type="button" disabled={!rememberApiKey || settingsBusy} onClick={handleSaveSettingsApiKey}>
-                          {settingsBusy ? "Saving..." : "Remember key"}
-                        </button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {rememberedApiKeyAvailable && (
-                      <div className="settings-panel">
-                        <div className="settings-panel-title">Encrypted key saved on this device</div>
-                        <p className="settings-info">Enter the passphrase you used when saving it. The passphrase is not stored and cannot be recovered.</p>
-                        <div className="settings-input-wrap">
-                          <input
-                            className="settings-input"
-                            type={unlockPassphraseVisible ? "text" : "password"}
-                            value={unlockPassphrase}
-                            onChange={(e) => setUnlockPassphrase(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleUnlockRememberedApiKey();
-                            }}
-                            placeholder="Passphrase"
-                            autoComplete="current-password"
-                          />
-                          <button className="settings-toggle-vis" onClick={() => setUnlockPassphraseVisible((v) => !v)} type="button">
-                            {unlockPassphraseVisible ? "Hide" : "Show"}
-                          </button>
-                        </div>
-                        <div className="settings-inline-actions">
-                          <button className="btn-sec" type="button" onClick={handleUnlockRememberedApiKey} disabled={settingsBusy}>
-                            {settingsBusy ? "Unlocking..." : "Unlock"}
-                          </button>
-                          <button className="btn-sec" type="button" onClick={() => {
-                            clearRememberedApiKey();
-                            setRememberedApiKeyAvailable(false);
-                            setUnlockPassphrase("");
-                            setSettingsError("");
-                          }} disabled={settingsBusy}>Forget saved key</button>
-                        </div>
-                      </div>
-                    )}
-                    <div className="settings-input-wrap">
-                      <input
-                        className="settings-input"
-                        type={settingsKeyVisible ? "text" : "password"}
-                        value={settingsKey}
-                        onChange={(e) => setSettingsKey(e.target.value)}
-                        placeholder="sk-..."
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                      <button className="settings-toggle-vis" onClick={() => setSettingsKeyVisible((v) => !v)} type="button">
-                        {settingsKeyVisible ? "Hide" : "Show"}
-                      </button>
-                    </div>
-                    <label className="settings-option">
-                      <input
-                        type="checkbox"
-                        checked={rememberApiKey}
-                        onChange={(e) => {
-                          setRememberApiKey(e.target.checked);
-                          setSettingsError("");
-                        }}
-                      />
-                      <span>Remember this key on this device with passphrase encryption.</span>
-                    </label>
-                    {rememberApiKey && (
-                      <div className="settings-subfield">
-                        <label className="settings-label">Encryption passphrase</label>
-                        <div className="settings-input-wrap">
-                          <input
-                            className="settings-input"
-                            type={settingsPassphraseVisible ? "text" : "password"}
-                            value={settingsPassphrase}
-                            onChange={(e) => setSettingsPassphrase(e.target.value)}
-                            placeholder="At least 8 characters"
-                            autoComplete="new-password"
-                          />
-                          <button className="settings-toggle-vis" onClick={() => setSettingsPassphraseVisible((v) => !v)} type="button">
-                            {settingsPassphraseVisible ? "Hide" : "Show"}
-                          </button>
-                        </div>
-                        <p className="settings-info">The passphrase is not stored. You will need it to unlock this key after reloading Paperview.</p>
-                      </div>
-                    )}
-                  </>
-                )}
-                <p className="settings-info">To use AI features, add your own OpenAI API key. By default it is kept in memory only. If you choose to remember it, Paperview stores an encrypted copy in this browser and you should only use that on trusted devices. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
-                {settingsError && <div className="settings-error">{settingsError}</div>}
-              </div>
-
-              <div className="m-acts">
-                <button className="btn-sec" onClick={closeSettingsModal} disabled={settingsBusy}>Cancel</button>
-                {!apiKey && <button className="btn-pri" onClick={handleSaveSettingsApiKey} disabled={settingsBusy}>
-                  {settingsBusy ? "Saving..." : "Save"}
-                </button>}
-              </div>
-            </div>
-          </div>
-        )}
+        <SettingsModal
+          showSettings={showSettings}
+          closeSettingsModal={closeSettingsModal}
+          apiKey={apiKey}
+          apiKeySource={apiKeySource}
+          settingsKey={settingsKey}
+          setSettingsKey={setSettingsKey}
+          settingsKeyVisible={settingsKeyVisible}
+          setSettingsKeyVisible={setSettingsKeyVisible}
+          rememberApiKey={rememberApiKey}
+          setRememberApiKey={setRememberApiKey}
+          settingsPassphrase={settingsPassphrase}
+          setSettingsPassphrase={setSettingsPassphrase}
+          settingsPassphraseVisible={settingsPassphraseVisible}
+          setSettingsPassphraseVisible={setSettingsPassphraseVisible}
+          unlockPassphrase={unlockPassphrase}
+          setUnlockPassphrase={setUnlockPassphrase}
+          unlockPassphraseVisible={unlockPassphraseVisible}
+          setUnlockPassphraseVisible={setUnlockPassphraseVisible}
+          settingsError={settingsError}
+          settingsBusy={settingsBusy}
+          rememberedApiKeyAvailable={rememberedApiKeyAvailable}
+          handleRemoveApiKey={handleRemoveApiKey}
+          handleUnlockRememberedApiKey={handleUnlockRememberedApiKey}
+          handleSaveSettingsApiKey={handleSaveSettingsApiKey}
+          handleForgetSavedKey={handleForgetSavedKey}
+          provider={provider}
+          onProviderChange={handleProviderChange}
+          ollamaBaseUrl={ollamaBaseUrl}
+          onOllamaBaseUrlChange={setOllamaBaseUrl}
+        />
 
         {edgeToast && (
           <div className="edge-toast">

@@ -86,6 +86,49 @@ Use `OPENAI_API_KEY` for local development and deployed environments when you wa
 
 `VITE_OPENAI_MODEL` sets the default model. `VITE_OPENAI_MODELS` controls the comma-separated list shown in model pickers.
 
+## Local Model Support (Ollama)
+
+Paperview can run fully locally using [Ollama](https://ollama.com) — no OpenAI API key needed. The recommended model is **Gemma 4 12B**, which has native tool calling, a 256K context window, and built-in reasoning (`<think>` blocks). Other models with tool-calling support (e.g. Qwen 3 14B) also work.
+
+All PDF features, chat with citations, agent mode, and the reasoning trace work with local models. Web search is not available locally in this release (planned with SearXNG).
+
+### Setup
+
+1. Install Ollama: [ollama.com/download](https://ollama.com/download)
+2. Pull the model:
+   ```bash
+   ollama pull gemma4:12b
+   ```
+3. Allow the app's origin once so the browser can reach Ollama directly:
+   ```bash
+   OLLAMA_ORIGINS=http://localhost:5173 ollama serve
+   ```
+   On a hosted deployment, replace `http://localhost:5173` with the app's actual origin.
+4. In Paperview Settings, switch **AI Provider** from OpenAI to **Local (Ollama)**.
+
+That's it. Paperview will start using Ollama instead of OpenAI.
+
+### Environment variables (optional)
+
+```env
+VITE_PROVIDER=local                      # default provider: "openai" or "local"
+VITE_OLLAMA_BASE_URL=http://localhost:11434
+VITE_OLLAMA_MODEL=gemma4:12b             # default model shown in the picker
+VITE_OLLAMA_MODELS=gemma4:12b,gemma4:27b # comma-separated model list
+```
+
+These are optional — the provider and Ollama URL can also be changed at runtime in Settings. Env vars set the startup defaults.
+
+### Running the app remotely with a local Ollama
+
+If the app is served from a remote host (e.g. your Vercel deployment) but you want to use Ollama on your own machine, set `OLLAMA_ORIGINS` to the app's full origin:
+
+```bash
+OLLAMA_ORIGINS=https://paperview.carstenhanekamp.nl ollama serve
+```
+
+Then switch to Local in Settings, update the Ollama URL to `http://localhost:11434`, and requests will go from your browser directly to your local Ollama instance.
+
 ## Scripts
 
 ```bash
