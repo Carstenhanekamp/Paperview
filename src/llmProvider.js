@@ -197,6 +197,16 @@ function convertTools(tools) {
     .map(t => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
 }
 
+// Longest suffix of `text` that is a proper prefix of `tag`. Used to detect a
+// tag (e.g. "<think>") that may be split across SSE chunk boundaries.
+function partialTagSuffixLen(text, tag) {
+  const max = Math.min(text.length, tag.length - 1);
+  for (let len = max; len > 0; len -= 1) {
+    if (text.endsWith(tag.slice(0, len))) return len;
+  }
+  return 0;
+}
+
 // Parse an SSE stream from Ollama, calling onChunk for each token.
 // Returns the assembled content, think text, tool calls, finish reason, and usage.
 async function consumeStream(response, onChunk) {
@@ -240,47 +250,45 @@ async function consumeStream(response, onChunk) {
 
       // ── content tokens ──
       if (typeof delta.content === "string" && delta.content) {
-        const token = delta.content;
-        rawContent += token;
-        pending += token;
+        rawContent += delta.content;
+        pending += delta.content;
 
-        // Process pending through state machine
-        let i = 0;
-        while (i < pending.length) {
+        // Classify as much of pending as is unambiguous, retaining a trailing
+        // fragment that could be the start of a tag split across SSE chunks.
+        let progress = true;
+        while (progress) {
+          progress = false;
           if (!inThink) {
-            const open = pending.indexOf("<think>", i);
-            if (open === -1) {
-              // No opening tag in the rest — emit as answer
-              const chunk_ = pending.slice(i);
-              answerBuffer += chunk_;
-              onChunk?.({ type: "text", token: chunk_ });
-              i = pending.length;
-            } else {
-              // Emit everything before the tag as answer, then enter think mode
-              const before = pending.slice(i, open);
+            const open = pending.indexOf("<think>");
+            if (open !== -1) {
+              const before = pending.slice(0, open);
               if (before) { answerBuffer += before; onChunk?.({ type: "text", token: before }); }
+              pending = pending.slice(open + 7); // skip "<think>"
               inThink = true;
-              i = open + 7; // skip "<think>"
+              progress = true;
+            } else {
+              const keep = partialTagSuffixLen(pending, "<think>");
+              const emit = pending.slice(0, pending.length - keep);
+              if (emit) { answerBuffer += emit; onChunk?.({ type: "text", token: emit }); }
+              pending = pending.slice(pending.length - keep);
             }
           } else {
-            const close = pending.indexOf("</think>", i);
-            if (close === -1) {
-              // Still inside think, emit rest as thinking token
-              const chunk_ = pending.slice(i);
-              thinkBuffer += chunk_;
-              onChunk?.({ type: "thinking", token: chunk_ });
-              i = pending.length;
-            } else {
-              const chunk_ = pending.slice(i, close);
-              thinkBuffer += chunk_;
-              if (chunk_) onChunk?.({ type: "thinking", token: chunk_ });
+            const close = pending.indexOf("</think>");
+            if (close !== -1) {
+              const inside = pending.slice(0, close);
+              if (inside) { thinkBuffer += inside; onChunk?.({ type: "thinking", token: inside }); }
               onChunk?.({ type: "thinking_done" });
+              pending = pending.slice(close + 8); // skip "</think>"
               inThink = false;
-              i = close + 8; // skip "</think>"
+              progress = true;
+            } else {
+              const keep = partialTagSuffixLen(pending, "</think>");
+              const emit = pending.slice(0, pending.length - keep);
+              if (emit) { thinkBuffer += emit; onChunk?.({ type: "thinking", token: emit }); }
+              pending = pending.slice(pending.length - keep);
             }
           }
         }
-        pending = "";
       }
 
       // ── tool call deltas ──
@@ -292,6 +300,13 @@ async function consumeStream(response, onChunk) {
         if (tc.function?.arguments) toolCallsMap[idx].arguments += tc.function.arguments;
       }
     }
+  }
+
+  // Flush any trailing fragment that never resolved into a complete tag.
+  if (pending) {
+    if (inThink) { thinkBuffer += pending; onChunk?.({ type: "thinking", token: pending }); }
+    else { answerBuffer += pending; onChunk?.({ type: "text", token: pending }); }
+    pending = "";
   }
 
   const toolCalls = Object.values(toolCallsMap)

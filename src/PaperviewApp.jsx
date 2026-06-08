@@ -3019,7 +3019,21 @@ export default function PaperviewApp() {
               ? "Planning the review structure and evidence needs..."
               : "Planning the search strategy...",
       });
-      if (activeTool?.allowWebSearch !== false) {
+      // Web search uses the OpenAI built-in web_search tool, which Ollama cannot
+      // run. With a local provider we disable it and tell the user clearly rather
+      // than letting the model silently proceed (or hallucinate sources).
+      const isLocalProvider = provider === PROVIDERS.LOCAL;
+      const toolWantsWebSearch = activeTool?.allowWebSearch !== false;
+      const webSearchEnabled = toolWantsWebSearch && !isLocalProvider;
+
+      if (isLocalProvider && toolWantsWebSearch) {
+        pushAgentThinkingStep({
+          id: `ats-${Date.now()}-local-noweb`,
+          chatId: targetChatId,
+          type: "result",
+          label: `Web search is unavailable with local models (${selectedModel}). Answering from attached local papers and any PDF URLs you provide.`,
+        });
+      } else if (webSearchEnabled) {
         pushAgentThinkingStep({
           id: `ats-${Date.now()}-boot-web`,
           chatId: targetChatId,
@@ -3047,9 +3061,17 @@ export default function PaperviewApp() {
       const localContextInstruction = readyContextPapers.length
         ? `Attached local documents for this turn: ${availableDocumentNames}. If you cite a local document, call search_document before citing it.`
         : "No local PDFs are attached for this turn.";
+      // Override the system prompt's web_search guidance for local models so the
+      // model does not claim to search the web or fabricate online sources.
+      const noWebSearchInstruction = isLocalProvider && toolWantsWebSearch
+        ? "The web_search tool is NOT available in this session. Do not claim to have searched the web and do not invent online papers, URLs, DOIs, or sources. Answer using only the attached local PDFs (via search_document) and any PDF URLs the user explicitly provides (via fetch_remote_paper). If you cannot answer from these, say so plainly."
+        : "";
       const enabledTools = [];
-      if (activeTool?.allowWebSearch !== false) {
+      if (webSearchEnabled) {
         enabledTools.push(AGENT_WEB_SEARCH_TOOL);
+      }
+      // fetch_remote_paper works for both providers (user-supplied PDF URLs).
+      if (toolWantsWebSearch) {
         enabledTools.push(FETCH_REMOTE_PAPER_TOOL);
       }
       if (activeTool?.allowLocalSearch ?? true) {
@@ -3062,7 +3084,7 @@ export default function PaperviewApp() {
       const basePayload = {
         model: selectedModel,
         max_output_tokens: AGENT_MAX_OUTPUT_TOKENS,
-        instructions: [AGENT_SYSTEM_PROMPT, modeInstruction, localContextInstruction].filter(Boolean).join("\n\n"),
+        instructions: [AGENT_SYSTEM_PROMPT, modeInstruction, localContextInstruction, noWebSearchInstruction].filter(Boolean).join("\n\n"),
         include: ["web_search_call.action.sources"],
         reasoning: { effort: reasoningEffort, summary: "detailed" },
         ...(enabledTools.length ? { tools: enabledTools, tool_choice: "auto" } : {}),
