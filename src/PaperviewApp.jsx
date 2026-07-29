@@ -4,7 +4,6 @@ import {
   loadAllAgentChats,
   saveChat,
   saveAgentChat,
-  deleteChat,
   deleteAgentChat,
   deleteChatsByPaperIds,
   saveFolderHandle,
@@ -21,7 +20,7 @@ import {
 import { clearOcrMemoryCache, extractPdfText, terminateTesseractWorkerNow, validatePdfBytes } from './pdfUtils';
 import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, ICopy, IZoomIn, IZoomOut, IPanel, IGrid, IChat, IMore, ILeft, IRight, ISpark, IPaperclip, IChevronDown, IArrowUp, IArrowDown, IChevronLeftDouble, IChevronRightDouble, ITrash, IGear, IHighlight, INotes } from './icons';
 import { CSS } from './styles';
-import { CHAT_TITLE_FALLBACK, createAgentChatThreadRecord, createChatThreadRecord, deriveChatTitle, formatChatTimestamp, formatChatMessageCount, derivePageTexts, materializeFullText } from './chatUtils';
+import { createAgentChatThreadRecord, createChatThreadRecord, formatChatTimestamp, formatChatMessageCount, derivePageTexts, materializeFullText } from './chatUtils';
 import TextFallback from './TextFallback';
 import InlineCitedAnswer from './InlineCitedAnswer';
 import PdfViewer from './PdfViewer';
@@ -93,27 +92,19 @@ import { useRequestRuns } from './hooks/useRequestRun';
 import { usePanelResize } from './hooks/usePanelResize';
 import { useViewerSearch } from './hooks/useViewerSearch';
 import { useAnnotations } from './hooks/useAnnotations';
+import { useChatThreads } from './hooks/useChatThreads';
+import { useAgentThreads } from './hooks/useAgentThreads';
 
 export default function PaperviewApp() {
   const [folders, setFolders] = useState([]);
   const [openTabs, setOpenTabs] = useState([]);
   const [paperPayloads, setPaperPayloads] = useState({});
   const [activeTabId, setActiveTabId] = useState(null);
-  const [chatThreads, setChatThreads] = useState([]);
-  const [agentThreads, setAgentThreads] = useState([]);
-  const [activeChatId, setActiveChatId] = useState(null);
-  const [activeAgentChatId, setActiveAgentChatId] = useState(null);
   const [input, setInput] = useState("");
   const [agentInput, setAgentInput] = useState("");
   const [chatLoadingState, setChatLoadingState] = useState(null);
   const [agentLoadingState, setAgentLoadingState] = useState(null);
-  const [thinkingSteps, setThinkingSteps] = useState([]);
-  const thinkingStepsRef = React.useRef([]);
-  const [agentThinkingSteps, setAgentThinkingSteps] = useState([]);
-  const agentThinkingStepsRef = React.useRef([]);
   const [agentRemotePapersByThread, setAgentRemotePapersByThread] = useState({});
-  const [thinkingExpanded, setThinkingExpanded] = useState({});
-  const [agentThinkingExpanded, setAgentThinkingExpanded] = useState({});
   const [paperScanStates, setPaperScanStates] = useState({});
   const [popup, setPopup] = useState(null);
   const [chip, setChip] = useState(null);
@@ -213,8 +204,7 @@ export default function PaperviewApp() {
   const folderHandlesMapRef = useRef(new Map()); // folderId → root FileSystemDirectoryHandle
   const foldersRef = useRef([]);
   const paperPayloadsRef = useRef({});
-  const chatThreadsRef = useRef([]);
-  const agentThreadsRef = useRef([]);
+  const syncRootFolderSnapshotRef = useRef(null);
   const agentRemotePaperJobsRef = useRef(new Map());
   const paperTextJobsRef = useRef(new Map());
   const folderRefreshStateRef = useRef({ rootFolderId: null, lastRunAt: 0 });
@@ -226,26 +216,8 @@ export default function PaperviewApp() {
     finishRequestRun,
   } = useRequestRuns();
 
-  useEffect(() => {
-    loadAllChats().then((saved) => {
-      if (saved.length) {
-        setChatThreads(saved);
-        setActiveChatId(saved[0]?.id || null);
-      }
-    }).catch(() => {});
-
-    loadAllAgentChats().then((saved) => {
-      if (saved.length) {
-        setAgentThreads(saved);
-        setActiveAgentChatId(saved[0]?.id || null);
-      }
-    }).catch(() => {});
-  }, []);
-
   useEffect(() => { foldersRef.current = folders; }, [folders]);
   useEffect(() => { paperPayloadsRef.current = paperPayloads; }, [paperPayloads]);
-  useEffect(() => { chatThreadsRef.current = chatThreads; }, [chatThreads]);
-  useEffect(() => { agentThreadsRef.current = agentThreads; }, [agentThreads]);
   useEffect(() => () => { terminateTesseractWorkerNow().catch(() => {}); }, []);
 
 
@@ -999,183 +971,6 @@ export default function PaperviewApp() {
     deleteAnnotationById,
   } = useAnnotations({ activePaper, popup, setPopup, syncFolderForPaper });
 
-  const appendMessageToChat = useCallback((chatId, message, options = {}) => {
-    const paperId = chatThreadsRef.current.find((t) => t.id === chatId)?.paperId;
-    setChatThreads((prev) => {
-      const next = prev.map((thread) => {
-        if (thread.id !== chatId) return thread;
-        const shouldRename = options.renameFromUser && (thread.title === CHAT_TITLE_FALLBACK || thread.messages.length === 0);
-        return {
-          ...thread,
-          title: shouldRename ? deriveChatTitle(options.renameFromUser) : thread.title,
-          messages: [...thread.messages, message],
-          updatedAt: Date.now(),
-        };
-      });
-      const updated = next.find((t) => t.id === chatId);
-      if (updated) saveChat(updated).catch(() => {});
-      return next;
-    });
-    if (paperId) syncFolderForPaper(paperId);
-  }, []);
-
-  const updateMessageInChat = useCallback((chatId, messageId, updater) => {
-    if (!chatId || !messageId || typeof updater !== "function") return;
-    const paperId = chatThreadsRef.current.find((t) => t.id === chatId)?.paperId;
-    setChatThreads((prev) => {
-      const next = prev.map((thread) => {
-        if (thread.id !== chatId) return thread;
-        let changed = false;
-        const messages = thread.messages.map((message) => {
-          if (message?.id !== messageId) return message;
-          const updatedMessage = updater(message);
-          if (updatedMessage === message) return message;
-          changed = true;
-          return updatedMessage;
-        });
-        return changed
-          ? {
-              ...thread,
-              messages,
-              updatedAt: Date.now(),
-            }
-          : thread;
-      });
-      const updated = next.find((t) => t.id === chatId);
-      if (updated) saveChat(updated).catch(() => {});
-      return next;
-    });
-    if (paperId) syncFolderForPaper(paperId);
-  }, []);
-
-  const startNewChat = useCallback(() => {
-    if (!activePaper?.id) return;
-    if (chatLoadingState) stopChatRun();
-    const thread = createChatThreadRecord(activePaper.id);
-    setChatThreads((prev) => [thread, ...prev]);
-    saveChat(thread).catch(() => {});
-    syncFolderForPaper(thread.paperId);
-    setActiveChatId(thread.id);
-    setChatPaneMode("chat");
-    setInput("");
-    setChip(null);
-  }, [activePaper?.id, chatLoadingState, stopChatRun]);
-
-  const openChatThread = useCallback((threadId) => {
-    if (chatLoadingState) stopChatRun();
-    setActiveChatId(threadId);
-    setChatPaneMode("chat");
-  }, [chatLoadingState, stopChatRun]);
-
-  const resetActiveChatHistory = useCallback(() => {
-    if (!activeChatId) return;
-    const paperId = chatThreadsRef.current.find((t) => t.id === activeChatId)?.paperId;
-    setChatThreads((prev) => {
-      const next = prev.map((thread) =>
-        thread.id === activeChatId
-          ? { ...thread, title: CHAT_TITLE_FALLBACK, messages: [], updatedAt: Date.now() }
-          : thread
-      );
-      const updated = next.find((t) => t.id === activeChatId);
-      if (updated) saveChat(updated).catch(() => {});
-      return next;
-    });
-    if (paperId) syncFolderForPaper(paperId);
-    if (chatLoadingState?.chatId === activeChatId) stopChatRun();
-    setInput("");
-    setChip(null);
-  }, [activeChatId, chatLoadingState, stopChatRun]);
-
-  const resetChatThreadById = useCallback(
-    (threadId) => {
-      const paperId = chatThreadsRef.current.find((t) => t.id === threadId)?.paperId;
-      setChatThreads((prev) => {
-        const next = prev.map((thread) =>
-          thread.id === threadId
-            ? { ...thread, title: CHAT_TITLE_FALLBACK, messages: [], updatedAt: Date.now() }
-            : thread
-        );
-        const updated = next.find((t) => t.id === threadId);
-        if (updated) saveChat(updated).catch(() => {});
-        return next;
-      });
-      if (paperId) syncFolderForPaper(paperId);
-      if (chatLoadingState?.chatId === threadId) stopChatRun();
-      if (activeChatId === threadId) {
-        setInput("");
-        setChip(null);
-      }
-    },
-    [activeChatId, chatLoadingState, stopChatRun]
-  );
-
-  const deleteChatThread = useCallback(
-    (threadId) => {
-      setChatThreads((prev) => prev.filter((thread) => thread.id !== threadId));
-      deleteChat(threadId).catch(() => {});
-      if (activeChatId === threadId) {
-        setActiveChatId(null);
-        setInput("");
-        setChip(null);
-      }
-      if (chatLoadingState?.chatId === threadId) stopChatRun();
-    },
-    [activeChatId, chatLoadingState, stopChatRun]
-  );
-
-  const appendMessageToAgentChat = useCallback((chatId, message, options = {}) => {
-    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === chatId)?.rootFolderId;
-    setAgentThreads((prev) => {
-      const next = prev.map((thread) => {
-        if (thread.id !== chatId) return thread;
-        const shouldRename = options.renameFromUser && (thread.title === CHAT_TITLE_FALLBACK || thread.messages.length === 0);
-        return {
-          ...thread,
-          title: shouldRename ? deriveChatTitle(options.renameFromUser) : thread.title,
-          messages: [...thread.messages, message],
-          updatedAt: Date.now(),
-        };
-      });
-      const updated = next.find((thread) => thread.id === chatId);
-      if (updated) {
-        saveAgentChat(updated)
-          .then(() => {
-            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
-          })
-          .catch(() => {});
-      }
-      return next;
-    });
-  }, []);
-
-  const updateMessageInAgentChat = useCallback((chatId, messageId, updater) => {
-    if (!chatId || !messageId || typeof updater !== "function") return;
-    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === chatId)?.rootFolderId;
-    setAgentThreads((prev) => {
-      const next = prev.map((thread) => {
-        if (thread.id !== chatId) return thread;
-        let changed = false;
-        const messages = thread.messages.map((message) => {
-          if (message?.id !== messageId) return message;
-          const updatedMessage = updater(message);
-          if (updatedMessage === message) return message;
-          changed = true;
-          return updatedMessage;
-        });
-        return changed ? { ...thread, messages, updatedAt: Date.now() } : thread;
-      });
-      const updated = next.find((thread) => thread.id === chatId);
-      if (updated) {
-        saveAgentChat(updated)
-          .then(() => {
-            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
-          })
-          .catch(() => {});
-      }
-      return next;
-    });
-  }, []);
-
   const clearAgentRemotePapersForThread = useCallback((chatId) => {
     if (!chatId) return;
     const remotePapers = agentRemotePapersByThread[chatId] || [];
@@ -1197,100 +992,71 @@ export default function PaperviewApp() {
     }
   }, [activeTabId, agentPreviewState?.paperId, agentRemotePapersByThread, evictPaperPayload]);
 
-  const startNewAgentChat = useCallback(() => {
-    if (!selectedRootFolderId || !hasWritableAgentContext) return;
-    if (agentLoadingState) stopAgentRun();
-    const thread = createAgentChatThreadRecord(selectedRootFolderId);
-    setAgentThreads((prev) => [thread, ...prev]);
-    saveAgentChat(thread)
-      .then(() => syncRootFolderSnapshot(selectedRootFolderId))
-      .catch(() => {});
-    setActiveAgentChatId(thread.id);
-    setAgentInput("");
-    setSelectedAgentPaperIds([]);
-    setAgentPreviewState(null);
-    agentPreviewScrollFnRef.current = null;
-  }, [selectedRootFolderId, hasWritableAgentContext, agentLoadingState, stopAgentRun]);
+  const {
+    chatThreads,
+    setChatThreads,
+    activeChatId,
+    setActiveChatId,
+    chatThreadsRef,
+    thinkingSteps,
+    thinkingStepsRef,
+    thinkingExpanded,
+    setThinkingExpanded,
+    pushThinkingStep,
+    clearThinkingSteps,
+    appendMessageToChat,
+    updateMessageInChat,
+    startNewChat,
+    openChatThread,
+    resetActiveChatHistory,
+    resetChatThreadById,
+    deleteChatThread,
+    stopChatRun,
+  } = useChatThreads({
+    syncFolderForPaper,
+    chatRequestRef,
+    activePaper,
+    chatLoadingState,
+    setChatLoadingState,
+    setInput,
+    setChip,
+    setChatPaneMode,
+  });
 
-  const openAgentThread = useCallback((threadId) => {
-    if (agentLoadingState) stopAgentRun();
-    setActiveAgentChatId(threadId);
-    setAgentInput("");
-  }, [agentLoadingState, stopAgentRun]);
+  const {
+    agentThreads,
+    setAgentThreads,
+    activeAgentChatId,
+    setActiveAgentChatId,
+    agentThreadsRef,
+    agentThinkingSteps,
+    agentThinkingStepsRef,
+    agentThinkingExpanded,
+    setAgentThinkingExpanded,
+    pushAgentThinkingStep,
+    clearAgentThinkingSteps,
+    appendMessageToAgentChat,
+    updateMessageInAgentChat,
+    startNewAgentChat,
+    openAgentThread,
+    resetActiveAgentHistory,
+    resetAgentThreadById,
+    deleteAgentThread,
+    stopAgentRun,
+  } = useAgentThreads({
+    syncRootFolderSnapshotRef,
+    agentRequestRef,
+    selectedRootFolderId,
+    hasWritableAgentContext,
+    agentLoadingState,
+    setAgentLoadingState,
+    setAgentInput,
+    setSelectedAgentPaperIds,
+    setAgentPreviewState,
+    agentPreviewScrollFnRef,
+    clearAgentRemotePapersForThread,
+  });
 
-  const resetActiveAgentHistory = useCallback(() => {
-    if (!activeAgentChatId) return;
-    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === activeAgentChatId)?.rootFolderId;
-    setAgentThreads((prev) => {
-      const next = prev.map((thread) =>
-        thread.id === activeAgentChatId
-          ? { ...thread, title: CHAT_TITLE_FALLBACK, messages: [], updatedAt: Date.now() }
-          : thread
-      );
-      const updated = next.find((thread) => thread.id === activeAgentChatId);
-      if (updated) {
-        saveAgentChat(updated)
-          .then(() => {
-            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
-          })
-          .catch(() => {});
-      }
-      return next;
-    });
-    if (agentLoadingState?.chatId === activeAgentChatId) stopAgentRun();
-    setAgentInput("");
-    setSelectedAgentPaperIds([]);
-    clearAgentRemotePapersForThread(activeAgentChatId);
-    setAgentPreviewState(null);
-    agentPreviewScrollFnRef.current = null;
-  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread, stopAgentRun]);
-
-  const resetAgentThreadById = useCallback((threadId) => {
-    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === threadId)?.rootFolderId;
-    setAgentThreads((prev) => {
-      const next = prev.map((thread) =>
-        thread.id === threadId
-          ? { ...thread, title: CHAT_TITLE_FALLBACK, messages: [], updatedAt: Date.now() }
-          : thread
-      );
-      const updated = next.find((thread) => thread.id === threadId);
-      if (updated) {
-        saveAgentChat(updated)
-          .then(() => {
-            if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
-          })
-          .catch(() => {});
-      }
-      return next;
-    });
-    if (agentLoadingState?.chatId === threadId) stopAgentRun();
-    if (activeAgentChatId === threadId) {
-      setAgentInput("");
-      setSelectedAgentPaperIds([]);
-      setAgentPreviewState(null);
-      agentPreviewScrollFnRef.current = null;
-    }
-    clearAgentRemotePapersForThread(threadId);
-  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread, stopAgentRun]);
-
-  const deleteAgentThread = useCallback((threadId) => {
-    const rootFolderId = agentThreadsRef.current.find((thread) => thread.id === threadId)?.rootFolderId;
-    setAgentThreads((prev) => prev.filter((thread) => thread.id !== threadId));
-    deleteAgentChat(threadId)
-      .then(() => {
-        if (rootFolderId) syncRootFolderSnapshot(rootFolderId).catch(() => {});
-      })
-      .catch(() => {});
-    if (activeAgentChatId === threadId) {
-      setActiveAgentChatId(null);
-      setAgentInput("");
-      setSelectedAgentPaperIds([]);
-      setAgentPreviewState(null);
-      agentPreviewScrollFnRef.current = null;
-    }
-    if (agentLoadingState?.chatId === threadId) stopAgentRun();
-    clearAgentRemotePapersForThread(threadId);
-  }, [activeAgentChatId, agentLoadingState, clearAgentRemotePapersForThread, stopAgentRun]);
 
   const upsertAgentRemotePaper = useCallback((chatId, nextPaper) => {
     if (!chatId || !nextPaper?.id) return;
@@ -1654,53 +1420,6 @@ export default function PaperviewApp() {
     handleSearchClick,
   } = useViewerSearch({ activePaper, currentPage, goToPage, resetKey: activeTabId });
 
-  const pushThinkingStep = (step) => {
-    setThinkingSteps(prev => {
-      const next = [...prev, step];
-      thinkingStepsRef.current = next;
-      return next;
-    });
-  };
-
-  const clearThinkingSteps = (chatId) => {
-    setThinkingSteps(prev => {
-      const next = prev.filter(s => s.chatId !== chatId);
-      thinkingStepsRef.current = next;
-      return next;
-    });
-  };
-
-  const pushAgentThinkingStep = (step) => {
-    setAgentThinkingSteps((prev) => {
-      const next = [...prev, step];
-      agentThinkingStepsRef.current = next;
-      return next;
-    });
-  };
-
-  const clearAgentThinkingSteps = (chatId) => {
-    setAgentThinkingSteps((prev) => {
-      const next = prev.filter((step) => step.chatId !== chatId);
-      agentThinkingStepsRef.current = next;
-      return next;
-    });
-  };
-
-  function stopChatRun() {
-    const activeRun = chatRequestRef.current;
-    activeRun.controller?.abort();
-    chatRequestRef.current = { controller: null, token: 0, chatId: null };
-    if (activeRun.chatId) clearThinkingSteps(activeRun.chatId);
-    setChatLoadingState(null);
-  }
-
-  function stopAgentRun() {
-    const activeRun = agentRequestRef.current;
-    activeRun.controller?.abort();
-    agentRequestRef.current = { controller: null, token: 0, chatId: null };
-    if (activeRun.chatId) clearAgentThinkingSteps(activeRun.chatId);
-    setAgentLoadingState(null);
-  }
 
   const doSend = async (override) => {
     const text = override || (chip ? `[Regarding: "${chip.substring(0, 80)}..."]\n${input}` : input);
@@ -3185,6 +2904,7 @@ export default function PaperviewApp() {
       console.warn('Paperview: could not write .paperview.json:', err);
     }
   };
+  syncRootFolderSnapshotRef.current = syncRootFolderSnapshot;
 
   // Merge a snapshot's chats and annotations into state + IndexedDB
   const applyFolderSnapshot = async (snapshot) => {
