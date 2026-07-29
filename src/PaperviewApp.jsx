@@ -11,8 +11,6 @@ import {
   loadFolderHandles,
   clearFolderHandles,
   saveAnnotation,
-  loadAnnotations,
-  deleteAnnotation,
   deleteAnnotationsByPaperIds,
   loadAllAnnotations,
   loadPaperTextCache,
@@ -31,977 +29,70 @@ import { selectRelevantPassages } from './ragUtils';
 import { addUsageTotals, createUsageTotals, getUsageBreakdown, formatTokenCount, formatUsd } from './openaiPricing';
 import { evictUnpinnedPayloads, mergePaperWithPayload, pickPaperPayload, stripPaperPayload } from './paperPayloadUtils';
 
-const ENV_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || '';
-const OPENAI_MODEL = import.meta.env.VITE_OPENAI_MODEL || "gpt-5.4-mini";
-const OPENAI_MODELS = (import.meta.env.VITE_OPENAI_MODELS || "gpt-5.4-nano,gpt-5.4-mini,gpt-5.4")
-  .split(",")
-  .map((m) => m.trim())
-  .filter(Boolean);
-
-const AGENT_IMPORTS_FOLDER_NAME = "Imported Papers";
-const OPENAI_PROXY_ENDPOINT = "/api/openai-response";
-const REMOTE_PDF_PROXY_ENDPOINT = "/api/fetch-pdf";
-const LEGACY_STORAGE_NAME = "pv-api-key";
-const REMEMBERED_STORAGE_NAME = "pv-api-key-v2";
-const KDF_ITERATION_COUNT = 250000;
-const AGENT_WEB_SEARCH_DOMAINS = [
-  "arxiv.org",
-  "biorxiv.org",
-  "doi.org",
-  "europepmc.org",
-  "frontiersin.org",
-  "jamanetwork.com",
-  "link.springer.com",
-  "medrxiv.org",
-  "nature.com",
-  "nejm.org",
-  "onlinelibrary.wiley.com",
-  "openalex.org",
-  "paperswithcode.com",
-  "pmc.ncbi.nlm.nih.gov",
-  "proceedings.mlr.press",
-  "pubmed.ncbi.nlm.nih.gov",
-  "sciencedirect.com",
-  "science.org",
-  "semanticscholar.org",
-  "thelancet.com",
-];
-
-const CHAT_SYSTEM_PROMPT = `You are an expert research assistant analyzing one or more academic PDFs.
-
-The document text you receive contains "--- Page N ---" markers that indicate where each page begins.
-
-## Retrieval workflow
-- You have access to a search_document tool for searching the available PDFs.
-- Before answering substantive questions about a paper, call search_document at least once to retrieve evidence.
-- You may call search_document multiple times with refined queries or different documents.
-- Base your answer and citations only on text that was actually retrieved through the tool.
-- If a citation is not found in the retrieved text, but the context clearly comes from the paper. Add the citation but without direct position information. Add for example "From paragraph ...". Also do not fabricate citations to fit an answer. Only cite what you can support with the retrieved text.
-- If you cannot find supporting evidence after searching, say that clearly instead of guessing.
-
-## Response format
-Respond ONLY with a raw JSON object (no markdown fences, no extra text) using this exact schema:
-{
-  "answer": "your detailed answer here",
-  "citations": [
-    {
-      "file": "exact document name as provided",
-      "page": <integer page number>,
-      "section": "section name if identifiable",
-      "text": "verbatim quote from the paper"
-    }
-  ]
-}
-
-## Answer guidelines
-- Write thorough, detailed answers in an academic style. Explain concepts fully rather than giving brief summaries.
-- Use **bold** to highlight key terms and findings.
-- Make sure that every claim you make is supported by a citation from the retrieved text. Do not make unsupported claims.
-- Every claim in bold must have a corresponding citation that supports it. If you cannot find a citation to support a claim, do not make that claim.
-- When comparing multiple papers, structure your answer with clear paragraphs for each perspective.
-- Always ask yourself "How do I know this?" and "Where in the paper does it say this?" and "is this backed by the paper" for every claim you make.
-
-## Citation guidelines
-- Every factual claim in your answer MUST be backed by a citation. Do not make unsupported claims.
-- Include as many citations as needed to fully support your answer (typically 2-6).
-- "file" must EXACTLY match one of the provided document names (case-sensitive, including extension).
-- "page" MUST be the integer from the nearest "--- Page N ---" marker that appears BEFORE the quoted text in that document. Count carefully — do not guess or approximate.
-- "text" must be a VERBATIM quote copied exactly from the document (one or two sentences). Do not paraphrase.
-- "section" should be the heading of the section where the quote appears, or "" if unclear.
-- If multiple documents are provided, cite from whichever ones are most relevant.`;
-
-const SEARCH_DOCUMENT_TOOL = {
-  type: "function",
-  name: "search_document",
-  description: "Search the currently available local or hydrated remote academic PDFs for passages relevant to a query before answering.",
-  parameters: {
-    type: "object",
-    properties: {
-      query: {
-        type: "string",
-        description: "Keywords, a short question, or a refined search query to look up in the document.",
-      },
-      document_name: {
-        type: "string",
-        description: "Exact document name from the provided available documents list.",
-      },
-      page_hint: {
-        type: ["integer", "null"],
-        description: "Optional page number to prioritize if the answer may be near a known page.",
-      },
-    },
-    required: ["query", "document_name", "page_hint"],
-    additionalProperties: false,
-  },
-  strict: true,
-};
-
-const FETCH_REMOTE_PAPER_TOOL = {
-  type: "function",
-  name: "fetch_remote_paper",
-  description: "Fetch and hydrate a remote paper PDF into a transient searchable document for this Agent thread. Use this before citing a found paper when a direct PDF URL is available.",
-  parameters: {
-    type: "object",
-    properties: {
-      title: {
-        type: "string",
-        description: "Paper title.",
-      },
-      source_url: {
-        type: "string",
-        description: "Landing or source URL for the paper.",
-      },
-      pdf_url: {
-        type: "string",
-        description: "Direct PDF URL for the paper.",
-      },
-      doi: {
-        type: "string",
-        description: "Optional DOI if known.",
-      },
-    },
-    required: ["title", "source_url", "pdf_url", "doi"],
-    additionalProperties: false,
-  },
-  strict: true,
-};
-
-const AGENT_WEB_SEARCH_TOOL = {
-  type: "web_search",
-  filters: {
-    allowed_domains: AGENT_WEB_SEARCH_DOMAINS,
-  },
-  external_web_access: true,
-};
-
-const AGENT_SYSTEM_PROMPT = `You are Paperview Agent, a research assistant that helps users discover papers online and connect them with papers already stored in Paperview.
-
-## Available tools
-- You can use the built-in web_search tool to find papers and recent research sources online.
-- You can use the fetch_remote_paper tool to hydrate a discovered paper PDF into a transient searchable document for this thread.
-- You can use the search_document tool to search locally attached PDFs and hydrated remote PDFs from the user's workspace.
-
-## Core behavior
-- Use web_search whenever the user asks to find papers, discover literature, compare external work, or answer questions that need current web information.
-- Use fetch_remote_paper for a found paper before relying on it in the answer when a direct PDF URL is available.
-- Use search_document when the user explicitly attached local PDFs or when local workspace papers are relevant to the question.
-- You may combine both tools in the same answer.
-- Never invent papers, URLs, DOIs, authors, years, or PDFs.
-- If a direct PDF URL is unavailable, leave it empty instead of guessing.
-
-## Response format
-Respond ONLY with a raw JSON object using this schema:
-{
-  "answer": "Markdown answer with inline citation markers like [1] or [2].",
-  "citations": [
-    {
-      "kind": "web" | "local",
-      "title": "source title",
-      "url": "https://example.com",
-      "pdf_url": "https://example.com/paper.pdf",
-      "source": "journal, website, or publisher",
-      "file": "exact local document name when kind is local",
-      "page": 1,
-      "section": "section name",
-      "text": "verbatim local quote or short supporting snippet",
-      "note": "optional short explanation"
-    }
-  ],
-  "paper_results": [
-    {
-      "title": "paper title",
-      "authors": ["Author One", "Author Two"],
-      "year": 2025,
-      "venue": "journal or conference",
-      "abstract": "short abstract or summary snippet",
-      "source_url": "https://landing-page",
-      "pdf_url": "https://direct-pdf-link",
-      "doi": "10.xxxx/xxxxx"
-    }
-  ]
-}
-
-## Citation rules
-- Every substantive claim in "answer" must include at least one marker like [1].
-- Citation markers must map to the 1-based index of the item in the citations array.
-- For web citations, include a real URL and title.
-- For web citations grounded in a fetched PDF, include the page number and short supporting snippet from that paper.
-- For local citations, include the exact local file name and the best page number you can support.
-- Prefer 2-8 citations total. Reuse citation numbers instead of duplicating the same source.
-
-## Paper result rules
-- Return up to 6 highly relevant papers when the user is searching for papers.
-- Include paper_results only when the user is looking for papers or when discovered papers materially help the answer.
-- Use empty strings or empty arrays for unknown fields; do not fabricate.
-- Prefer direct PDF links in pdf_url only when you are confident the URL points to a PDF.
-- Include a one-sentence summary in abstract or summary form so the client can render a short subtitle.
-
-## Answer style
-- Be concise but useful.
-- When local PDFs were attached, explicitly connect external findings back to the local workspace where relevant.
-- When a found paper has a usable PDF URL and you want to rely on it, fetch it and search it before citing it.`;
-
-const MAX_SEARCH_TOOL_ROUNDS = 20;
-const MAX_AGENT_RESEARCH_PASSES = 3;
-const TARGET_FOUND_SOURCES = 24;
-const MAX_FOUND_SOURCES_SHOWN = 8;
-const AGENT_MAX_OUTPUT_TOKENS = 8192;
-const AGENT_FINALIZE_MAX_OUTPUT_TOKENS = 6000;
-
-function createChatMessageId() {
-  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function makeStableId(prefix, path) {
-  let h = 0;
-  for (let i = 0; i < path.length; i += 1) {
-    h = ((h << 5) - h + path.charCodeAt(i)) | 0;
-  }
-  return `${prefix}-${(h >>> 0).toString(36)}`;
-}
-
-function hasExtractedPaperText(paper) {
-  return derivePageTexts(paper).length > 0;
-}
-
-function isPaperTextCacheValid(cacheEntry, paper) {
-  if (!cacheEntry || !paper?.id) return false;
-  return (
-    cacheEntry.paperId === paper.id &&
-    cacheEntry.fileSize === paper.fileSize &&
-    cacheEntry.fileLastModified === paper.fileLastModified &&
-    Array.isArray(cacheEntry.pageTexts) &&
-    Number.isFinite(cacheEntry.totalPages)
-  );
-}
-
-function getRememberedApiKeyRecord() {
-  try {
-    const raw = localStorage.getItem(REMEMBERED_STORAGE_NAME);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (
-      parsed?.version !== 1 ||
-      parsed?.algorithm !== "AES-GCM" ||
-      parsed?.kdf !== "PBKDF2-SHA-256" ||
-      !parsed?.salt ||
-      !parsed?.iv ||
-      !parsed?.ciphertext
-    ) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function hasRememberedApiKey() {
-  return Boolean(getRememberedApiKeyRecord());
-}
-
-function clearLegacyStoredApiKey() {
-  try { localStorage.removeItem(LEGACY_STORAGE_NAME); } catch { /* ignore */ }
-}
-
-function clearRememberedApiKey() {
-  try { localStorage.removeItem(REMEMBERED_STORAGE_NAME); } catch { /* ignore */ }
-  clearLegacyStoredApiKey();
-}
-
-function bytesToBase64(bytes) {
-  let binary = "";
-  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-  return window.btoa(binary);
-}
-
-function base64ToBytes(value) {
-  const binary = window.atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-async function deriveApiKeyStorageKey(passphrase, salt) {
-  const cryptoApi = window.crypto;
-  if (!cryptoApi?.subtle) {
-    throw new Error("Encrypted key storage requires Web Crypto support.");
-  }
-  const encoder = new TextEncoder();
-  const keyMaterial = await cryptoApi.subtle.importKey(
-    "raw",
-    encoder.encode(passphrase),
-    "PBKDF2",
-    false,
-    ["deriveKey"],
-  );
-  return cryptoApi.subtle.deriveKey(
-    {
-      name: "PBKDF2",
-      salt,
-      iterations: KDF_ITERATION_COUNT,
-      hash: "SHA-256",
-    },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
-  );
-}
-
-async function rememberApiKeyEncrypted(valueToEncrypt, passphrase) {
-  const cryptoApi = window.crypto;
-  if (!cryptoApi?.subtle) {
-    throw new Error("Encrypted key storage requires Web Crypto support.");
-  }
-  const salt = cryptoApi.getRandomValues(new Uint8Array(16));
-  const iv = cryptoApi.getRandomValues(new Uint8Array(12));
-  const key = await deriveApiKeyStorageKey(passphrase, salt);
-  const ciphertext = await cryptoApi.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    new TextEncoder().encode(valueToEncrypt),
-  );
-  const record = {
-    version: 1,
-    algorithm: "AES-GCM",
-    kdf: "PBKDF2-SHA-256",
-    iterations: KDF_ITERATION_COUNT,
-    salt: bytesToBase64(salt),
-    iv: bytesToBase64(iv),
-    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
-  };
-  // This persists only encrypted ciphertext plus non-secret decryption metadata.
-  localStorage.setItem(REMEMBERED_STORAGE_NAME, JSON.stringify(record));
-  clearLegacyStoredApiKey();
-}
-
-async function unlockRememberedApiKey(passphrase) {
-  const record = getRememberedApiKeyRecord();
-  if (!record) {
-    throw new Error("No remembered API key was found on this device.");
-  }
-  const salt = base64ToBytes(record.salt);
-  const iv = base64ToBytes(record.iv);
-  const key = await deriveApiKeyStorageKey(passphrase, salt);
-  const plaintext = await window.crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    key,
-    base64ToBytes(record.ciphertext),
-  );
-  return new TextDecoder().decode(plaintext);
-}
-
-function stripPdfExtension(name) {
-  return String(name || "").replace(/\.pdf$/i, "");
-}
-
-function sanitizeFileStem(value) {
-  const cleaned = String(value || "")
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[. ]+$/g, "");
-  return cleaned || "Imported paper";
-}
-
-function ensurePdfFileName(value) {
-  const stem = sanitizeFileStem(stripPdfExtension(value));
-  return `${stem}.pdf`;
-}
-
-function buildFolderPath(rootName, relativePath = "") {
-  const normalizedRelative = String(relativePath || "")
-    .split("/")
-    .filter(Boolean)
-    .join("/");
-  return normalizedRelative ? `/${rootName}/${normalizedRelative}` : `/${rootName}`;
-}
-
-function getRootFolderNameFromPath(folderPath) {
-  return String(folderPath || "").split("/").filter(Boolean)[0] || "";
-}
-
-function isPdfUrl(url) {
-  return /\.pdf(?:[?#].*)?$/i.test(String(url || ""));
-}
-
-function normalizeAgentSourceUrl(url) {
-  const value = String(url || "").trim();
-  if (!value) return "";
-  if (/^https?:\/\//i.test(value)) return value;
-  return `https://${value}`;
-}
-
-function getUrlHost(url) {
-  try {
-    return new URL(normalizeAgentSourceUrl(url)).hostname.replace(/^www\./i, "");
-  } catch {
-    return "";
-  }
-}
-
-function buildAgentImportKey(messageId, result) {
-  return `${messageId}:${result?.id || result?.sourceUrl || result?.title || "result"}`;
-}
-
-function normalizeLookupValue(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function summarizeToWordLimit(value, maxWords = 20) {
-  const words = String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
-  if (!words.length) return "";
-  return words.slice(0, maxWords).join(" ");
-}
-
-function formatSourceAuthors(authors) {
-  if (!Array.isArray(authors) || !authors.length) return "";
-  if (authors.length <= 4) return authors.join(", ");
-  return `${authors.slice(0, 4).join(", ")}, and ${authors.length - 4} more`;
-}
-
-function buildRemotePaperKey(value) {
-  const doi = normalizeLookupValue(value?.doi);
-  if (doi) return `doi:${doi}`;
-  const pdfUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.pdfUrl || value?.pdf_url || ""));
-  if (pdfUrl) return `pdf:${pdfUrl}`;
-  const sourceUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.sourceUrl || value?.source_url || value?.url || ""));
-  if (sourceUrl) return `src:${sourceUrl}`;
-  const title = normalizeLookupValue(value?.title);
-  return title ? `title:${title}` : "";
-}
-
-function getFoundSourceDedupeKey(value) {
-  const doi = normalizeLookupValue(value?.doi);
-  if (doi) return `doi:${doi}`;
-  const pdfUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.pdfUrl || ""));
-  if (pdfUrl) return `pdf:${pdfUrl}`;
-  const sourceUrl = normalizeLookupValue(normalizeAgentSourceUrl(value?.sourceUrl || ""));
-  if (sourceUrl) return `src:${sourceUrl}`;
-  const title = normalizeLookupValue(value?.title);
-  return title ? `title:${title}` : "";
-}
-
-function isScholarlyHost(host) {
-  const normalizedHost = normalizeLookupValue(host);
-  if (!normalizedHost) return false;
-  return AGENT_WEB_SEARCH_DOMAINS.some((domain) => (
-    normalizedHost === domain || normalizedHost.endsWith(`.${domain}`)
-  ));
-}
-
-function buildFoundSources({ paperResults = [], webSources = [], remotePapers = [] }) {
-  const candidates = [];
-  const remoteByKey = new Map(
-    remotePapers.map((paper) => [buildRemotePaperKey(paper), paper]).filter(([key]) => key)
-  );
-
-  paperResults.forEach((result, index) => {
-    const sourceUrl = normalizeAgentSourceUrl(result?.sourceUrl || result?.source_url || result?.url || "");
-    const pdfUrl = normalizeAgentSourceUrl(result?.pdfUrl || result?.pdf_url || "");
-    const key = buildRemotePaperKey({
-      title: result?.title,
-      sourceUrl,
-      pdfUrl,
-      doi: result?.doi,
-    });
-    const remotePaper = key ? remoteByKey.get(key) : null;
-    candidates.push({
-      id: result?.id || `found-source-model-${index}`,
-      title: String(result?.title || "").trim(),
-      authors: Array.isArray(result?.authors) ? result.authors.filter(Boolean) : [],
-      year: String(result?.year || "").trim(),
-      venue: String(result?.venue || "").trim(),
-      summary: summarizeToWordLimit(result?.summary || result?.abstract || ""),
-      sourceUrl,
-      pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
-      doi: String(result?.doi || "").trim(),
-      sourceHost: getUrlHost(sourceUrl || pdfUrl),
-      remotePaperId: remotePaper?.id || null,
-      hydrationStatus: remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
-      hydrationError: remotePaper?.hydrationError || "",
-      hasPdf: Boolean(pdfUrl),
-      modelRank: index,
-      sourceRank: Number.POSITIVE_INFINITY,
-    });
-  });
-
-  webSources.forEach((source, index) => {
-    const sourceUrl = normalizeAgentSourceUrl(source?.url || source?.site || "");
-    const pdfUrl = normalizeAgentSourceUrl(source?.pdf_url || source?.pdfUrl || "");
-    const key = buildRemotePaperKey({
-      title: source?.title,
-      sourceUrl,
-      pdfUrl,
-      doi: source?.doi,
-    });
-    const remotePaper = key ? remoteByKey.get(key) : null;
-    candidates.push({
-      id: `found-source-web-${index}`,
-      title: String(source?.title || "").trim(),
-      authors: [],
-      year: "",
-      venue: "",
-      summary: summarizeToWordLimit(source?.summary || source?.snippet || source?.description || ""),
-      sourceUrl,
-      pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
-      doi: String(source?.doi || "").trim(),
-      sourceHost: getUrlHost(sourceUrl || pdfUrl),
-      remotePaperId: remotePaper?.id || null,
-      hydrationStatus: remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
-      hydrationError: remotePaper?.hydrationError || "",
-      hasPdf: Boolean(pdfUrl),
-      modelRank: Number.POSITIVE_INFINITY,
-      sourceRank: index,
-    });
-  });
-
-  const deduped = [];
-  const seen = new Set();
-  candidates.forEach((candidate) => {
-    const key = getFoundSourceDedupeKey(candidate);
-    if (!candidate.title && !candidate.sourceUrl) return;
-    if (key && seen.has(key)) return;
-    if (key) seen.add(key);
-    deduped.push(candidate);
-  });
-
-  deduped.sort((a, b) => {
-    if (a.modelRank !== b.modelRank) return a.modelRank - b.modelRank;
-    const aScore = (a.hasPdf ? 4 : 0) + (a.doi ? 3 : 0) + (a.venue ? 2 : 0) + (a.year ? 1 : 0) + (isScholarlyHost(a.sourceHost) ? 2 : 0);
-    const bScore = (b.hasPdf ? 4 : 0) + (b.doi ? 3 : 0) + (b.venue ? 2 : 0) + (b.year ? 1 : 0) + (isScholarlyHost(b.sourceHost) ? 2 : 0);
-    if (aScore !== bScore) return bScore - aScore;
-    if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
-    return String(a.title || "").localeCompare(String(b.title || ""));
-  });
-
-  return {
-    total: deduped.length,
-    shown: deduped.slice(0, MAX_FOUND_SOURCES_SHOWN),
-    all: deduped,
-  };
-}
-
-function normalizeFoundSourceRecord(source, index = 0, remotePapers = []) {
-  const sourceUrl = normalizeAgentSourceUrl(source?.sourceUrl || source?.source_url || source?.url || "");
-  const pdfUrl = normalizeAgentSourceUrl(source?.pdfUrl || source?.pdf_url || "");
-  const remoteKey = buildRemotePaperKey({
-    title: source?.title,
-    sourceUrl,
-    pdfUrl,
-    doi: source?.doi,
-  });
-  const remotePaper = remoteKey
-    ? remotePapers.find((paper) => buildRemotePaperKey(paper) === remoteKey) || null
-    : null;
-
-  return {
-    id: source?.id || `found-source-${index}`,
-    title: String(source?.title || "").trim(),
-    authors: Array.isArray(source?.authors) ? source.authors.filter(Boolean) : [],
-    year: String(source?.year || "").trim(),
-    venue: String(source?.venue || "").trim(),
-    summary: summarizeToWordLimit(source?.summary || source?.abstract || source?.snippet || ""),
-    sourceUrl,
-    pdfUrl: isPdfUrl(pdfUrl) ? pdfUrl : "",
-    doi: String(source?.doi || "").trim(),
-    sourceHost: String(source?.sourceHost || getUrlHost(sourceUrl || pdfUrl)).trim(),
-    remotePaperId: source?.remotePaperId || remotePaper?.id || null,
-    hydrationStatus: source?.hydrationStatus || remotePaper?.hydrationStatus || (pdfUrl ? "available" : "source_only"),
-    hydrationError: source?.hydrationError || remotePaper?.hydrationError || "",
-    hasPdf: Boolean(source?.hasPdf || pdfUrl),
-  };
-}
-
-function getMessageFoundSources(message, remotePapers = []) {
-  if (Array.isArray(message?.foundSources) && message.foundSources.length) {
-    const normalized = message.foundSources
-      .map((source, index) => normalizeFoundSourceRecord(source, index, remotePapers))
-      .filter((source) => source.title || source.sourceUrl);
-    const shownCount = Number.isFinite(message?.foundSourcesShown)
-      ? Math.max(0, Math.min(normalized.length, Number(message.foundSourcesShown)))
-      : Math.min(normalized.length, MAX_FOUND_SOURCES_SHOWN);
-    return {
-      total: Number.isFinite(message?.foundSourcesTotal) ? Number(message.foundSourcesTotal) : normalized.length,
-      shown: normalized.slice(0, shownCount),
-      all: normalized,
-    };
-  }
-
-  const citationWebSources = Array.isArray(message?.citations)
-    ? message.citations
-        .filter((citation) => citation?.kind === "web" || citation?.url)
-        .map((citation) => ({
-          title: citation?.title || citation?.source || "",
-          url: citation?.url || "",
-          pdf_url: citation?.pdfUrl || citation?.pdf_url || "",
-          summary: citation?.note || citation?.text || "",
-        }))
-    : [];
-
-  return buildFoundSources({
-    paperResults: message?.paperResults || [],
-    webSources: citationWebSources,
-    remotePapers,
-  });
-}
-
-function findMatchingRemotePaper(remotePapers, descriptor) {
-  if (!Array.isArray(remotePapers) || !remotePapers.length) return null;
-  const remoteKey = buildRemotePaperKey(descriptor);
-  if (remoteKey) {
-    const exact = remotePapers.find((paper) => buildRemotePaperKey(paper) === remoteKey);
-    if (exact) return exact;
-  }
-  const targetId = String(descriptor?.remotePaperId || "").trim();
-  if (targetId) {
-    const byId = remotePapers.find((paper) => paper.id === targetId);
-    if (byId) return byId;
-  }
-  const title = normalizeLookupValue(descriptor?.title);
-  if (title) {
-    return remotePapers.find((paper) => normalizeLookupValue(paper?.title || paper?.name) === title) || null;
-  }
-  return null;
-}
-
-function findPaperByName(papers, requestedName) {
-  const exact = papers.find((paper) => paper.name === requestedName);
-  if (exact) return exact;
-  const normalized = normalizeLookupValue(requestedName);
-  if (!normalized) return null;
-  return papers.find((paper) => normalizeLookupValue(paper.name) === normalized) || null;
-}
-
-// Escape literal newlines/carriage-returns that appear inside JSON string values.
-// Models sometimes output unescaped newlines inside strings, making the JSON invalid.
-function sanitizeJsonNewlines(str) {
-  let inString = false;
-  let escaped = false;
-  let result = '';
-  for (let i = 0; i < str.length; i++) {
-    const c = str[i];
-    if (escaped) { result += c; escaped = false; continue; }
-    if (c === '\\' && inString) { result += c; escaped = true; continue; }
-    if (c === '"') { inString = !inString; result += c; continue; }
-    if (inString && c === '\n') { result += '\\n'; continue; }
-    if (inString && c === '\r') { result += '\\r'; continue; }
-    result += c;
-  }
-  return result;
-}
-
-// Fetch a URL, preferring the app backend and falling back to browser fetches when needed.
-async function fetchWithCorsProxy(url) {
-  try {
-    const proxyResponse = await fetch(`${REMOTE_PDF_PROXY_ENDPOINT}?url=${encodeURIComponent(url)}`, {
-      headers: {
-        Accept: "application/pdf",
-      },
-    });
-    const proxyContentType = String(proxyResponse.headers.get("content-type") || "").toLowerCase();
-    if (proxyResponse.ok && !proxyContentType.includes("text/html")) return proxyResponse;
-
-    const proxyText = await proxyResponse.text();
-    const looksLikeAppShell = proxyContentType.includes("text/html") && /<!doctype html|<html/i.test(proxyText);
-    if (proxyResponse.ok || !looksLikeAppShell) {
-      // Fall through to browser-based fetches if the backend proxy is unavailable or the remote fetch failed.
-    }
-  } catch {
-    // Fall back to browser-based fetches below.
-  }
-
-  let directError = null;
-  try {
-    const res = await fetch(url);
-    if (res.ok) return res;
-    // Non-2xx but not a CORS block — throw so the proxy isn't used needlessly
-    directError = new Error(`Remote PDF download failed (${res.status}).`);
-  } catch (err) {
-    // TypeError ("Failed to fetch") is how browsers surface CORS blocks
-    directError = err;
-  }
-  const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-  const res = await fetch(proxyUrl);
-  if (!res.ok) throw directError || new Error(`Remote PDF download failed (${res.status}).`);
-  return res;
-}
-
-function extractOutputTextPart(part) {
-  if (!part || typeof part !== "object") return "";
-  if (typeof part.text === "string") return part.text.trim();
-  if (typeof part.value === "string") return part.value.trim();
-  if (typeof part?.text?.value === "string") return part.text.value.trim();
-  if (typeof part?.value?.text === "string") return part.value.text.trim();
-  return "";
-}
-
-function extractResponseOutputText(data) {
-  const chunks = [];
-  const seen = new Set();
-
-  if (typeof data?.output_text === "string" && data.output_text.trim()) {
-    const text = data.output_text.trim();
-    chunks.push(text);
-    seen.add(text);
-  }
-
-  for (const item of data?.output || []) {
-    if (!Array.isArray(item?.content)) continue;
-    for (const part of item.content) {
-      if ((part?.type === "output_text" || part?.type === "text") && extractOutputTextPart(part)) {
-        const text = extractOutputTextPart(part);
-        if (!seen.has(text)) {
-          chunks.push(text);
-          seen.add(text);
-        }
-      }
-    }
-  }
-
-  return chunks.join("\n").trim();
-}
-
-function extractFunctionCalls(data) {
-  return (data?.output || []).filter((item) => item?.type === "function_call" && item?.name);
-}
-
-function formatSearchToolResult(paper, query, passages) {
-  if (!passages.length) {
-    return [
-      `Document: "${paper.name}"`,
-      `Search query: "${query}"`,
-      "No relevant passages were found for this query.",
-    ].join("\n");
-  }
-
-  return [
-    `Document: "${paper.name}"`,
-    `Search query: "${query}"`,
-    "Retrieved passages:",
-    ...passages.map(({ page, text }) => `--- Page ${page} ---\n${text}`),
-  ].join("\n\n");
-}
-
-function extractWebSearchSources(data) {
-  const sources = [];
-  for (const item of data?.output || []) {
-    if (item?.type !== "web_search_call") continue;
-    const nextSources = item?.action?.sources;
-    if (Array.isArray(nextSources)) {
-      sources.push(...nextSources);
-    }
-  }
-  return sources;
-}
-
-function extractReasoningSummary(data) {
-  const texts = [];
-  for (const item of data?.output || []) {
-    if (item?.type === "reasoning" && Array.isArray(item.summary)) {
-      for (const s of item.summary) {
-        if (s?.type === "summary_text" && typeof s.text === "string" && s.text.trim()) {
-          texts.push(s.text.trim());
-        }
-      }
-    }
-  }
-  return texts.join("\n\n").trim();
-}
-
-function isResponseIncompleteForMaxOutput(data) {
-  return data?.status === "incomplete" && data?.incomplete_details?.reason === "max_output_tokens";
-}
-
-function getUrlFileStem(url) {
-  try {
-    const normalized = normalizeAgentSourceUrl(url);
-    const pathname = new URL(normalized).pathname || "";
-    const lastSegment = pathname.split("/").filter(Boolean).pop() || "";
-    return stripPdfExtension(decodeURIComponent(lastSegment));
-  } catch {
-    return "";
-  }
-}
-
-function isLikelySamePaperTitle(left, right) {
-  const a = normalizeLookupValue(left);
-  const b = normalizeLookupValue(right);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (Math.min(a.length, b.length) < 14) return false;
-  return a.includes(b) || b.includes(a);
-}
-
-function isLikelySamePaperFile(paperName, source) {
-  const normalizedPaperName = normalizeLookupValue(stripPdfExtension(paperName));
-  const pdfStem = normalizeLookupValue(getUrlFileStem(source?.pdfUrl || source?.sourceUrl || ""));
-  if (!normalizedPaperName || !pdfStem) return false;
-  return normalizedPaperName === pdfStem || (pdfStem.length > 10 && normalizedPaperName.includes(pdfStem));
-}
-
-function findWorkspacePaperForSource(papers, source) {
-  if (!Array.isArray(papers) || !papers.length || !source) return null;
-  const exactTitle = papers.find((paper) => isLikelySamePaperTitle(paper?.name, source?.title));
-  if (exactTitle) return exactTitle;
-  const pdfStemMatch = papers.find((paper) => isLikelySamePaperFile(paper?.name, source));
-  if (pdfStemMatch) return pdfStemMatch;
-  return null;
-}
-
-function isManualPdfFetchError(message) {
-  return /invalid pdf structure|did not look like a pdf|server-side requests are not allowed|publisher blocked automated pdf|automated pdf fetch|forbidden/i.test(String(message || ""));
-}
-
-function buildManualPdfFetchMessage(title = "This paper") {
-  return `${title} blocked automated PDF fetch. Open the direct PDF in a browser tab, then download and import it manually.`;
-}
-
-function mergeFoldersByRoot(prevFolders, nextFolders, rootFolderId) {
-  if (!rootFolderId) return [...prevFolders];
-  const firstIndex = prevFolders.findIndex((folder) => folder.rootFolderId === rootFolderId);
-  const remaining = prevFolders.filter((folder) => folder.rootFolderId !== rootFolderId);
-  const insertIndex = firstIndex === -1 ? remaining.length : Math.min(firstIndex, remaining.length);
-  const merged = [...remaining];
-  merged.splice(insertIndex, 0, ...nextFolders);
-  return merged;
-}
-
-async function requestOpenAIResponse(apiKey, payload, options = {}) {
-  const { signal } = options;
-  try {
-    const proxyHeaders = {
-      "Content-Type": "application/json",
-    };
-    if (apiKey) proxyHeaders["x-openai-api-key"] = apiKey;
-
-    const proxyResponse = await fetch(OPENAI_PROXY_ENDPOINT, {
-      method: "POST",
-      headers: proxyHeaders,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    const proxyContentType = String(proxyResponse.headers.get("content-type") || "").toLowerCase();
-    const proxyBody = await proxyResponse.text();
-    const looksLikeAppShell = proxyContentType.includes("text/html") && /<!doctype html|<html/i.test(proxyBody);
-
-    if (proxyResponse.ok && !looksLikeAppShell) {
-      return JSON.parse(proxyBody);
-    }
-
-    if (!looksLikeAppShell) {
-      if (!apiKey) {
-        throw new Error(proxyBody || "OpenAI request failed");
-      }
-    }
-  } catch (err) {
-    if (!apiKey) {
-      if (err instanceof TypeError) {
-        throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
-      }
-      throw err;
-    }
-  }
-
-  if (!apiKey) {
-    throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
-  }
-
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
-    signal,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(errText || "OpenAI request failed");
-  }
-
-  return res.json();
-}
-
-function createStoppedError(message = "Request stopped.") {
-  const error = new Error(message);
-  error.name = "AbortError";
-  return error;
-}
-
-function isAbortLikeError(error) {
-  return error?.name === "AbortError" || /aborted|aborterror|request stopped/i.test(String(error?.message || ""));
-}
-
-function ThinkingTrace({ steps, isLive, expanded, onToggle }) {
-  if (!steps?.length) return null;
-  const searchCount = steps.filter(s => s.type === "search").length;
-  const icons = { reasoning: "o", search: ">", result: "+" };
-  const panelRef = React.useRef(null);
-
-  React.useEffect(() => {
-    if (!isLive || !panelRef.current) return;
-    panelRef.current.scrollTop = panelRef.current.scrollHeight;
-  }, [isLive, steps]);
-
-  const stepsEl = (
-    <div className="thinking-trace-panel">
-      <div ref={panelRef} className="thinking-trace-panel-scroll">
-        <div className="thinking-trace-steps">
-          {steps.map(s => (
-            <div key={s.id} className={`thinking-step thinking-step-${s.type}`}>
-              <div className="thinking-step-header">
-                <span className="thinking-step-icon">{icons[s.type] || "-"}</span>
-                <span className="thinking-step-label">{s.label}</span>
-              </div>
-              {s.body && (
-                <div className="thinking-step-body">{s.body}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
-  if (isLive) {
-    return (
-      <div className="thinking-trace thinking-trace-live">
-        <div className="thinking-trace-summary">
-          <span className="thinking-trace-summary-icon">*</span>
-          <span className="thinking-trace-summary-label">Thinking</span>
-          {searchCount > 0 && (
-            <span className="thinking-trace-toggle-count">{searchCount} search{searchCount !== 1 ? "es" : ""}</span>
-          )}
-        </div>
-        {stepsEl}
-      </div>
-    );
-  }
-
-  return (
-    <div className="thinking-trace">
-      <button className="thinking-trace-toggle" type="button" onClick={onToggle}>
-        <span className="thinking-trace-toggle-icon">*</span>
-        <span className="thinking-trace-toggle-label">Thinking</span>
-        {searchCount > 0 && (
-          <span className="thinking-trace-toggle-count">{searchCount} search{searchCount !== 1 ? "es" : ""}</span>
-        )}
-        <span className="thinking-trace-chevron">{expanded ? "^" : "v"}</span>
-      </button>
-      {expanded && stepsEl}
-    </div>
-  );
-}
+import {
+  OPENAI_MODEL,
+  OPENAI_MODELS,
+  AGENT_IMPORTS_FOLDER_NAME,
+  CHAT_SYSTEM_PROMPT,
+  SEARCH_DOCUMENT_TOOL,
+  FETCH_REMOTE_PAPER_TOOL,
+  AGENT_WEB_SEARCH_TOOL,
+  AGENT_SYSTEM_PROMPT,
+  MAX_SEARCH_TOOL_ROUNDS,
+  MAX_AGENT_RESEARCH_PASSES,
+  TARGET_FOUND_SOURCES,
+  MAX_FOUND_SOURCES_SHOWN,
+  AGENT_MAX_OUTPUT_TOKENS,
+  AGENT_FINALIZE_MAX_OUTPUT_TOKENS,
+} from './constants';
+import {
+  sanitizeJsonNewlines,
+  fetchWithCorsProxy,
+  extractResponseOutputText,
+  extractFunctionCalls,
+  formatSearchToolResult,
+  extractWebSearchSources,
+  extractReasoningSummary,
+  isResponseIncompleteForMaxOutput,
+  requestOpenAIResponse,
+} from './openaiResponseParsing';
+import {
+  stripPdfExtension,
+  isPdfUrl,
+  normalizeAgentSourceUrl,
+  getUrlHost,
+  buildAgentImportKey,
+  summarizeToWordLimit,
+  formatSourceAuthors,
+  buildRemotePaperKey,
+  buildFoundSources,
+  getMessageFoundSources,
+  findMatchingRemotePaper,
+  findPaperByName,
+  findWorkspacePaperForSource,
+  isManualPdfFetchError,
+  buildManualPdfFetchMessage,
+} from './agentSources';
+import {
+  createChatMessageId,
+  makeStableId,
+  hasExtractedPaperText,
+  isPaperTextCacheValid,
+  sanitizeFileStem,
+  ensurePdfFileName,
+  buildFolderPath,
+  mergeFoldersByRoot,
+  isAbortLikeError,
+} from './miscUtils';
+import ThinkingTrace from './ThinkingTrace';
+import SettingsModal from './components/SettingsModal';
+import UploadModal from './components/UploadModal';
+import FolderPermModal from './components/FolderPermModal';
+import { useApiKey } from './hooks/useApiKey';
+import { useRequestRuns } from './hooks/useRequestRun';
+import { usePanelResize } from './hooks/usePanelResize';
+import { useViewerSearch } from './hooks/useViewerSearch';
+import { useAnnotations } from './hooks/useAnnotations';
 
 export default function PaperviewApp() {
   const [folders, setFolders] = useState([]);
@@ -1056,34 +147,45 @@ export default function PaperviewApp() {
   const [agentPreviewScale, setAgentPreviewScale] = useState(1.05);
   const [agentPreviewPage, setAgentPreviewPage] = useState(1);
   const [agentPreviewWidth, setAgentPreviewWidth] = useState(null);
+  const { width: chatWidth, startResize: startChatResizeBase } = usePanelResize({ initialWidth: 480, min: 340, max: 760, direction: "right" });
+  const { width: sidebarWidth, startResize: startSbResizeBase } = usePanelResize({ initialWidth: 260, min: 180, max: 520, direction: "left" });
+  const { startResize: startAgentPreviewResizeBase } = usePanelResize({ initialWidth: 420, min: 300, max: 900, direction: "right" });
   const [currentPage, setCurrentPage] = useState(1);
-  const [viewerSearchOpen, setViewerSearchOpen] = useState(false);
-  const [viewerSearchQuery, setViewerSearchQuery] = useState("");
-  const [viewerSearchStatus, setViewerSearchStatus] = useState("");
-  const [viewerSearchMatches, setViewerSearchMatches] = useState([]);
-  const [viewerSearchIndex, setViewerSearchIndex] = useState(-1);
+
   const [scale, setScale] = useState(1.4);
-  const [chatWidth, setChatWidth] = useState(480);
-  const [sidebarWidth, setSidebarWidth] = useState(260);
-  const [apiKey, setApiKey] = useState(() => ENV_API_KEY);
-  const [apiKeySource, setApiKeySource] = useState(() => (ENV_API_KEY ? "env" : "none"));
-  const [rememberedApiKeyAvailable, setRememberedApiKeyAvailable] = useState(() => hasRememberedApiKey());
+
   const [privacyAccepted, setPrivacyAccepted] = useState(() => !!localStorage.getItem('pv-privacy-ok'));
   const [showFolderPermModal, setShowFolderPermModal] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [settingsKey, setSettingsKey] = useState('');
-  const [settingsKeyVisible, setSettingsKeyVisible] = useState(false);
-  const [rememberApiKey, setRememberApiKey] = useState(false);
-  const [settingsPassphrase, setSettingsPassphrase] = useState('');
-  const [settingsPassphraseVisible, setSettingsPassphraseVisible] = useState(false);
-  const [unlockPassphrase, setUnlockPassphrase] = useState('');
-  const [unlockPassphraseVisible, setUnlockPassphraseVisible] = useState(false);
-  const [settingsError, setSettingsError] = useState('');
-  const [settingsBusy, setSettingsBusy] = useState(false);
+  const {
+    apiKey,
+    apiKeySource,
+    rememberedApiKeyAvailable,
+    showSettings,
+    settingsKey,
+    setSettingsKey,
+    settingsKeyVisible,
+    setSettingsKeyVisible,
+    rememberApiKey,
+    setRememberApiKey,
+    settingsPassphrase,
+    setSettingsPassphrase,
+    settingsPassphraseVisible,
+    setSettingsPassphraseVisible,
+    unlockPassphrase,
+    setUnlockPassphrase,
+    unlockPassphraseVisible,
+    setUnlockPassphraseVisible,
+    settingsError,
+    setSettingsError,
+    settingsBusy,
+    openSettingsModal,
+    closeSettingsModal,
+    handleRemoveApiKey,
+    handleUnlockRememberedApiKey,
+    handleSaveSettingsApiKey,
+    setRememberedApiKeyAvailable,
+  } = useApiKey();
   const [edgeToast, setEdgeToast] = useState(false);
-  const [annotations, setAnnotations] = useState([]);
-  const [annPopover, setAnnPopover] = useState(null);
-  const [annComment, setAnnComment] = useState('');
   const [debugCitations] = useState(() => {
     try {
       return new URLSearchParams(window.location.search).has("debugCitations");
@@ -1105,10 +207,8 @@ export default function PaperviewApp() {
   const attachMenuRef = useRef(null);
   const agentAttachMenuRef = useRef(null);
   const agentToolMenuRef = useRef(null);
-  const viewerSearchInputRef = useRef(null);
-  const chatResizeRef = useRef({ active: false, startX: 0, startWidth: 480 });
-  const sbResizeRef = useRef({ active: false, startX: 0, startWidth: 260 });
-  const agentPreviewResizeRef = useRef({ active: false, startX: 0, startWidth: 0 });
+
+
   const scanDirHandleRef = useRef(null);
   const folderHandlesMapRef = useRef(new Map()); // folderId → root FileSystemDirectoryHandle
   const foldersRef = useRef([]);
@@ -1118,8 +218,13 @@ export default function PaperviewApp() {
   const agentRemotePaperJobsRef = useRef(new Map());
   const paperTextJobsRef = useRef(new Map());
   const folderRefreshStateRef = useRef({ rootFolderId: null, lastRunAt: 0 });
-  const chatRequestRef = useRef({ controller: null, token: 0, chatId: null });
-  const agentRequestRef = useRef({ controller: null, token: 0, chatId: null });
+  const {
+    chatRequestRef,
+    agentRequestRef,
+    beginRequestRun,
+    ensureRequestRunActive,
+    finishRequestRun,
+  } = useRequestRuns();
 
   useEffect(() => {
     loadAllChats().then((saved) => {
@@ -1142,99 +247,7 @@ export default function PaperviewApp() {
   useEffect(() => { chatThreadsRef.current = chatThreads; }, [chatThreads]);
   useEffect(() => { agentThreadsRef.current = agentThreads; }, [agentThreads]);
   useEffect(() => () => { terminateTesseractWorkerNow().catch(() => {}); }, []);
-  useEffect(() => () => {
-    chatRequestRef.current.controller?.abort();
-    agentRequestRef.current.controller?.abort();
-  }, []);
-  useEffect(() => {
-    clearLegacyStoredApiKey();
-    setRememberedApiKeyAvailable(hasRememberedApiKey());
-  }, []);
 
-  const resetSettingsInputs = useCallback(() => {
-    setSettingsKey("");
-    setSettingsKeyVisible(false);
-    setRememberApiKey(false);
-    setSettingsPassphrase("");
-    setSettingsPassphraseVisible(false);
-    setUnlockPassphrase("");
-    setUnlockPassphraseVisible(false);
-    setSettingsError("");
-  }, []);
-
-  const openSettingsModal = useCallback((prefill = "") => {
-    resetSettingsInputs();
-    setSettingsKey(prefill);
-    setShowSettings(true);
-  }, [resetSettingsInputs]);
-
-  const closeSettingsModal = useCallback(() => {
-    if (settingsBusy) return;
-    setShowSettings(false);
-    resetSettingsInputs();
-  }, [resetSettingsInputs, settingsBusy]);
-
-  const handleRemoveApiKey = useCallback(() => {
-    setApiKey("");
-    setApiKeySource("none");
-    clearRememberedApiKey();
-    setRememberedApiKeyAvailable(false);
-    resetSettingsInputs();
-  }, [resetSettingsInputs]);
-
-  const handleUnlockRememberedApiKey = useCallback(async () => {
-    const passphrase = unlockPassphrase.trim();
-    if (!passphrase) {
-      setSettingsError("Enter the passphrase used to remember this key.");
-      return;
-    }
-    setSettingsBusy(true);
-    setSettingsError("");
-    try {
-      const unlocked = await unlockRememberedApiKey(passphrase);
-      setApiKey(unlocked);
-      setApiKeySource("remembered");
-      setShowSettings(false);
-      resetSettingsInputs();
-    } catch {
-      setSettingsError("Could not unlock the remembered key. Check the passphrase and try again.");
-    } finally {
-      setSettingsBusy(false);
-    }
-  }, [resetSettingsInputs, unlockPassphrase]);
-
-  const handleSaveSettingsApiKey = useCallback(async () => {
-    const trimmed = settingsKey.trim();
-    const passphrase = settingsPassphrase.trim();
-    if (!trimmed) {
-      setSettingsError("Enter an OpenAI API key first.");
-      return;
-    }
-    if (rememberApiKey && passphrase.length < 8) {
-      setSettingsError("Use at least 8 characters for the encryption passphrase.");
-      return;
-    }
-    setSettingsBusy(true);
-    setSettingsError("");
-    try {
-      if (rememberApiKey) {
-        await rememberApiKeyEncrypted(trimmed, passphrase);
-        setRememberedApiKeyAvailable(true);
-        setApiKeySource("remembered");
-      } else {
-        clearRememberedApiKey();
-        setRememberedApiKeyAvailable(false);
-        setApiKeySource("memory");
-      }
-      setApiKey(trimmed);
-      setShowSettings(false);
-      resetSettingsInputs();
-    } catch (error) {
-      setSettingsError(error?.message || "Could not save this API key securely.");
-    } finally {
-      setSettingsBusy(false);
-    }
-  }, [rememberApiKey, resetSettingsInputs, settingsKey, settingsPassphrase]);
 
   // Restore previously opened folders from IndexedDB (runs after scanDirHandle is defined)
   useEffect(() => {
@@ -1315,11 +328,6 @@ export default function PaperviewApp() {
   const activePaper = useMemo(() => mergePaperRecord(activePaperDescriptor), [activePaperDescriptor, mergePaperRecord]);
   const selectedFolder = folders.find((f) => f.id === selectedFolderId) || null;
 
-  // Load annotations for active paper
-  useEffect(() => {
-    if (!activePaper?.id) { setAnnotations([]); return; }
-    loadAnnotations(activePaper.id).then((anns) => setAnnotations(anns || [])).catch(() => setAnnotations([]));
-  }, [activePaper?.id]);
 
   const activeFolder =
     folders.find((f) => f.papers.some((p) => p.id === activeTabId)) ||
@@ -1349,8 +357,7 @@ export default function PaperviewApp() {
   const activePaperScanPercent = Math.round(activePaperScanProgress * 100);
   const isActivePaperScanning = (activePaperScanState?.status || activePaper?.textStatus) === "scanning";
   const activePaperScanLabel = activePaperScanState?.label || activePaper?.textStatusText || "Scanning paper...";
-  const canRunViewerSearch = Boolean(viewerSearchQuery.trim()) && searchablePageTexts.length > 0;
-  const hasViewerSearchResults = viewerSearchMatches.length > 0;
+
   const activeChat = useMemo(
     () => chatThreads.find((thread) => thread.id === activeChatId) || null,
     [chatThreads, activeChatId]
@@ -1878,84 +885,8 @@ export default function PaperviewApp() {
   }, [selectedRootFolderId, hasWritableAgentContext, activeAgentChatId, agentThreads]);
 
   useEffect(() => {
-    const onMouseMove = (event) => {
-      if (!chatResizeRef.current.active) return;
-      const delta = chatResizeRef.current.startX - event.clientX;
-      const nextWidth = Math.max(340, Math.min(760, chatResizeRef.current.startWidth + delta));
-      setChatWidth(nextWidth);
-    };
-
-    const onMouseUp = () => {
-      if (!chatResizeRef.current.active) return;
-      chatResizeRef.current.active = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
-
-  useEffect(() => {
-    const onMouseMove = (event) => {
-      if (!sbResizeRef.current.active) return;
-      const delta = event.clientX - sbResizeRef.current.startX;
-      const nextWidth = Math.max(180, Math.min(520, sbResizeRef.current.startWidth + delta));
-      setSidebarWidth(nextWidth);
-    };
-    const onMouseUp = () => {
-      if (!sbResizeRef.current.active) return;
-      sbResizeRef.current.active = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
-
-  useEffect(() => {
-    const onMouseMove = (event) => {
-      if (!agentPreviewResizeRef.current.active) return;
-      const delta = agentPreviewResizeRef.current.startX - event.clientX;
-      const nextWidth = Math.max(300, Math.min(900, agentPreviewResizeRef.current.startWidth + delta));
-      setAgentPreviewWidth(nextWidth);
-    };
-
-    const onMouseUp = () => {
-      if (!agentPreviewResizeRef.current.active) return;
-      agentPreviewResizeRef.current.active = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
-
-  useEffect(() => {
     setCurrentPage(1);
-    setViewerSearchStatus("");
-    setViewerSearchMatches([]);
-    setViewerSearchIndex(-1);
   }, [activeTabId]);
-
-  useEffect(() => {
-    if (viewerSearchOpen) {
-      setTimeout(() => viewerSearchInputRef.current?.focus(), 0);
-    }
-  }, [viewerSearchOpen]);
 
   useEffect(() => {
     const availableIds = new Set(activeFolderPapers.map((p) => p.id));
@@ -2043,6 +974,30 @@ export default function PaperviewApp() {
     document.addEventListener("mscontrolselect", (e) => e.preventDefault());
     return () => document.removeEventListener("mouseup", handler);
   }, []);
+
+  // Trigger a folder snapshot write for the folder that owns a given paper
+  const syncFolderForPaper = (paperId) => {
+    if (!paperId) return;
+    for (const folder of foldersRef.current) {
+      if (folder.papers.some((p) => p.id === paperId)) {
+        syncRootFolderSnapshot(folder.rootFolderId).catch(() => {});
+        return;
+      }
+    }
+  };
+
+  const {
+    annotations,
+    setAnnotations,
+    annPopover,
+    setAnnPopover,
+    annComment,
+    setAnnComment,
+    handleHighlight,
+    handleAnnotationClick,
+    saveAnnotationComment,
+    deleteAnnotationById,
+  } = useAnnotations({ activePaper, popup, setPopup, syncFolderForPaper });
 
   const appendMessageToChat = useCallback((chatId, message, options = {}) => {
     const paperId = chatThreadsRef.current.find((t) => t.id === chatId)?.paperId;
@@ -2534,46 +1489,21 @@ export default function PaperviewApp() {
   }, [activeAgentChatId, hydrateRemotePaperForAgent, jumpAgentPreviewToLocation]);
 
   const startChatResize = useCallback(
-    (event) => {
-      if (!chatOpen) return;
-      chatResizeRef.current = {
-        active: true,
-        startX: event.clientX,
-        startWidth: chatWidth,
-      };
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    },
-    [chatOpen, chatWidth]
+    (event) => startChatResizeBase(event, { enabled: chatOpen }),
+    [chatOpen, startChatResizeBase]
   );
 
   const startSbResize = useCallback(
-    (event) => {
-      if (!sidebarOpen) return;
-      sbResizeRef.current = {
-        active: true,
-        startX: event.clientX,
-        startWidth: sidebarWidth,
-      };
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    },
-    [sidebarOpen, sidebarWidth]
+    (event) => startSbResizeBase(event, { enabled: sidebarOpen }),
+    [sidebarOpen, startSbResizeBase]
   );
 
   const startAgentPreviewResize = useCallback(
-    (event) => {
-      if (!hasAgentPreview) return;
-      const currentWidth = agentPreviewPaneRef.current?.offsetWidth || 420;
-      agentPreviewResizeRef.current = {
-        active: true,
-        startX: event.clientX,
-        startWidth: currentWidth,
-      };
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    },
-    [hasAgentPreview]
+    (event) => startAgentPreviewResizeBase(event, {
+      enabled: hasAgentPreview,
+      startWidth: agentPreviewPaneRef.current?.offsetWidth || 420,
+    }),
+    [hasAgentPreview, startAgentPreviewResizeBase]
   );
 
   const openPaper = async (paper, folderId) => {
@@ -2699,109 +1629,6 @@ export default function PaperviewApp() {
     taRef.current?.focus();
   };
 
-  const handleHighlight = () => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !popup) return;
-    const range = sel.getRangeAt(0);
-    const viewer = document.querySelector('.viewer');
-    if (!viewer) return;
-
-    // Find the page wrapper containing the selection
-    let pageWrap = range.startContainer.nodeType === 3
-      ? range.startContainer.parentElement?.closest('[data-page]')
-      : range.startContainer.closest?.('[data-page]');
-    if (!pageWrap) return;
-
-    const pageNum = parseInt(pageWrap.dataset.page, 10);
-    const tl = pageWrap.querySelector('.textLayer');
-    if (!tl) return;
-
-    const spans = Array.from(tl.querySelectorAll('span'));
-    if (!spans.length) return;
-
-    // Build character offset from text layer spans
-    let charPos = 0;
-    let startOffset = -1;
-    let endOffset = -1;
-
-    for (const span of spans) {
-      const text = span.textContent || '';
-      const spanStart = charPos;
-      const spanEnd = charPos + text.length;
-
-      if (range.intersectsNode(span)) {
-        // Compute where selection starts/ends within this span
-        let relStart = 0;
-        let relEnd = text.length;
-
-        if (span.contains(range.startContainer) || span === range.startContainer) {
-          relStart = range.startContainer.nodeType === 3
-            ? range.startOffset
-            : 0;
-        }
-        if (span.contains(range.endContainer) || span === range.endContainer) {
-          relEnd = range.endContainer.nodeType === 3
-            ? range.endOffset
-            : text.length;
-        }
-
-        const absStart = spanStart + relStart;
-        const absEnd = spanStart + relEnd;
-
-        if (startOffset === -1 || absStart < startOffset) startOffset = absStart;
-        if (absEnd > endOffset) endOffset = absEnd;
-      }
-      charPos += text.length;
-    }
-
-    if (startOffset === -1 || endOffset === -1 || startOffset >= endOffset) return;
-
-    const selectedText = popup.text;
-    const newAnn = {
-      id: `ann-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      paperId: activePaper?.id,
-      pageNum,
-      selectedText,
-      comment: '',
-      color: 'rgba(255,213,79,.4)',
-      startOffset,
-      endOffset,
-      createdAt: Date.now(),
-    };
-
-    setAnnotations((prev) => [...prev, newAnn]);
-    saveAnnotation(newAnn).catch(() => {});
-    syncFolderForPaper(newAnn.paperId);
-    setPopup(null);
-    window.getSelection()?.removeAllRanges();
-
-    // Show popover for comment entry
-    const rect = range.getBoundingClientRect();
-    setAnnPopover({ ann: newAnn, x: rect.left + rect.width / 2, y: rect.bottom + 4, isNew: true });
-    setAnnComment('');
-  };
-
-  const handleAnnotationClick = useCallback((ann, pos) => {
-    setAnnPopover({ ann, x: pos.x, y: pos.y, isNew: false });
-    setAnnComment(ann.comment || '');
-    setPopup(null);
-  }, []);
-
-  const saveAnnotationComment = () => {
-    if (!annPopover) return;
-    const updated = { ...annPopover.ann, comment: annComment };
-    setAnnotations((prev) => prev.map((a) => a.id === updated.id ? updated : a));
-    saveAnnotation(updated).catch(() => {});
-    syncFolderForPaper(updated.paperId);
-    setAnnPopover(null);
-  };
-
-  const deleteAnnotationById = (annId) => {
-    setAnnotations((prev) => prev.filter((a) => a.id !== annId));
-    deleteAnnotation(annId).catch(() => {});
-    setAnnPopover(null);
-  };
-
   const goToPage = useCallback(
     (requestedPage, searchText = "", occurrenceIndex) => {
       const total = activePaperTotalPages;
@@ -2812,76 +1639,20 @@ export default function PaperviewApp() {
     [activePaperTotalPages]
   );
 
-  const buildViewerSearchMatches = useCallback((rawQuery) => {
-    const q = String(rawQuery || "").trim();
-    if (!q || !searchablePageTexts.length) return [];
-
-    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const isSingleWord = q.split(/\s+/).filter(Boolean).length === 1;
-    const pattern = isSingleWord ? `\\b${escaped}\\b` : escaped;
-    const re = new RegExp(pattern, "gi");
-    const found = [];
-
-    searchablePageTexts.forEach((entry) => {
-      const page = Number(entry?.page);
-      const text = String(entry?.text || "");
-      if (!Number.isFinite(page) || page <= 0 || !text) return;
-
-      let perPageIndex = 0;
-      re.lastIndex = 0;
-      let m;
-      while ((m = re.exec(text)) !== null) {
-        found.push({ page, occurrenceIndex: perPageIndex });
-        perPageIndex += 1;
-        if (!m[0]?.length) re.lastIndex += 1;
-      }
-    });
-
-    return found;
-  }, [searchablePageTexts]);
-
-  const runViewerSearch = useCallback((direction = 1) => {
-    const q = viewerSearchQuery.trim();
-    if (!q || !searchablePageTexts.length) {
-      setViewerSearchStatus(q ? "No searchable text" : "");
-      setViewerSearchMatches([]);
-      setViewerSearchIndex(-1);
-      return;
-    }
-
-    const matches = buildViewerSearchMatches(q);
-    setViewerSearchMatches(matches);
-
-    if (!matches.length) {
-      setViewerSearchStatus("No matches");
-      setViewerSearchIndex(-1);
-      return;
-    }
-
-    let nextIndex = -1;
-    if (viewerSearchIndex >= 0 && viewerSearchIndex < matches.length) {
-      const step = direction < 0 ? -1 : 1;
-      nextIndex = (viewerSearchIndex + step + matches.length) % matches.length;
-    } else if (direction < 0) {
-      nextIndex = matches.map((m, idx) => ({ ...m, idx })).reverse().find((m) => m.page <= currentPage)?.idx ?? (matches.length - 1);
-    } else {
-      nextIndex = matches.findIndex((m) => m.page >= currentPage);
-      if (nextIndex === -1) nextIndex = 0;
-    }
-
-    const nextMatch = matches[nextIndex];
-    setViewerSearchIndex(nextIndex);
-    setViewerSearchStatus(`${nextIndex + 1}/${matches.length}`);
-    goToPage(nextMatch.page, q, nextMatch.occurrenceIndex);
-  }, [viewerSearchQuery, searchablePageTexts, buildViewerSearchMatches, currentPage, viewerSearchIndex, goToPage]);
-
-  const handleSearchClick = () => {
-    if (!viewerSearchOpen) {
-      setViewerSearchOpen(true);
-      return;
-    }
-    runViewerSearch(1);
-  };
+  const {
+    viewerSearchOpen,
+    setViewerSearchOpen,
+    viewerSearchQuery,
+    setViewerSearchQuery,
+    viewerSearchStatus,
+    viewerSearchMatches,
+    viewerSearchIndex,
+    viewerSearchInputRef,
+    canRunViewerSearch,
+    hasViewerSearchResults,
+    runViewerSearch,
+    handleSearchClick,
+  } = useViewerSearch({ activePaper, currentPage, goToPage, resetKey: activeTabId });
 
   const pushThinkingStep = (step) => {
     setThinkingSteps(prev => {
@@ -2914,26 +1685,6 @@ export default function PaperviewApp() {
       return next;
     });
   };
-
-  const beginRequestRun = useCallback((requestRef, chatId) => {
-    requestRef.current.controller?.abort();
-    const controller = new AbortController();
-    const token = Date.now() + Math.random();
-    requestRef.current = { controller, token, chatId };
-    return { controller, token };
-  }, []);
-
-  const ensureRequestRunActive = useCallback((requestRef, token) => {
-    if (requestRef.current.token !== token) {
-      throw createStoppedError();
-    }
-  }, []);
-
-  const finishRequestRun = useCallback((requestRef, token) => {
-    if (requestRef.current.token === token) {
-      requestRef.current = { controller: null, token: 0, chatId: null };
-    }
-  }, []);
 
   function stopChatRun() {
     const activeRun = chatRequestRef.current;
@@ -4663,16 +3414,6 @@ export default function PaperviewApp() {
     );
   }, [activeAgentChatId, activeAgentRemotePapers, agentFolderCheckStates, agentWorkspacePapers, hasWritableAgentContext, openAgentPaper, openAgentPreviewPaper, refreshRootFolderContents, selectedRootFolder?.name, selectedRootFolderId]);
 
-  // Trigger a folder snapshot write for the folder that owns a given paper
-  const syncFolderForPaper = (paperId) => {
-    if (!paperId) return;
-    for (const folder of foldersRef.current) {
-      if (folder.papers.some((p) => p.id === paperId)) {
-        syncRootFolderSnapshot(folder.rootFolderId).catch(() => {});
-        return;
-      }
-    }
-  };
 
   const handleOpenFolder = async () => {
     if (typeof window.showDirectoryPicker !== 'function') return;
@@ -6261,230 +5002,50 @@ export default function PaperviewApp() {
         )}
 
         {showUpload && (
-          <div className="ov" onClick={closeModal}>
-            <div className="modal" onClick={(e) => e.stopPropagation()}>
-              <div className="m-hd">
-                <span className="m-title">Upload PDF</span>
-                <button className="m-x" onClick={closeModal}><IClose /></button>
-              </div>
-
-              {upStatus === "parsing" ? (
-                <div style={{ textAlign: "center", padding: "36px 24px" }}>
-                  <div className="typing" style={{ justifyContent: "center" }}><span /><span /><span /></div>
-                  <p style={{ fontSize: 13, color: "#444", marginTop: 12 }}>{upStatusText || "Parsing PDF..."}</p>
-                </div>
-              ) : upStatus === "done" ? (
-                <div style={{ textAlign: "center", padding: "36px 24px" }}>
-                  <div style={{ fontSize: 32, color: "#111" }}>✓</div>
-                  <p style={{ color: "#111", fontWeight: 600 }}>Uploaded successfully</p>
-                </div>
-              ) : (
-                <>
-                  <div
-                    className={`dz ${dragOver ? "drag" : ""}`}
-                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                    onDragLeave={() => setDragOver(false)}
-                    onDrop={(e) => { e.preventDefault(); setDragOver(false); fileSelected(e.dataTransfer.files[0]); }}
-                    onClick={() => fileRef.current?.click()}
-                  >
-                    <div style={{ color: "#666", display: "flex", justifyContent: "center", marginBottom: 10 }}>
-                      {pendingFile ? <IFile size={28} /> : <IUpload size={28} />}
-                    </div>
-                    {pendingFile ? (
-                      <>
-                        <h3>{pendingFile.name}</h3>
-                        <p>{(pendingFile.size / 1024 / 1024).toFixed(1)} MB · click to change</p>
-                      </>
-                    ) : (
-                      <>
-                        <h3>Drop PDF here or browse</h3>
-                        <p>All pages rendered as real PDF</p>
-                      </>
-                    )}
-                    <input ref={fileRef} type="file" accept=".pdf" style={{ display: "none" }} onChange={(e) => fileSelected(e.target.files[0])} />
-                  </div>
-
-                  {upStatus === "error" && <p style={{ color: "#b91c1c", fontSize: 12, marginTop: 8, textAlign: "center" }}>Please select a valid PDF file.</p>}
-
-                  <div className="fs">
-                    <label>Add to folder</label>
-                    {folders.length === 0 ? (
-                      <div style={{ fontSize: 12, color: '#8a867c', padding: '8px 10px', background: '#fff', borderRadius: 7, border: '1px solid #ececec' }}>
-                        Will be added to a new <strong>Uploads</strong> folder
-                      </div>
-                    ) : (
-                      <select value={upFolder} onChange={(e) => setUpFolder(e.target.value)}>
-                        {folders.map((f) => (
-                          <option key={f.id} value={f.id}>{f.name}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-
-                  <div className="m-acts">
-                    <button className="btn-sec" onClick={closeModal}>Cancel</button>
-                    <button className="btn-pri" onClick={doUpload} disabled={!pendingFile}>Upload & Render</button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
+          <UploadModal
+            folders={folders}
+            upFolder={upFolder}
+            setUpFolder={setUpFolder}
+            upStatus={upStatus}
+            upStatusText={upStatusText}
+            pendingFile={pendingFile}
+            dragOver={dragOver}
+            setDragOver={setDragOver}
+            fileRef={fileRef}
+            fileSelected={fileSelected}
+            doUpload={doUpload}
+            closeModal={closeModal}
+          />
         )}
 
         {showSettings && (
-          <div className="ov" onClick={closeSettingsModal}>
-            <div className="modal" onClick={(e) => e.stopPropagation()}>
-              <div className="m-hd">
-                <span className="m-title">Settings</span>
-                <button className="m-x" onClick={closeSettingsModal}><IClose /></button>
-              </div>
-
-              <div className="settings-field">
-                <label className="settings-label">OpenAI API Key</label>
-                {apiKey ? (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="settings-input" style={{ flex: 1, display: 'flex', alignItems: 'center', background: '#fff', cursor: 'default', color: 'var(--text2)' }}>
-                        {'•'.repeat(Math.min(apiKey.length, 20))}{'…' + apiKey.slice(-4)}
-                      </span>
-                      <button className="btn-sec" style={{ whiteSpace: 'nowrap', flexShrink: 0 }} onClick={handleRemoveApiKey} disabled={settingsBusy}>Remove</button>
-                    </div>
-                    <p className="settings-info">
-                      {apiKeySource === "remembered"
-                        ? "This key was unlocked from encrypted browser storage for the current session."
-                        : "This key is available in memory for the current browser session."}
-                    </p>
-                    {apiKeySource !== "remembered" && (
-                      <div className="settings-panel">
-                        <label className="settings-option">
-                          <input
-                            type="checkbox"
-                            checked={rememberApiKey}
-                            onChange={(e) => {
-                              setRememberApiKey(e.target.checked);
-                              setSettingsError("");
-                            }}
-                          />
-                          <span>Remember this key on this device with passphrase encryption.</span>
-                        </label>
-                        {rememberApiKey && (
-                          <div className="settings-subfield">
-                            <label className="settings-label">Encryption passphrase</label>
-                            <div className="settings-input-wrap">
-                              <input
-                                className="settings-input"
-                                type={settingsPassphraseVisible ? "text" : "password"}
-                                value={settingsPassphrase}
-                                onChange={(e) => setSettingsPassphrase(e.target.value)}
-                                placeholder="At least 8 characters"
-                                autoComplete="new-password"
-                              />
-                              <button className="settings-toggle-vis" onClick={() => setSettingsPassphraseVisible((v) => !v)} type="button">
-                                {settingsPassphraseVisible ? "Hide" : "Show"}
-                              </button>
-                            </div>
-                            <p className="settings-info">The passphrase is not stored. You will need it to unlock this key after reloading Paperview.</p>
-                          </div>
-                        )}
-                        <button className="btn-sec" type="button" disabled={!rememberApiKey || settingsBusy} onClick={handleSaveSettingsApiKey}>
-                          {settingsBusy ? "Saving..." : "Remember key"}
-                        </button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {rememberedApiKeyAvailable && (
-                      <div className="settings-panel">
-                        <div className="settings-panel-title">Encrypted key saved on this device</div>
-                        <p className="settings-info">Enter the passphrase you used when saving it. The passphrase is not stored and cannot be recovered.</p>
-                        <div className="settings-input-wrap">
-                          <input
-                            className="settings-input"
-                            type={unlockPassphraseVisible ? "text" : "password"}
-                            value={unlockPassphrase}
-                            onChange={(e) => setUnlockPassphrase(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleUnlockRememberedApiKey();
-                            }}
-                            placeholder="Passphrase"
-                            autoComplete="current-password"
-                          />
-                          <button className="settings-toggle-vis" onClick={() => setUnlockPassphraseVisible((v) => !v)} type="button">
-                            {unlockPassphraseVisible ? "Hide" : "Show"}
-                          </button>
-                        </div>
-                        <div className="settings-inline-actions">
-                          <button className="btn-sec" type="button" onClick={handleUnlockRememberedApiKey} disabled={settingsBusy}>
-                            {settingsBusy ? "Unlocking..." : "Unlock"}
-                          </button>
-                          <button className="btn-sec" type="button" onClick={() => {
-                            clearRememberedApiKey();
-                            setRememberedApiKeyAvailable(false);
-                            setUnlockPassphrase("");
-                            setSettingsError("");
-                          }} disabled={settingsBusy}>Forget saved key</button>
-                        </div>
-                      </div>
-                    )}
-                    <div className="settings-input-wrap">
-                      <input
-                        className="settings-input"
-                        type={settingsKeyVisible ? "text" : "password"}
-                        value={settingsKey}
-                        onChange={(e) => setSettingsKey(e.target.value)}
-                        placeholder="sk-..."
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                      <button className="settings-toggle-vis" onClick={() => setSettingsKeyVisible((v) => !v)} type="button">
-                        {settingsKeyVisible ? "Hide" : "Show"}
-                      </button>
-                    </div>
-                    <label className="settings-option">
-                      <input
-                        type="checkbox"
-                        checked={rememberApiKey}
-                        onChange={(e) => {
-                          setRememberApiKey(e.target.checked);
-                          setSettingsError("");
-                        }}
-                      />
-                      <span>Remember this key on this device with passphrase encryption.</span>
-                    </label>
-                    {rememberApiKey && (
-                      <div className="settings-subfield">
-                        <label className="settings-label">Encryption passphrase</label>
-                        <div className="settings-input-wrap">
-                          <input
-                            className="settings-input"
-                            type={settingsPassphraseVisible ? "text" : "password"}
-                            value={settingsPassphrase}
-                            onChange={(e) => setSettingsPassphrase(e.target.value)}
-                            placeholder="At least 8 characters"
-                            autoComplete="new-password"
-                          />
-                          <button className="settings-toggle-vis" onClick={() => setSettingsPassphraseVisible((v) => !v)} type="button">
-                            {settingsPassphraseVisible ? "Hide" : "Show"}
-                          </button>
-                        </div>
-                        <p className="settings-info">The passphrase is not stored. You will need it to unlock this key after reloading Paperview.</p>
-                      </div>
-                    )}
-                  </>
-                )}
-                <p className="settings-info">To use AI features, add your own OpenAI API key. By default it is kept in memory only. If you choose to remember it, Paperview stores an encrypted copy in this browser and you should only use that on trusted devices. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
-                {settingsError && <div className="settings-error">{settingsError}</div>}
-              </div>
-
-              <div className="m-acts">
-                <button className="btn-sec" onClick={closeSettingsModal} disabled={settingsBusy}>Cancel</button>
-                {!apiKey && <button className="btn-pri" onClick={handleSaveSettingsApiKey} disabled={settingsBusy}>
-                  {settingsBusy ? "Saving..." : "Save"}
-                </button>}
-              </div>
-            </div>
-          </div>
+          <SettingsModal
+            apiKey={apiKey}
+            apiKeySource={apiKeySource}
+            rememberedApiKeyAvailable={rememberedApiKeyAvailable}
+            settingsKey={settingsKey}
+            setSettingsKey={setSettingsKey}
+            settingsKeyVisible={settingsKeyVisible}
+            setSettingsKeyVisible={setSettingsKeyVisible}
+            rememberApiKey={rememberApiKey}
+            setRememberApiKey={setRememberApiKey}
+            settingsPassphrase={settingsPassphrase}
+            setSettingsPassphrase={setSettingsPassphrase}
+            settingsPassphraseVisible={settingsPassphraseVisible}
+            setSettingsPassphraseVisible={setSettingsPassphraseVisible}
+            unlockPassphrase={unlockPassphrase}
+            setUnlockPassphrase={setUnlockPassphrase}
+            unlockPassphraseVisible={unlockPassphraseVisible}
+            setUnlockPassphraseVisible={setUnlockPassphraseVisible}
+            settingsError={settingsError}
+            setSettingsError={setSettingsError}
+            settingsBusy={settingsBusy}
+            closeSettingsModal={closeSettingsModal}
+            handleRemoveApiKey={handleRemoveApiKey}
+            handleUnlockRememberedApiKey={handleUnlockRememberedApiKey}
+            handleSaveSettingsApiKey={handleSaveSettingsApiKey}
+            setRememberedApiKeyAvailable={setRememberedApiKeyAvailable}
+          />
         )}
 
         {edgeToast && (
@@ -6495,34 +5056,10 @@ export default function PaperviewApp() {
         )}
 
         {showFolderPermModal && (
-          <div style={{ position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:24 }} onClick={() => setShowFolderPermModal(false)}>
-            <div style={{ background:'#fff',borderRadius:16,padding:36,maxWidth:420,width:'100%',boxShadow:'0 8px 48px rgba(0,0,0,0.18)' }} onClick={(e) => e.stopPropagation()}>
-              <div style={{ width:48,height:48,borderRadius:12,background:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,marginBottom:20 }}>📁</div>
-              <div style={{ fontSize:18,fontWeight:800,letterSpacing:'-0.4px',marginBottom:10 }}>Folder access needed</div>
-              <p style={{ fontSize:13,color:'#4e4b45',lineHeight:1.7,marginBottom:20,fontWeight:500 }}>
-                To open your PDF folder, your browser will ask you to pick a folder and grant Paperview permission to read and write files in it.
-              </p>
-              <ul style={{ fontSize:13,color:'#4e4b45',lineHeight:1.8,paddingLeft:20,marginBottom:24,fontWeight:500 }}>
-                <li>Your PDFs are never uploaded — they stay on your machine.</li>
-                <li>Paperview only writes one file: <strong>.paperview.json</strong>, which saves your chat history and annotations so they travel with your papers.</li>
-                <li>You can revoke access at any time in your browser settings.</li>
-              </ul>
-              <div style={{ display:'flex',gap:10,justifyContent:'flex-end' }}>
-                <button
-                  style={{ background:'none',border:'1.5px solid #ececec',borderRadius:9,padding:'10px 18px',fontSize:13,fontWeight:600,cursor:'pointer',color:'#4e4b45',fontFamily:'inherit' }}
-                  onClick={() => setShowFolderPermModal(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  style={{ background:'#121212',color:'#fff',border:'none',borderRadius:9,padding:'10px 22px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit' }}
-                  onClick={() => { setShowFolderPermModal(false); handleOpenFolder(); }}
-                >
-                  OK, give access →
-                </button>
-              </div>
-            </div>
-          </div>
+          <FolderPermModal
+            onCancel={() => setShowFolderPermModal(false)}
+            onConfirm={() => { setShowFolderPermModal(false); handleOpenFolder(); }}
+          />
         )}
 
         {!privacyAccepted && (
