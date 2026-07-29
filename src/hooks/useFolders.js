@@ -31,6 +31,8 @@ import {
 } from '../miscUtils';
 
 export function useFolders({
+  folders,
+  setFolders,
   setOpenTabs,
   setActiveTabId,
   activeTabId,
@@ -50,7 +52,6 @@ export function useFolders({
   openAgentPaper,
   setUpFolder,
 }) {
-  const [folders, setFolders] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [newFolder, setNewFolder] = useState(false);
   const [nfName, setNfName] = useState("");

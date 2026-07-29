@@ -46,6 +46,7 @@ import { useFolders } from './hooks/useFolders';
 import { useAgentSend } from './hooks/useAgentSend';
 
 export default function PaperviewApp() {
+  const [folders, setFolders] = useState([]);
   const [openTabs, setOpenTabs] = useState([]);
   const [activeTabId, setActiveTabId] = useState(null);
   const [input, setInput] = useState("");
@@ -214,29 +215,6 @@ export default function PaperviewApp() {
   const isActivePaperScanning = (activePaperScanState?.status || activePaper?.textStatus) === "scanning";
   const activePaperScanLabel = activePaperScanState?.label || activePaper?.textStatusText || "Scanning paper...";
 
-  const activeChat = useMemo(
-    () => chatThreads.find((thread) => thread.id === activeChatId) || null,
-    [chatThreads, activeChatId]
-  );
-  const activeAgentChat = useMemo(
-    () => agentThreads.find((thread) => thread.id === activeAgentChatId && thread.rootFolderId === selectedRootFolderId) || null,
-    [agentThreads, activeAgentChatId, selectedRootFolderId]
-  );
-  const currentMessages = activeChat?.messages || [];
-  const currentAgentMessages = activeAgentChat?.messages || [];
-  const activePaperThreads = useMemo(() => {
-    if (!activePaper?.id) return [];
-    return chatThreads
-      .filter((thread) => thread.paperId === activePaper.id)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [chatThreads, activePaper?.id]);
-  const selectedRootAgentThreads = useMemo(() => {
-    if (!selectedRootFolderId) return [];
-    return agentThreads
-      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [agentThreads, selectedRootFolderId]);
-
   const chatContextPapers = useMemo(() => {
     const paperPool = (activeFolderPapers.length ? activeFolderPapers : openTabs).filter(Boolean);
     const byId = new Map(paperPool.map((paper) => [paper.id, paper]));
@@ -250,37 +228,6 @@ export default function PaperviewApp() {
     const byId = new Map(agentWorkspacePapers.map((paper) => [paper.id, paper]));
     return selectedAgentPaperIds.map((id) => byId.get(id)).filter(Boolean);
   }, [agentWorkspacePapers, selectedAgentPaperIds]);
-  const activePaperMessageCount = useMemo(
-    () => activePaperThreads.reduce((sum, thread) => sum + thread.messages.length, 0),
-    [activePaperThreads]
-  );
-  const savedPaperThreads = useMemo(
-    () => activePaperThreads.filter((thread) => thread.id !== activeChatId),
-    [activePaperThreads, activeChatId]
-  );
-  const savedAgentThreads = useMemo(
-    () => selectedRootAgentThreads.filter((thread) => thread.id !== activeAgentChatId),
-    [selectedRootAgentThreads, activeAgentChatId]
-  );
-  const lastActiveMessage = currentMessages[currentMessages.length - 1] || null;
-  const lastActiveAgentMessage = currentAgentMessages[currentAgentMessages.length - 1] || null;
-  const activeChatLoadingState =
-    chatLoadingState?.chatId === activeChatId && lastActiveMessage?.role === "user"
-      ? chatLoadingState
-      : null;
-  const activeAgentLoadingState =
-    agentLoadingState?.chatId === activeAgentChatId && lastActiveAgentMessage?.role === "user"
-      ? agentLoadingState
-      : null;
-  const isChatLoading = Boolean(activeChatLoadingState);
-  const isAgentLoading = Boolean(activeAgentLoadingState);
-  const chatLoadingLabel =
-    activeChatLoadingState?.phase === "scanning" && isActivePaperScanning
-      ? `${activePaperScanLabel} (${activePaperScanPercent}%)`
-      : activeChatLoadingState?.label || "Analysing...";
-  const agentLoadingLabel = activeAgentLoadingState?.label || "Researching...";
-  const activeChatSummary = activeChat ? `${formatChatMessageCount(currentMessages.length)} · ${formatChatTimestamp(activeChat.updatedAt)}` : "No active chat";
-  const activeAgentSummary = activeAgentChat ? `${formatChatMessageCount(currentAgentMessages.length)} · ${formatChatTimestamp(activeAgentChat.updatedAt)}` : "No active agent chat";
   const chatQuickActions = [
     {
       title: "Summarize the paper's main claim",
@@ -387,28 +334,6 @@ export default function PaperviewApp() {
     focusAgentComposer();
   }, [focusAgentComposer]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [currentMessages, activeChatId]);
-
-  useEffect(() => {
-    agentEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [currentAgentMessages, activeAgentChatId]);
-
-  useEffect(() => {
-    if (chatLoadingState?.chatId !== activeChatId) return;
-    if (!lastActiveMessage || lastActiveMessage.role !== "user") {
-      setChatLoadingState(null);
-    }
-  }, [activeChatId, chatLoadingState, lastActiveMessage]);
-
-  useEffect(() => {
-    if (agentLoadingState?.chatId !== activeAgentChatId) return;
-    if (!lastActiveAgentMessage || lastActiveAgentMessage.role !== "user") {
-      setAgentLoadingState(null);
-    }
-  }, [activeAgentChatId, agentLoadingState, lastActiveAgentMessage]);
-
   const activateReaderTab = useCallback((tabId) => {
     const descriptor = openTabs.find((tab) => tab.id === tabId);
     if (!descriptor) return;
@@ -427,58 +352,6 @@ export default function PaperviewApp() {
         console.error('Failed to activate tab paper:', error);
       });
   }, [ensurePaperPdfBytes, openTabs, startPaperTextExtraction]);
-
-  useEffect(() => {
-    if (!activePaper?.id) {
-      setActiveChatId(null);
-      return;
-    }
-
-    const paperThreads = chatThreads
-      .filter((thread) => thread.paperId === activePaper.id)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-
-    if (paperThreads.length) {
-      const alreadyActive = paperThreads.some((thread) => thread.id === activeChatId);
-      if (!alreadyActive) {
-        setActiveChatId(paperThreads[0].id);
-      }
-      return;
-    }
-
-    const thread = createChatThreadRecord(activePaper.id);
-    setChatThreads((prev) => [thread, ...prev]);
-    saveChat(thread).catch(() => {});
-    syncFolderForPaper(thread.paperId);
-    setActiveChatId(thread.id);
-  }, [activePaper?.id]);
-
-  useEffect(() => {
-    if (!selectedRootFolderId || !hasWritableAgentContext) {
-      setActiveAgentChatId(null);
-      return;
-    }
-
-    const rootThreads = agentThreads
-      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-
-    if (rootThreads.some((thread) => thread.id === activeAgentChatId)) {
-      return;
-    }
-
-    if (rootThreads.length) {
-      setActiveAgentChatId(rootThreads[0].id);
-      return;
-    }
-
-    const thread = createAgentChatThreadRecord(selectedRootFolderId);
-    setAgentThreads((prev) => [thread, ...prev]);
-    saveAgentChat(thread)
-      .then(() => syncRootFolderSnapshotRef.current?.(selectedRootFolderId))
-      .catch(() => {});
-    setActiveAgentChatId(thread.id);
-  }, [selectedRootFolderId, hasWritableAgentContext, activeAgentChatId, agentThreads]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -650,7 +523,7 @@ export default function PaperviewApp() {
     deleteAgentThread,
     stopAgentRun,
   } = useAgentThreads({
-    syncRootFolderSnapshotRef,
+    syncRootFolderSnapshotRef: { get current() { return syncRootFolderSnapshotRef.current; } },
     agentRequestRef,
     selectedRootFolderId,
     hasWritableAgentContext,
@@ -663,9 +536,135 @@ export default function PaperviewApp() {
     clearAgentRemotePapersForThread: (chatId) => clearAgentRemotePapersForThreadRef.current(chatId),
   });
 
+  const activeChat = useMemo(
+    () => chatThreads.find((thread) => thread.id === activeChatId) || null,
+    [chatThreads, activeChatId]
+  );
+  const activeAgentChat = useMemo(
+    () => agentThreads.find((thread) => thread.id === activeAgentChatId && thread.rootFolderId === selectedRootFolderId) || null,
+    [agentThreads, activeAgentChatId, selectedRootFolderId]
+  );
+  const currentMessages = activeChat?.messages || [];
+  const currentAgentMessages = activeAgentChat?.messages || [];
+  const activePaperThreads = useMemo(() => {
+    if (!activePaper?.id) return [];
+    return chatThreads
+      .filter((thread) => thread.paperId === activePaper.id)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [chatThreads, activePaper?.id]);
+  const selectedRootAgentThreads = useMemo(() => {
+    if (!selectedRootFolderId) return [];
+    return agentThreads
+      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [agentThreads, selectedRootFolderId]);
+  const activePaperMessageCount = useMemo(
+    () => activePaperThreads.reduce((sum, thread) => sum + thread.messages.length, 0),
+    [activePaperThreads]
+  );
+  const savedPaperThreads = useMemo(
+    () => activePaperThreads.filter((thread) => thread.id !== activeChatId),
+    [activePaperThreads, activeChatId]
+  );
+  const savedAgentThreads = useMemo(
+    () => selectedRootAgentThreads.filter((thread) => thread.id !== activeAgentChatId),
+    [selectedRootAgentThreads, activeAgentChatId]
+  );
+  const lastActiveMessage = currentMessages[currentMessages.length - 1] || null;
+  const lastActiveAgentMessage = currentAgentMessages[currentAgentMessages.length - 1] || null;
+  const activeChatLoadingState =
+    chatLoadingState?.chatId === activeChatId && lastActiveMessage?.role === "user"
+      ? chatLoadingState
+      : null;
+  const activeAgentLoadingState =
+    agentLoadingState?.chatId === activeAgentChatId && lastActiveAgentMessage?.role === "user"
+      ? agentLoadingState
+      : null;
+  const isChatLoading = Boolean(activeChatLoadingState);
+  const isAgentLoading = Boolean(activeAgentLoadingState);
+  const chatLoadingLabel =
+    activeChatLoadingState?.phase === "scanning" && isActivePaperScanning
+      ? `${activePaperScanLabel} (${activePaperScanPercent}%)`
+      : activeChatLoadingState?.label || "Analysing...";
+  const agentLoadingLabel = activeAgentLoadingState?.label || "Researching...";
+  const activeChatSummary = activeChat ? `${formatChatMessageCount(currentMessages.length)} · ${formatChatTimestamp(activeChat.updatedAt)}` : "No active chat";
+  const activeAgentSummary = activeAgentChat ? `${formatChatMessageCount(currentAgentMessages.length)} · ${formatChatTimestamp(activeAgentChat.updatedAt)}` : "No active agent chat";
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [currentMessages, activeChatId]);
+
+  useEffect(() => {
+    agentEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [currentAgentMessages, activeAgentChatId]);
+
+  useEffect(() => {
+    if (chatLoadingState?.chatId !== activeChatId) return;
+    if (!lastActiveMessage || lastActiveMessage.role !== "user") {
+      setChatLoadingState(null);
+    }
+  }, [activeChatId, chatLoadingState, lastActiveMessage]);
+
+  useEffect(() => {
+    if (agentLoadingState?.chatId !== activeAgentChatId) return;
+    if (!lastActiveAgentMessage || lastActiveAgentMessage.role !== "user") {
+      setAgentLoadingState(null);
+    }
+  }, [activeAgentChatId, agentLoadingState, lastActiveAgentMessage]);
+
+  useEffect(() => {
+    if (!activePaper?.id) {
+      setActiveChatId(null);
+      return;
+    }
+
+    const paperThreads = chatThreads
+      .filter((thread) => thread.paperId === activePaper.id)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    if (paperThreads.length) {
+      const alreadyActive = paperThreads.some((thread) => thread.id === activeChatId);
+      if (!alreadyActive) {
+        setActiveChatId(paperThreads[0].id);
+      }
+      return;
+    }
+
+    const thread = createChatThreadRecord(activePaper.id);
+    setChatThreads((prev) => [thread, ...prev]);
+    saveChat(thread).catch(() => {});
+    syncFolderForPaper(thread.paperId);
+    setActiveChatId(thread.id);
+  }, [activePaper?.id]);
+
+  useEffect(() => {
+    if (!selectedRootFolderId || !hasWritableAgentContext) {
+      setActiveAgentChatId(null);
+      return;
+    }
+
+    const rootThreads = agentThreads
+      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    if (rootThreads.some((thread) => thread.id === activeAgentChatId)) {
+      return;
+    }
+
+    if (rootThreads.length) {
+      setActiveAgentChatId(rootThreads[0].id);
+      return;
+    }
+
+    const thread = createAgentChatThreadRecord(selectedRootFolderId);
+    setAgentThreads((prev) => [thread, ...prev]);
+    saveAgentChat(thread)
+      .then(() => syncRootFolderSnapshotRef.current?.(selectedRootFolderId))
+      .catch(() => {});
+    setActiveAgentChatId(thread.id);
+  }, [selectedRootFolderId, hasWritableAgentContext, activeAgentChatId, agentThreads]);
+
   const {
-    folders,
-    setFolders,
     foldersRef,
     selectedFolderId,
     setSelectedFolderId,
@@ -687,6 +686,8 @@ export default function PaperviewApp() {
     importPaperResult,
     handleOpenFolder,
   } = useFolders({
+    folders,
+    setFolders,
     setOpenTabs,
     setActiveTabId,
     activeTabId,
@@ -703,7 +704,7 @@ export default function PaperviewApp() {
     setAgentImportStates,
     selectedRootFolderId,
     hasWritableAgentContext,
-    openAgentPaper,
+    openAgentPaper: (...args) => openAgentPaper(...args),
     setUpFolder,
   });
 
