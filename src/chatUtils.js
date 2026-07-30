@@ -11,10 +11,14 @@ export function materializeFullText(pageTexts = []) {
     .join("\n\n");
 }
 
-export function createChatThreadRecord(paperId) {
+export function createChatThreadRecord(paperId, options = {}) {
+  const scopeType = options.scopeType || 'paper';
+  const scopeId = options.scopeId || paperId || null;
   return {
     id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    paperId,
+    paperId: paperId || scopeId || 'library',
+    scopeType,
+    scopeId,
     title: CHAT_TITLE_FALLBACK,
     messages: [],
     updatedAt: Date.now(),

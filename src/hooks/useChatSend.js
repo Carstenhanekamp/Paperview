@@ -13,6 +13,14 @@ import { findPaperByName, findMatchingRemotePaper, findWorkspacePaperForSource, 
 import { createChatMessageId, hasExtractedPaperText, isAbortLikeError } from '../miscUtils';
 import { derivePageTexts } from '../chatUtils';
 import { addUsageTotals, createUsageTotals, getUsageBreakdown, formatTokenCount, formatUsd } from '../openaiPricing';
+import { resolveContextPapersForQuery, CORPUS_TOP_K, mapCitationFileToPaper } from '../corpusRetrieve';
+import { displayPaperTitle } from '../biblioUtils';
+
+function paperDisplayName(paper, getMeta) {
+  if (!paper) return 'Unknown';
+  const meta = typeof getMeta === 'function' ? getMeta(paper.id) : null;
+  return displayPaperTitle(paper, meta) || paper.name || 'Unknown';
+}
 
 export function useChatSend({
   input,
@@ -27,6 +35,9 @@ export function useChatSend({
   openSettingsModal,
   currentMessages,
   chatContextPapers,
+  chatContextMode = 'auto',
+  searchCorpus,
+  getMeta,
   folders,
   activePaper,
   activeAgentRemotePapers,
@@ -68,7 +79,34 @@ export function useChatSend({
     try {
       const usageTotals = createUsageTotals();
       const conversationHistory = currentMessages.slice(-8);
-      const contextPapers = chatContextPapers;
+      const candidatePapers = chatContextPapers;
+      if (!candidatePapers.length) {
+        throw new Error("No document is currently selected. Open or attach a PDF before asking a question.");
+      }
+
+      const pinned = activePaper && (chatContextMode === 'folder' || chatContextMode === 'library')
+        ? [activePaper]
+        : [];
+
+      setChatLoadingState({
+        chatId: targetChatId,
+        phase: "preparing",
+        label:
+          chatContextMode === 'folder' || chatContextMode === 'library'
+            ? "Ranking papers in scope..."
+            : "Preparing chat...",
+      });
+
+      const contextPapers = await resolveContextPapersForQuery({
+        query: text,
+        scopeMode: chatContextMode,
+        searchCorpus,
+        candidatePapers,
+        pinnedPapers: pinned,
+        limit: CORPUS_TOP_K,
+      });
+      ensureRequestRunActive(chatRequestRef, token);
+
       if (!contextPapers.length) {
         throw new Error("No document is currently selected. Open or attach a PDF before asking a question.");
       }
@@ -80,7 +118,7 @@ export function useChatSend({
           phase: "scanning",
           label:
             contextPapers.length === 1
-              ? `Scanning ${contextPapers[0].name} for chat...`
+              ? `Scanning ${paperDisplayName(contextPapers[0], getMeta)} for chat...`
               : `Scanning ${contextPapers.length} papers for chat...`,
         });
       }
@@ -91,7 +129,15 @@ export function useChatSend({
 
       setChatLoadingState({ chatId: targetChatId, phase: "thinking", label: "Analysing..." });
 
-      const availableDocumentNames = readyContextPapers.map((paper) => `"${paper.name}"`).join(", ");
+      const availableDocumentNames = readyContextPapers
+        .map((paper) => `"${paper.name}"`)
+        .join(", ");
+      const documentTitleHints = readyContextPapers
+        .map((paper) => {
+          const title = paperDisplayName(paper, getMeta);
+          return title !== paper.name ? `- "${paper.name}" (title: ${title})` : `- "${paper.name}"`;
+        })
+        .join("\n");
       const basePayload = {
         model: selectedModel,
         max_output_tokens: 4096,
@@ -110,7 +156,7 @@ export function useChatSend({
           })),
           {
             role: "user",
-            content: `Available documents: ${availableDocumentNames}\n\nQuestion: ${text}\n\nUse the search_document tool to retrieve evidence before answering. Respond in JSON format.`,
+            content: `Available documents (use exact file names with search_document):\n${documentTitleHints}\n\nQuestion: ${text}\n\nUse the search_document tool to retrieve evidence before answering. Respond in JSON format. Citation "file" must match an exact document name.`,
           },
         ],
       }, { signal: controller.signal });
@@ -221,15 +267,21 @@ export function useChatSend({
       const allPapers = folders.flatMap((folder) =>
         folder.papers.map((paper) => ({ ...paper, folderId: folder.id }))
       );
-      const norm = (v) => String(v || "").trim().toLowerCase();
       const normalizedCitations = (parsed.citations || []).map((c) => {
         const requestedName = String(c.file || c.fileName || c.document || "").trim();
-        const match = requestedName
-          ? allPapers.find((paper) => norm(paper.name) === norm(requestedName))
-          : null;
+        const match =
+          mapCitationFileToPaper(requestedName, allPapers) ||
+          (requestedName
+            ? allPapers.find((paper) => {
+                const title = paperDisplayName(paper, getMeta);
+                return title.toLowerCase() === requestedName.toLowerCase();
+              })
+            : null);
+        const label = match ? paperDisplayName(match, getMeta) : requestedName || activePaper?.name || "Unknown file";
         return {
           ...c,
           fileName: match?.name || requestedName || activePaper?.name || "Unknown file",
+          displayTitle: label,
           paperId: match?.id || activePaper?.id || null,
           folderId: match?.folderId || null,
         };

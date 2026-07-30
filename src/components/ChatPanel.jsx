@@ -383,6 +383,27 @@ export default function ChatPanel({
                           className="attach-mini-btn"
                           type="button"
                           onClick={() => {
+                            setChatContextMode("folder");
+                            setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id));
+                          }}
+                          title="Ask across this folder (ranked)"
+                        >
+                          Folder
+                        </button>
+                        <button
+                          className="attach-mini-btn"
+                          type="button"
+                          onClick={() => {
+                            setChatContextMode("library");
+                          }}
+                          title="Ask across the whole library (ranked)"
+                        >
+                          Library
+                        </button>
+                        <button
+                          className="attach-mini-btn"
+                          type="button"
+                          onClick={() => {
                             setChatContextMode("auto");
                             setSelectedChatPaperIds(activePaper?.id ? [activePaper.id] : []);
                           }}
@@ -397,9 +418,12 @@ export default function ChatPanel({
                     ) : (
                       <div className="attach-list">
                         {activeFolderPapers.map((paper) => {
-                          const checked = chatContextMode === "auto"
-                            ? paper.id === activePaper?.id
-                            : selectedChatPaperIds.includes(paper.id);
+                          const checked =
+                            chatContextMode === "auto"
+                              ? paper.id === activePaper?.id
+                              : chatContextMode === "folder" || chatContextMode === "library"
+                                ? true
+                                : selectedChatPaperIds.includes(paper.id);
                           return (
                             <label key={paper.id} className="attach-item">
                               <input

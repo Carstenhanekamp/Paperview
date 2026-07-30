@@ -103,10 +103,19 @@ export function useChatThreads({
     if (paperId) syncFolderForPaper(paperId);
   }, []);
 
-  const startNewChat = useCallback(() => {
-    if (!activePaper?.id) return;
+  const startNewChat = useCallback((options = {}) => {
+    const scopeType = options.scopeType || 'paper';
+    const scopeId =
+      options.scopeId ||
+      (scopeType === 'folder' ? options.folderId : null) ||
+      (scopeType === 'library' ? 'library' : null) ||
+      activePaper?.id;
+    if (!scopeId && !activePaper?.id) return;
     if (chatLoadingState) stopChatRun();
-    const thread = createChatThreadRecord(activePaper.id);
+    const thread = createChatThreadRecord(activePaper?.id || scopeId, {
+      scopeType,
+      scopeId: scopeId || activePaper?.id,
+    });
     setChatThreads((prev) => [thread, ...prev]);
     saveChat(thread).catch(() => {});
     syncFolderForPaper(thread.paperId);

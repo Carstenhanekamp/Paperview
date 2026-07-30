@@ -44,6 +44,18 @@ db.version(6).stores({
   uploadedPdfs: 'paperId, updatedAt',
 });
 
+db.version(7).stores({
+  chats: 'id, paperId, updatedAt, scopeType, scopeId',
+  agentChats: 'id, rootFolderId, updatedAt',
+  folderHandles: 'id',
+  annotations: 'id, paperId, pageNum, createdAt',
+  paperTextCache: 'paperId, updatedAt',
+  ocrPages: 'id, paperId, pageNum, scale, updatedAt',
+  uploadedPdfs: 'paperId, updatedAt',
+  paperMeta: 'paperId, updatedAt, doi, year',
+  paperChunks: 'id, paperId, folderId, updatedAt',
+});
+
 function makeOcrPageId(paperId, pageNum, scale) {
   return `${paperId}:${pageNum}:${scale}`;
 }
@@ -149,5 +161,45 @@ export async function deletePaperCachesByPaperIds(paperIds) {
     db.paperTextCache.where('paperId').anyOf(paperIds).delete(),
     db.ocrPages.where('paperId').anyOf(paperIds).delete(),
     db.uploadedPdfs.where('paperId').anyOf(paperIds).delete(),
+    db.paperMeta.where('paperId').anyOf(paperIds).delete(),
+    db.paperChunks.where('paperId').anyOf(paperIds).delete(),
   ]);
+}
+
+export async function loadPaperMeta(paperId) {
+  return db.paperMeta.get(paperId);
+}
+
+export async function loadAllPaperMeta() {
+  return db.paperMeta.toArray();
+}
+
+export async function savePaperMeta(entry) {
+  return db.paperMeta.put(entry);
+}
+
+export async function deletePaperMeta(paperId) {
+  return db.paperMeta.delete(paperId);
+}
+
+export async function loadPaperChunks(paperId) {
+  return db.paperChunks.where('paperId').equals(paperId).toArray();
+}
+
+export async function loadAllPaperChunks() {
+  return db.paperChunks.toArray();
+}
+
+export async function savePaperChunks(entries) {
+  if (!entries?.length) return;
+  return db.paperChunks.bulkPut(entries);
+}
+
+export async function deletePaperChunks(paperId) {
+  return db.paperChunks.where('paperId').equals(paperId).delete();
+}
+
+export async function replacePaperChunks(paperId, entries) {
+  await deletePaperChunks(paperId);
+  if (entries?.length) await savePaperChunks(entries);
 }

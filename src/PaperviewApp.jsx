@@ -5,7 +5,7 @@ import {
   saveUploadedPdf,
 } from './db';
 import { clearOcrMemoryCache, terminateTesseractWorkerNow } from './pdfUtils';
-import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, ICopy, IGrid, IChat, IRight, ISpark, IChevronDown, IChevronLeftDouble, IChevronRightDouble, IGear, IHighlight } from './icons';
+import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, IGrid, IChat, IRight, ISpark, IChevronDown, IChevronLeftDouble, IChevronRightDouble, IGear, INotes } from './icons';
 import { CSS } from './styles';
 import { createAgentChatThreadRecord, createChatThreadRecord, formatChatTimestamp, formatChatMessageCount, derivePageTexts } from './chatUtils';
 import { evictUnpinnedPayloads, stripPaperPayload } from './paperPayloadUtils';
@@ -31,11 +31,15 @@ import {
 } from './miscUtils';
 import SettingsModal from './components/SettingsModal';
 import LibraryView from './components/LibraryView';
+import LibraryPaperDetail from './components/LibraryPaperDetail';
+import BibtexPreviewModal from './components/BibtexPreviewModal';
 import AgentView from './components/AgentView';
 import ReaderView from './components/ReaderView';
 import ChatPanel from './components/ChatPanel';
 import UploadModal from './components/UploadModal';
 import FolderPermModal from './components/FolderPermModal';
+import SelectionToolbar from './components/SelectionToolbar';
+import ExplainPopover from './components/ExplainPopover';
 import { useApiKey } from './hooks/useApiKey';
 import { useRequestRuns } from './hooks/useRequestRun';
 import { usePanelResize } from './hooks/usePanelResize';
@@ -46,6 +50,9 @@ import { useChatSend } from './hooks/useChatSend';
 import { useAgentThreads } from './hooks/useAgentThreads';
 import { useFolders } from './hooks/useFolders';
 import { useAgentSend } from './hooks/useAgentSend';
+import { useExplainSelection } from './hooks/useExplainSelection';
+import { usePaperMeta } from './hooks/usePaperMeta';
+import { useLibraryIndex } from './hooks/useLibraryIndex';
 
 export default function PaperviewApp() {
   const [folders, setFolders] = useState([]);
@@ -67,6 +74,8 @@ export default function PaperviewApp() {
   const [searchQ, setSearchQ] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(true);
+  const [readerDetailOpen, setReaderDetailOpen] = useState(false);
+  const [readerBibtexPreview, setReaderBibtexPreview] = useState(null);
   const [agentSidebarOpen, setAgentSidebarOpen] = useState(true);
   const [chatPaneMode, setChatPaneMode] = useState("chat");
   const [currentView, setCurrentView] = useState("library");
@@ -187,12 +196,46 @@ export default function PaperviewApp() {
   const activePaper = useMemo(() => mergePaperRecord(activePaperDescriptor), [activePaperDescriptor, mergePaperRecord]);
   const selectedFolder = folders.find((f) => f.id === selectedFolderId) || null;
 
+  const {
+    metaById,
+    getMeta,
+    getTitle,
+    getAuthorsLine,
+    extractPaperMetaWithAI,
+    exportFolderBibtex,
+    exportLibraryBibtex,
+  } = usePaperMeta({
+    folders,
+    activePaper,
+    getPaperPayload,
+    apiKey,
+    selectedModel,
+    openSettingsModal,
+    startPaperTextExtraction,
+  });
+
+  const {
+    librarySearch,
+    setLibrarySearch,
+    searchResults,
+    searchCorpus,
+  } = useLibraryIndex({
+    folders,
+    metaById,
+    apiKey,
+    activePaper,
+    getPaperPayload,
+  });
 
   const activeFolder =
     folders.find((f) => f.papers.some((p) => p.id === activeTabId)) ||
     selectedFolder ||
     null;
   const activeFolderPapers = activeFolder?.papers || [];
+  const allLibraryPapers = useMemo(
+    () => folders.flatMap((folder) => (folder.papers || []).map((paper) => mergePaperRecord({ ...paper, folderId: folder.id }))),
+    [folders, mergePaperRecord]
+  );
   const totalPaperCount = folders.reduce((sum, folder) => sum + folder.papers.length, 0);
   const selectedRootFolderId = selectedFolder?.rootFolderId || null;
   const selectedRootFolder = folders.find((folder) => folder.id === selectedRootFolderId) || null;
@@ -226,13 +269,22 @@ export default function PaperviewApp() {
 
   const chatContextPapers = useMemo(() => {
     const paperPool = (activeFolderPapers.length ? activeFolderPapers : openTabs).filter(Boolean);
-    const byId = new Map(paperPool.map((paper) => [paper.id, paper]));
+    const byId = new Map([
+      ...paperPool.map((paper) => [paper.id, paper]),
+      ...allLibraryPapers.map((paper) => [paper.id, paper]),
+    ]);
     const explicitlySelected = selectedChatPaperIds.map((id) => byId.get(id)).filter(Boolean);
     if (chatContextMode === "manual") {
       return explicitlySelected.length ? explicitlySelected : (activePaper ? [activePaper] : []);
     }
+    if (chatContextMode === "folder") {
+      return activeFolderPapers.length ? activeFolderPapers.map((p) => mergePaperRecord(p)) : (activePaper ? [activePaper] : []);
+    }
+    if (chatContextMode === "library") {
+      return allLibraryPapers.length ? allLibraryPapers : (activePaper ? [activePaper] : []);
+    }
     return activePaper ? [activePaper] : explicitlySelected;
-  }, [activeFolderPapers, openTabs, selectedChatPaperIds, activePaper, chatContextMode]);
+  }, [activeFolderPapers, openTabs, selectedChatPaperIds, activePaper, chatContextMode, allLibraryPapers, mergePaperRecord]);
   const agentContextPapers = useMemo(() => {
     const byId = new Map(agentWorkspacePapers.map((paper) => [paper.id, paper]));
     return selectedAgentPaperIds.map((id) => byId.get(id)).filter(Boolean);
@@ -974,8 +1026,11 @@ export default function PaperviewApp() {
     viewerSearchQuery,
     setViewerSearchQuery,
     viewerSearchStatus,
+    setViewerSearchStatus,
     viewerSearchMatches,
+    setViewerSearchMatches,
     viewerSearchIndex,
+    setViewerSearchIndex,
     viewerSearchInputRef,
     canRunViewerSearch,
     hasViewerSearchResults,
@@ -997,6 +1052,9 @@ export default function PaperviewApp() {
     openSettingsModal,
     currentMessages,
     chatContextPapers,
+    chatContextMode,
+    searchCorpus,
+    getMeta,
     folders,
     activePaper,
     activeAgentRemotePapers,
@@ -1024,6 +1082,25 @@ export default function PaperviewApp() {
     openAgentPreviewPaper,
   });
 
+  const { explainState, explainSelection, dismissExplain } = useExplainSelection({
+    apiKey,
+    openSettingsModal,
+    selectedModel,
+  });
+
+  const handleExplainSelection = () => {
+    if (!popup) return;
+    const snapshot = popup;
+    setPopup(null);
+    window.getSelection()?.removeAllRanges();
+    explainSelection(snapshot);
+  };
+
+  const handleExplainAddToChat = (passage) => {
+    setChip(passage);
+    dismissExplain();
+    taRef.current?.focus();
+  };
   const renderFoundSourcesPanel = useCallback((message) => {
     const foundSourcesMeta = getMessageFoundSources(message, activeAgentRemotePapers);
     if (!foundSourcesMeta.shown.length) return null;
@@ -1328,7 +1405,11 @@ export default function PaperviewApp() {
   return (
     <>
       <style>{CSS}</style>
-      <div className="app" onMouseDown={(e) => { if (!e.target.closest(".sel-pop")) setPopup(null); if (!e.target.closest(".ann-popover") && !e.target.closest("[data-ann-id]")) setAnnPopover(null); }}>
+      <div className="app" onMouseDown={(e) => {
+        if (!e.target.closest(".sel-pop")) setPopup(null);
+        if (!e.target.closest(".ann-popover") && !e.target.closest("[data-ann-id]")) setAnnPopover(null);
+        if (!e.target.closest(".explain-popover") && !e.target.closest(".sel-pop")) dismissExplain();
+      }}>
         <div className={`sb ${sidebarOpen ? "" : "closed"}`} style={sidebarOpen ? { width: sidebarWidth, minWidth: sidebarWidth } : undefined}>
           <div className="sb-inner" style={{ width: sidebarWidth }}>
             <div className="sb-user">
@@ -1501,6 +1582,15 @@ export default function PaperviewApp() {
               <div className="tb-divider" />
               {currentView === "reader" && (
                 <>
+                  {activePaper && (
+                    <button
+                      className={`topbar-btn ${readerDetailOpen ? "active" : ""}`}
+                      onClick={() => setReaderDetailOpen((v) => !v)}
+                      title="Document details"
+                    >
+                      <INotes size={13} /> Details
+                    </button>
+                  )}
                   <button className={`topbar-btn ${chatOpen ? "active" : ""}`} onClick={() => setChatOpen((v) => !v)}>
                     <IChat size={13} /> Chat
                   </button>
@@ -1553,6 +1643,15 @@ export default function PaperviewApp() {
                 deleteFolder={deleteFolder}
                 openPaper={openPaper}
                 deletePaper={deletePaper}
+                getTitle={getTitle}
+                getAuthorsLine={getAuthorsLine}
+                getMeta={getMeta}
+                exportFolderBibtex={exportFolderBibtex}
+                exportLibraryBibtex={exportLibraryBibtex}
+                extractPaperMetaWithAI={extractPaperMetaWithAI}
+                librarySearch={librarySearch}
+                onLibrarySearch={setLibrarySearch}
+                searchResults={searchResults}
               />
             ) : currentView === "agent" ? (
               <AgentView
@@ -1611,37 +1710,59 @@ export default function PaperviewApp() {
               />
             ) : activePaper ? (
               <>
-                <ReaderView
-                  activePaper={activePaper}
-                  scale={scale}
-                  currentPage={currentPage}
-                  activePaperTotalPages={activePaperTotalPages}
-                  annotations={annotations}
-                  debugCitations={debugCitations}
-                  viewerSearchOpen={viewerSearchOpen}
-                  viewerSearchQuery={viewerSearchQuery}
-                  viewerSearchStatus={viewerSearchStatus}
-                  viewerSearchMatches={viewerSearchMatches}
-                  viewerSearchIndex={viewerSearchIndex}
-                  canRunViewerSearch={canRunViewerSearch}
-                  hasViewerSearchResults={hasViewerSearchResults}
-                  searchablePageTexts={searchablePageTexts}
-                  chatOpen={chatOpen}
-                  setScale={setScale}
-                  setCurrentPage={setCurrentPage}
-                  setViewerSearchOpen={setViewerSearchOpen}
-                  setViewerSearchQuery={setViewerSearchQuery}
-                  setViewerSearchStatus={setViewerSearchStatus}
-                  setViewerSearchMatches={setViewerSearchMatches}
-                  setViewerSearchIndex={setViewerSearchIndex}
-                  goToPage={goToPage}
-                  handlePdfReady={handlePdfReady}
-                  handlePdfDocumentLoad={handlePdfDocumentLoad}
-                  handleAnnotationClick={handleAnnotationClick}
-                  runViewerSearch={runViewerSearch}
-                  handleSearchClick={handleSearchClick}
-                  startChatResize={startChatResize}
-                  viewerSearchInputRef={viewerSearchInputRef}
+                <div className={`reader-shell ${readerDetailOpen ? 'reader-shell-with-detail' : ''}`}>
+                  <div className="reader-main">
+                    <ReaderView
+                      activePaper={activePaper}
+                      scale={scale}
+                      currentPage={currentPage}
+                      activePaperTotalPages={activePaperTotalPages}
+                      annotations={annotations}
+                      debugCitations={debugCitations}
+                      viewerSearchOpen={viewerSearchOpen}
+                      viewerSearchQuery={viewerSearchQuery}
+                      viewerSearchStatus={viewerSearchStatus}
+                      viewerSearchMatches={viewerSearchMatches}
+                      viewerSearchIndex={viewerSearchIndex}
+                      canRunViewerSearch={canRunViewerSearch}
+                      hasViewerSearchResults={hasViewerSearchResults}
+                      searchablePageTexts={searchablePageTexts}
+                      chatOpen={chatOpen}
+                      setScale={setScale}
+                      setCurrentPage={setCurrentPage}
+                      setViewerSearchOpen={setViewerSearchOpen}
+                      setViewerSearchQuery={setViewerSearchQuery}
+                      setViewerSearchStatus={setViewerSearchStatus}
+                      setViewerSearchMatches={setViewerSearchMatches}
+                      setViewerSearchIndex={setViewerSearchIndex}
+                      goToPage={goToPage}
+                      handlePdfReady={handlePdfReady}
+                      handlePdfDocumentLoad={handlePdfDocumentLoad}
+                      handleAnnotationClick={handleAnnotationClick}
+                      runViewerSearch={runViewerSearch}
+                      handleSearchClick={handleSearchClick}
+                      startChatResize={startChatResize}
+                      viewerSearchInputRef={viewerSearchInputRef}
+                    />
+                  </div>
+                  {readerDetailOpen && (
+                    <LibraryPaperDetail
+                      paper={activePaper}
+                      folder={activeFolder}
+                      meta={getMeta(activePaper.id)}
+                      extractPaperMetaWithAI={extractPaperMetaWithAI}
+                      showOpenButton={false}
+                      onClose={() => setReaderDetailOpen(false)}
+                      onPreviewBibtex={setReaderBibtexPreview}
+                    />
+                  )}
+                </div>
+                <BibtexPreviewModal
+                  open={Boolean(readerBibtexPreview)}
+                  title={readerBibtexPreview?.title}
+                  filename={readerBibtexPreview?.filename}
+                  content={readerBibtexPreview?.content}
+                  onClose={() => setReaderBibtexPreview(null)}
                 />
                 {chatOpen && (
                   <ChatPanel
@@ -1736,19 +1857,23 @@ export default function PaperviewApp() {
           </div>
         </div>
 
-        {popup && (
-          <div
-            className="sel-pop"
-            style={{ left: Math.min(Math.max(popup.x - 130, 8), window.innerWidth - 320), top: Math.max(popup.y - 50, 8) }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button className="sel-btn pri" onClick={askAI}><ISpark size={13} /> Ask AI</button>
-            <button className="sel-btn" onClick={addToChat}><IChat size={13} /> Add to chat</button>
-            <button className="sel-btn" onClick={handleHighlight}><IHighlight size={13} /> Highlight</button>
-            <button className="sel-btn" onClick={() => { navigator.clipboard?.writeText(popup.text); setPopup(null); }}><ICopy size={13} /> Copy</button>
-          </div>
-        )}
+        <SelectionToolbar
+          popup={popup}
+          onAskAI={askAI}
+          onExplain={handleExplainSelection}
+          onAddToChat={addToChat}
+          onHighlight={handleHighlight}
+          onCopy={() => {
+            navigator.clipboard?.writeText(popup.text);
+            setPopup(null);
+          }}
+        />
+
+        <ExplainPopover
+          state={explainState}
+          onDismiss={dismissExplain}
+          onAddToChat={handleExplainAddToChat}
+        />
 
         {annPopover && (
           <div

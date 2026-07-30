@@ -15,16 +15,16 @@ Positioning vs. Anara: they win on polish, cross-paper synthesis, and library me
 
 ## 2. Core functionality gaps (vs. Anara)
 
-- **Cross-paper Q&A**: ask across a folder / whole library, not just one paper. Anara's headline feature and the #1 academic expectation. Foundation: `ragUtils.js` + `useChatSend` — extend retrieval across papers with per-paper citations. *(Unblocked by the refactor.)*
-- **Bibliography metadata**: auto-detect title/authors/year/DOI (CrossRef API, free); library shows real citations instead of filenames; BibTeX export.
-- **Library persistence/memory**: index papers (embeddings in IndexedDB) so "where did I save that battery paper?" works.
-- **Quick explain**: select text in PDF → inline "explain this" popover. Cheap to build, huge daily-use win.
 - ~~Citation verification~~ — **done**: clickable `[N]` anchors with quoted-passage popovers and jump-to-source (`InlineCitedAnswer.jsx`). Remaining polish: flag weak/ambiguous citations.
+- ~~Quick explain~~ — **done**: select text → inline Explain popover (`useExplainSelection` + `ExplainPopover`); Ask AI still routes to chat.
+- ~~Bibliography metadata~~ — **done**: CrossRef enrichment + `paperMeta` store + library citation columns + BibTeX export.
+- ~~Library persistence/memory~~ — **done**: `paperChunks` index + library search UI.
+- ~~Cross-paper Q&A~~ — **done**: Folder/Library context modes with corpus pre-rank (`corpusRetrieve` + `libraryIndex`); citations across papers.
 
 ## 3. UX improvements
 
 - **First-run flow**: with credits, onboarding becomes open app → buy €3 credits or paste key → first answer in under a minute (today the API-key requirement is a wall for students).
-- **Library view**: sortable table (title, authors, year, added) — "academic instrument", not file browser.
+- **Library view**: further sort/filter polish on the citation table (title, authors, year, added).
 - **Chat UX**: suggested follow-ups, regenerate answer, visible model picker (cheap/quality toggle matters under pay-per-use).
 - **Cost visibility**: persistent subtle credit counter in header + per-message cost on hover.
 
@@ -35,13 +35,12 @@ Positioning vs. Anara: they win on polish, cross-paper synthesis, and library me
 
 ## 5. Engineering hygiene
 
-- ~~Split `PaperviewApp.jsx`~~ — **done** (6,564 → 1,875 lines; 11 hooks + 7 components extracted; `docs/refactor-paperview-app.md`).
-- **Expand test coverage** around `ragUtils`, `chatUtils`, and the send hooks before building cross-paper retrieval. The refactor proved build-green ≠ runtime-correct (TDZ crashes, a dropped `SEARCH_DOCUMENT_TOOL` import) — the 7-test suite is too thin.
+- ~~Split `PaperviewApp.jsx`~~ — **done** (6,564 → 1,875 lines; 11 hooks + 7 components extracted; `docs/refactor-paperview-app.md`). Follow [AGENTS.md](../AGENTS.md) so new work stays modular.
+- ~~Expand test coverage~~ around `ragUtils` / biblio / corpus / library index — **started** (`coreFunctionality.test.js`). Keep growing coverage around send hooks.
 - **Smoke-test automation**: the headless-browser script used during the refactor (puppeteer-core + Edge) could become a permanent CI check.
 
 ## Suggested order
 
-1. ~~Split `PaperviewApp.jsx` + citation span-jumping + quick-explain~~ — split done; quick-explain next
-2. Cross-paper Q&A + library metadata (the "real tool" milestone)
-3. Credits backend + Stripe + onboarding flow (the business milestone)
-4. Design polish pass + landing page
+1. ~~Split `PaperviewApp.jsx` + citation span-jumping + core functionality gaps~~ — **done**
+2. Credits backend + Stripe + onboarding flow (the business milestone)
+3. Design polish pass + landing page

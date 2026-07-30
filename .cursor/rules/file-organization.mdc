@@ -1,0 +1,13 @@
+---
+description: Keep Paperview modular — composition root, small files, extract don't append
+alwaysApply: true
+---
+
+# File organization
+
+- `src/PaperviewApp.jsx` is a **composition root** only: wire hooks, pass props, thin glue. No new multi-hundred-line handlers, prompts, or API pipelines.
+- If a change would add more than ~50 lines of real logic to `PaperviewApp.jsx`, extract to a new hook/component/util in the same change.
+- Prefer **new files** over growing `useAgentSend.jsx`, `useFolders.js`, or `useChatSend.js`. Soft target for new modules: one concern, preferably under ~400 lines.
+- Layout: `src/hooks/` (stateful), `src/components/` (UI), `src/*.js` (pure utils), `src/db.js` (Dexie).
+- Do not dump large feature CSS into unbounded `styles.js` growth — use a dedicated section/file for non-trivial surfaces.
+- Canonical detail: [AGENTS.md](AGENTS.md). History: [docs/refactor-paperview-app.md](docs/refactor-paperview-app.md).

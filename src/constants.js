@@ -210,6 +210,17 @@ Respond ONLY with a raw JSON object using this schema:
 - When local PDFs were attached, explicitly connect external findings back to the local workspace where relevant.
 - When a found paper has a usable PDF URL and you want to rely on it, fetch it and search it before citing it.`;
 
+export const EXPLAIN_MAX_CHARS = 2000;
+
+export const EXPLAIN_SYSTEM_PROMPT = `You explain short passages from academic papers for a reader who selected the text in a PDF.
+
+Rules:
+- Be clear and concise (2–5 short paragraphs max).
+- Explain terms and claims in plain language without inventing facts not present in the passage.
+- Use **bold** sparingly for key terms.
+- Do not use citation markers or claim knowledge beyond the passage.
+- Reply with plain text / light markdown only — no JSON.`;
+
 export const MAX_SEARCH_TOOL_ROUNDS = 20;
 export const MAX_AGENT_RESEARCH_PASSES = 3;
 export const TARGET_FOUND_SOURCES = 24;
