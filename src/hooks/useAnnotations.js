@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { saveAnnotation, loadAnnotations, deleteAnnotation } from '../db';
+import { createRandomId } from '../idUtils';
 
 export function useAnnotations({ activePaper, popup, setPopup, syncFolderForPaper }) {
   const [annotations, setAnnotations] = useState([]);
@@ -71,7 +72,7 @@ export function useAnnotations({ activePaper, popup, setPopup, syncFolderForPape
 
     const selectedText = popup.text;
     const newAnn = {
-      id: `ann-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: createRandomId('ann'),
       paperId: activePaper?.id,
       pageNum,
       selectedText,

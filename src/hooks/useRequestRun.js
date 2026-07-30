@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createStoppedError } from "../miscUtils";
+import { createRandomId } from "../idUtils";
 
 /**
  * Manages the lifecycle of in-flight chat/agent requests: abort controllers,
@@ -16,7 +17,7 @@ export function useRequestRuns() {
   const beginRequestRun = useCallback((requestRef, chatId) => {
     requestRef.current.controller?.abort();
     const controller = new AbortController();
-    const token = Date.now() + Math.random();
+    const token = createRandomId("run");
     requestRef.current = { controller, token, chatId };
     return { controller, token };
   }, []);

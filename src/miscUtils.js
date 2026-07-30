@@ -1,8 +1,9 @@
 import { derivePageTexts } from './chatUtils';
 import { stripPdfExtension } from './agentSources';
+import { createRandomId } from './idUtils';
 
 export function createChatMessageId() {
-  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return createRandomId('msg');
 }
 
 export function makeStableId(prefix, path) {

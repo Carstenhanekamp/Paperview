@@ -35,6 +35,7 @@ import {
   buildManualPdfFetchMessage,
 } from '../agentSources';
 import { createChatMessageId, makeStableId, hasExtractedPaperText, isAbortLikeError } from '../miscUtils';
+import { createRandomId } from '../idUtils';
 import { derivePageTexts } from '../chatUtils';
 import { addUsageTotals, createUsageTotals, getUsageBreakdown } from '../openaiPricing';
 import { extractPdfText, validatePdfBytes } from '../pdfUtils';
@@ -509,7 +510,7 @@ export function useAgentSend({
         if (passSources.length) {
           collectedWebSources.push(...passSources);
           pushAgentThinkingStep({
-            id: `ats-${Date.now()}-web-${Math.random().toString(36).slice(2, 7)}`,
+            id: createRandomId('ats-web'),
             chatId: targetChatId,
             type,
             label,

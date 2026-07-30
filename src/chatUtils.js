@@ -1,3 +1,5 @@
+import { createRandomId } from './idUtils';
+
 export const CHAT_TITLE_FALLBACK = "New chat";
 
 export function materializeFullText(pageTexts = []) {
@@ -15,7 +17,7 @@ export function createChatThreadRecord(paperId, options = {}) {
   const scopeType = options.scopeType || 'paper';
   const scopeId = options.scopeId || paperId || null;
   return {
-    id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: createRandomId('chat'),
     paperId: paperId || scopeId || 'library',
     scopeType,
     scopeId,
@@ -27,7 +29,7 @@ export function createChatThreadRecord(paperId, options = {}) {
 
 export function createAgentChatThreadRecord(rootFolderId) {
   return {
-    id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: createRandomId('agent'),
     rootFolderId,
     title: CHAT_TITLE_FALLBACK,
     messages: [],
