@@ -1,12 +1,6 @@
 # PaperviewApp.jsx Extraction Map
 
-**Status:** Phase 1 ✅ | Phase 2 ✅ (modals; FoundSourcesPanel/AgentPreviewDrawer deferred to Phase 4) | Phase 3 ✅ (`useApiKey`, `usePanelResize`, `useViewerSearch`, `useAnnotations`, `useRequestRuns` wired in; built by 4 parallel agents)
-
-`PaperviewApp.jsx`: 6,564 → ~5,100 lines. Build + tests green after each step.
-
-Extracted so far: `constants.js`, `apiKeyStorage.js`, `openaiResponseParsing.js`, `agentSources.js`, `miscUtils.js`, `ThinkingTrace.jsx`, `components/{SettingsModal,UploadModal,FolderPermModal}.jsx`, `hooks/{useApiKey,usePanelResize,useViewerSearch,useAnnotations,useRequestRun}.js`.
-
-Remaining: Phase 4 heavy hooks (chat/agent threads, folders, paper payloads, chat/agent send paths) and Phase 5 view components (LibrarySidebar, LibraryView, AgentView, ReaderView, FoundSourcesPanel, AgentPreviewDrawer).
+**Status:** ✅ COMPLETE — all 5 phases done. `PaperviewApp.jsx`: 6,564 → 1,875 lines (composition root). Build + tests + headless-browser smoke tests green throughout. Branch: `refactor/split-paperview-app`.
 
 ---
 
