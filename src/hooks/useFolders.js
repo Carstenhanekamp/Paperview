@@ -10,11 +10,13 @@ import {
   loadFolderHandles,
   clearFolderHandles,
   saveAnnotation,
+  loadAllAnnotations,
   deleteAnnotationsByPaperIds,
   deletePaperCachesByPaperIds,
+  saveUploadedPdf,
 } from '../db';
 import { validatePdfBytes } from '../pdfUtils';
-import { AGENT_IMPORTS_FOLDER_NAME } from '../constants';
+import { AGENT_IMPORTS_FOLDER_NAME, UPLOADS_FOLDER_ID, UPLOADS_FOLDER_NAME } from '../constants';
 import { fetchWithCorsProxy } from '../openaiResponseParsing';
 import {
   stripPdfExtension,
@@ -33,6 +35,8 @@ import {
 export function useFolders({
   folders,
   setFolders,
+  selectedFolderId,
+  setSelectedFolderId,
   setOpenTabs,
   setActiveTabId,
   activeTabId,
@@ -52,7 +56,6 @@ export function useFolders({
   openAgentPaper,
   setUpFolder,
 }) {
-  const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [newFolder, setNewFolder] = useState(false);
   const [nfName, setNfName] = useState("");
   const [folderError, setFolderError] = useState("");
@@ -415,17 +418,11 @@ export function useFolders({
     setAgentImportStates((prev) => ({ ...prev, [importKey]: { status: "loading", label: "Importing PDF..." } }));
 
     try {
-      const rootFolderId = activeAgentChat?.rootFolderId || selectedRootFolderId;
-      if (!rootFolderId || !hasWritableAgentContext) {
-        throw new Error("Open a writable Paperview folder before importing papers.");
-      }
-
       const pdfUrl = normalizeAgentSourceUrl(result?.pdfUrl || "");
       if (!pdfUrl) {
         throw new Error("No direct PDF URL is available for this result.");
       }
 
-      const targetFolder = await ensureImportedFolder(rootFolderId);
       const response = await fetchWithCorsProxy(pdfUrl);
       if (!response.ok) {
         throw new Error(`PDF download failed (${response.status}).`);
@@ -434,6 +431,84 @@ export function useFolders({
       const fileBuffer = await response.arrayBuffer();
       const pdfBytes = new Uint8Array(fileBuffer);
       await validatePdfBytes(pdfBytes);
+
+      const rootFolderId = activeAgentChat?.rootFolderId || selectedRootFolderId;
+      if (!rootFolderId) {
+        throw new Error("Open Agent (or a folder) before importing papers.");
+      }
+
+      // Browser / upload-only workspace: keep PDF in IndexedDB and the Uploads folder.
+      if (!hasWritableAgentContext || rootFolderId === UPLOADS_FOLDER_ID) {
+        const uploadsId = UPLOADS_FOLDER_ID;
+        const paperId = `p${Date.now()}`;
+        const fileName = ensurePdfFileName(result?.title || "Imported paper");
+        await saveUploadedPdf({
+          paperId,
+          pdfBytes,
+          fileSize: pdfBytes.byteLength,
+          fileLastModified: Date.now(),
+          updatedAt: Date.now(),
+        });
+
+        const paper = {
+          id: paperId,
+          name: stripPdfExtension(fileName),
+          authors: Array.isArray(result?.authors) ? result.authors.join(", ") : "",
+          year: result?.year || "",
+          pages: null,
+          size: `${(pdfBytes.byteLength / 1024 / 1024).toFixed(1)} MB`,
+          fileSize: pdfBytes.byteLength,
+          fileLastModified: Date.now(),
+          textStatus: "idle",
+          textProgress: 0,
+          textError: null,
+          textStatusText: "",
+          folderId: uploadsId,
+          rootFolderId: uploadsId,
+        };
+
+        setFolders((prev) => {
+          const existing = prev.find((folder) => folder.id === uploadsId);
+          if (existing) {
+            return prev.map((folder) => (
+              folder.id === uploadsId
+                ? {
+                    ...folder,
+                    expanded: true,
+                    papers: folder.papers.some((item) => item.id === paper.id)
+                      ? folder.papers
+                      : [...folder.papers, paper],
+                  }
+                : folder
+            ));
+          }
+          return [
+            ...prev,
+            {
+              id: uploadsId,
+              name: UPLOADS_FOLDER_NAME,
+              expanded: true,
+              papers: [paper],
+              depth: 0,
+              directoryHandle: null,
+              rootHandle: null,
+              rootFolderId: uploadsId,
+              relativePath: "",
+              folderPath: buildFolderPath(UPLOADS_FOLDER_NAME),
+            },
+          ];
+        });
+        setSelectedFolderId(uploadsId);
+        setUpFolder(uploadsId);
+        setAgentImportStates((prev) => ({
+          ...prev,
+          [importKey]: { status: "done", label: `Saved to ${UPLOADS_FOLDER_NAME}` },
+        }));
+        openAgentPaper(paper);
+        return;
+      }
+
+      const targetFolder = await ensureImportedFolder(rootFolderId);
       const fileName = await getAvailablePdfFileName(targetFolder.directoryHandle, result?.title || "Imported paper");
       const fileHandle = await targetFolder.directoryHandle.getFileHandle(fileName, { create: true });
       const writable = await fileHandle.createWritable();
@@ -483,7 +558,7 @@ export function useFolders({
         [importKey]: { status: "error", label: message },
       }));
     }
-  }, [activeAgentChat?.rootFolderId, ensureImportedFolder, getAvailablePdfFileName, hasWritableAgentContext, openAgentPaper, selectedRootFolderId]);
+  }, [activeAgentChat?.rootFolderId, ensureImportedFolder, getAvailablePdfFileName, hasWritableAgentContext, openAgentPaper, selectedRootFolderId, setAgentImportStates, setSelectedFolderId, setUpFolder]);
 
   const refreshRootFolderContents = useCallback(async (rootFolderId) => {
     if (!rootFolderId || !scanDirHandleRef.current) {

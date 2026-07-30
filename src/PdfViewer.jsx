@@ -269,6 +269,7 @@ export default function PdfViewer({
   const onDocumentLoadRef = useRef(onDocumentLoad);
   const annotationsRef = useRef(annotations);
   const onAnnotationClickRef = useRef(onAnnotationClick);
+  const loadGenRef = useRef(0);
   const [pdfReady, setPdfReady] = useState(0);
 
   useEffect(() => {
@@ -290,6 +291,8 @@ export default function PdfViewer({
 
   useEffect(() => {
     let cancelled = false;
+    const loadGen = ++loadGenRef.current;
+    const isActive = () => !cancelled && loadGenRef.current === loadGen;
     const el = containerRef.current;
     if (!el || !pdfBytes?.length) return undefined;
 
@@ -318,6 +321,7 @@ export default function PdfViewer({
       state.renderTask = null;
       state.ensurePromise = null;
       state.mounted = false;
+      state.renderedScale = null;
       if (state.canvas) {
         state.canvas.width = 0;
         state.canvas.height = 0;
@@ -338,12 +342,15 @@ export default function PdfViewer({
       try {
         const task = pdfLibRef.current.renderTextLayer({ textContentSource: textContent, container, viewport });
         if (task?.promise) await task.promise;
-      } catch {
+        return container.querySelectorAll('span').length;
+      } catch (error) {
         try {
           const task = pdfLibRef.current.renderTextLayer({ textContent, container, viewport, textDivs: [] });
           if (task?.promise) await task.promise;
-        } catch {
-          // ignore text-layer failures
+          return container.querySelectorAll('span').length;
+        } catch (fallbackError) {
+          console.warn('Paperview: text layer render failed', fallbackError || error);
+          return 0;
         }
       }
     };
@@ -354,7 +361,7 @@ export default function PdfViewer({
       state.ensurePromise = (async () => {
         const wrap = wrappersRef.current[pageNum - 1];
         const metric = pageMetricsRef.current[pageNum - 1];
-        if (!wrap || !metric || !pdfRef.current || cancelled) return null;
+        if (!wrap || !metric || !pdfRef.current || !isActive()) return null;
 
         if (!state.canvas) {
           wrap.querySelector('.page-placeholder')?.remove();
@@ -369,8 +376,14 @@ export default function PdfViewer({
           wrap.appendChild(state.textLayer);
         }
 
+        // Already rendered at this scale — keep existing text layer.
+        if (state.renderedScale === scale && state.textLayer.childElementCount > 0 && state.canvas?.width) {
+          return { wrap, viewport: null };
+        }
+
         state.mounted = true;
         const page = await pdfRef.current.getPage(pageNum);
+        if (!isActive() || !state.mounted) return null;
         const viewport = page.getViewport({ scale });
         const dpr = window.devicePixelRatio || 1;
         state.canvas.width = Math.ceil(viewport.width * dpr);
@@ -393,9 +406,15 @@ export default function PdfViewer({
 
         try {
           await renderTask.promise;
-          if (cancelled || !state.mounted) return null;
+          if (!isActive() || !state.mounted) return null;
           const textContent = await page.getTextContent({ includeMarkedContent: true });
-          await renderTextLayer(textContent, state.textLayer, viewport);
+          if (!isActive() || !state.mounted) return null;
+          const spanCount = await renderTextLayer(textContent, state.textLayer, viewport);
+          if (!isActive() || !state.mounted) return null;
+          if (!spanCount && textContent?.items?.length) {
+            console.warn(`Paperview: text layer empty after render (page ${pageNum}, items=${textContent.items.length})`);
+          }
+          state.renderedScale = scale;
           applyAnnotationHighlights(wrap, annotationsRef.current.filter((ann) => ann.pageNum === pageNum));
           if (!ocrDoneRef.current.has(pageNum)) {
             ensureOcr(pageNum, page, wrap, viewport).catch(() => {});
@@ -608,13 +627,19 @@ export default function PdfViewer({
 
     (async () => {
       pdfLibRef.current = await loadPdfJs();
+      if (!isActive()) return;
       const pdf = await pdfLibRef.current.getDocument({ data: pdfBytes.slice(0), stopAtErrors: false }).promise;
-      if (cancelled) return;
+      if (!isActive()) {
+        try { pdf.destroy?.(); } catch { /* ignore */ }
+        return;
+      }
       pdfRef.current = pdf;
       onDocumentLoadRef.current?.({ totalPages: pdf.numPages });
 
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+        if (!isActive()) return;
         const page = await pdf.getPage(pageNum);
+        if (!isActive()) return;
         const viewport = page.getViewport({ scale });
         const wrap = document.createElement('div');
         wrap.dataset.page = String(pageNum);
@@ -629,7 +654,9 @@ export default function PdfViewer({
         try { page.cleanup?.(); } catch { /* ignore */ }
       }
 
+      if (!isActive()) return;
       await waitForLayout();
+      if (!isActive()) return;
       updateOffsets();
       setPdfReady((value) => value + 1);
 
@@ -659,7 +686,7 @@ export default function PdfViewer({
         }, 420);
       });
     })().catch((error) => {
-      if (!cancelled) console.warn(error);
+      if (isActive()) console.warn(error);
     });
 
     return () => {

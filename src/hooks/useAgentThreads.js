@@ -6,7 +6,6 @@ export function useAgentThreads({
   syncRootFolderSnapshotRef,
   agentRequestRef,
   selectedRootFolderId,
-  hasWritableAgentContext,
   agentLoadingState,
   setAgentLoadingState,
   setAgentInput,
@@ -111,7 +110,7 @@ export function useAgentThreads({
   }, []);
 
   const startNewAgentChat = useCallback(() => {
-    if (!selectedRootFolderId || !hasWritableAgentContext) return;
+    if (!selectedRootFolderId) return;
     if (agentLoadingState) stopAgentRun();
     const thread = createAgentChatThreadRecord(selectedRootFolderId);
     setAgentThreads((prev) => [thread, ...prev]);
@@ -123,7 +122,7 @@ export function useAgentThreads({
     setSelectedAgentPaperIds([]);
     setAgentPreviewState(null);
     agentPreviewScrollFnRef.current = null;
-  }, [selectedRootFolderId, hasWritableAgentContext, agentLoadingState, stopAgentRun]);
+  }, [selectedRootFolderId, agentLoadingState, stopAgentRun]);
 
   const openAgentThread = useCallback((threadId) => {
     if (agentLoadingState) stopAgentRun();

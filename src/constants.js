@@ -6,6 +6,8 @@ export const OPENAI_MODELS = (import.meta.env.VITE_OPENAI_MODELS || "gpt-5.4-nan
   .filter(Boolean);
 
 export const AGENT_IMPORTS_FOLDER_NAME = "Imported Papers";
+export const UPLOADS_FOLDER_ID = "f-uploads";
+export const UPLOADS_FOLDER_NAME = "Uploads";
 export const OPENAI_PROXY_ENDPOINT = "/api/openai-response";
 export const REMOTE_PDF_PROXY_ENDPOINT = "/api/fetch-pdf";
 export const LEGACY_STORAGE_NAME = "pv-api-key";

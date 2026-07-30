@@ -5,18 +5,17 @@ import {
   saveUploadedPdf,
 } from './db';
 import { clearOcrMemoryCache, terminateTesseractWorkerNow } from './pdfUtils';
-import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, ICopy, IZoomIn, IZoomOut, IPanel, IGrid, IChat, IMore, ILeft, IRight, ISpark, IPaperclip, IChevronDown, IArrowUp, IArrowDown, IChevronLeftDouble, IChevronRightDouble, ITrash, IGear, IHighlight, INotes } from './icons';
+import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, ICopy, IGrid, IChat, IRight, ISpark, IChevronDown, IChevronLeftDouble, IChevronRightDouble, IGear, IHighlight } from './icons';
 import { CSS } from './styles';
 import { createAgentChatThreadRecord, createChatThreadRecord, formatChatTimestamp, formatChatMessageCount, derivePageTexts } from './chatUtils';
-import TextFallback from './TextFallback';
-import InlineCitedAnswer from './InlineCitedAnswer';
-import PdfViewer from './PdfViewer';
 import { evictUnpinnedPayloads, stripPaperPayload } from './paperPayloadUtils';
 import { usePaperPayloads } from './hooks/usePaperPayloads';
 
 import {
   OPENAI_MODEL,
-  OPENAI_MODELS,
+  AGENT_IMPORTS_FOLDER_NAME,
+  UPLOADS_FOLDER_ID,
+  UPLOADS_FOLDER_NAME,
 } from './constants';
 import {
   normalizeAgentSourceUrl,
@@ -30,8 +29,11 @@ import {
   hasExtractedPaperText,
   buildFolderPath,
 } from './miscUtils';
-import ThinkingTrace from './ThinkingTrace';
 import SettingsModal from './components/SettingsModal';
+import LibraryView from './components/LibraryView';
+import AgentView from './components/AgentView';
+import ReaderView from './components/ReaderView';
+import ChatPanel from './components/ChatPanel';
 import UploadModal from './components/UploadModal';
 import FolderPermModal from './components/FolderPermModal';
 import { useApiKey } from './hooks/useApiKey';
@@ -47,6 +49,7 @@ import { useAgentSend } from './hooks/useAgentSend';
 
 export default function PaperviewApp() {
   const [folders, setFolders] = useState([]);
+  const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [openTabs, setOpenTabs] = useState([]);
   const [activeTabId, setActiveTabId] = useState(null);
   const [input, setInput] = useState("");
@@ -161,7 +164,6 @@ export default function PaperviewApp() {
 
   const activePaperDescriptor = openTabs.find((t) => t.id === activeTabId) || null;
   const {
-    paperPayloads,
     setPaperPayloads,
     paperPayloadsRef,
     paperScanStates,
@@ -195,14 +197,21 @@ export default function PaperviewApp() {
   const selectedRootFolderId = selectedFolder?.rootFolderId || null;
   const selectedRootFolder = folders.find((folder) => folder.id === selectedRootFolderId) || null;
   const hasWritableAgentContext = Boolean(selectedRootFolder?.directoryHandle && selectedRootFolder?.rootHandle);
+  const browserAgentFolder = folders.find((folder) => folder.id === UPLOADS_FOLDER_ID) || null;
+  const agentRootFolderId = hasWritableAgentContext
+    ? selectedRootFolderId
+    : (browserAgentFolder?.rootFolderId || (browserAgentFolder ? UPLOADS_FOLDER_ID : null));
+  const agentRootFolder = hasWritableAgentContext
+    ? selectedRootFolder
+    : browserAgentFolder;
   const agentWorkspacePapers = useMemo(
     () =>
-      selectedRootFolderId
+      agentRootFolderId
         ? folders
-            .filter((folder) => folder.rootFolderId === selectedRootFolderId)
+            .filter((folder) => folder.rootFolderId === agentRootFolderId)
             .flatMap((folder) => folder.papers.map((paper) => mergePaperRecord({ ...paper, folderId: folder.id })))
         : [],
-    [folders, mergePaperRecord, selectedRootFolderId]
+    [folders, mergePaperRecord, agentRootFolderId]
   );
   const searchablePageTexts = useMemo(() => derivePageTexts(activePaper), [activePaper]);
   const activePaperTotalPages = Math.max(1, Number(activePaper?.pages) || searchablePageTexts.length || 1);
@@ -525,8 +534,7 @@ export default function PaperviewApp() {
   } = useAgentThreads({
     syncRootFolderSnapshotRef: { get current() { return syncRootFolderSnapshotRef.current; } },
     agentRequestRef,
-    selectedRootFolderId,
-    hasWritableAgentContext,
+    selectedRootFolderId: agentRootFolderId,
     agentLoadingState,
     setAgentLoadingState,
     setAgentInput,
@@ -541,8 +549,8 @@ export default function PaperviewApp() {
     [chatThreads, activeChatId]
   );
   const activeAgentChat = useMemo(
-    () => agentThreads.find((thread) => thread.id === activeAgentChatId && thread.rootFolderId === selectedRootFolderId) || null,
-    [agentThreads, activeAgentChatId, selectedRootFolderId]
+    () => agentThreads.find((thread) => thread.id === activeAgentChatId && thread.rootFolderId === agentRootFolderId) || null,
+    [agentThreads, activeAgentChatId, agentRootFolderId]
   );
   const currentMessages = activeChat?.messages || [];
   const currentAgentMessages = activeAgentChat?.messages || [];
@@ -553,11 +561,11 @@ export default function PaperviewApp() {
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }, [chatThreads, activePaper?.id]);
   const selectedRootAgentThreads = useMemo(() => {
-    if (!selectedRootFolderId) return [];
+    if (!agentRootFolderId) return [];
     return agentThreads
-      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
+      .filter((thread) => thread.rootFolderId === agentRootFolderId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [agentThreads, selectedRootFolderId]);
+  }, [agentThreads, agentRootFolderId]);
   const activePaperMessageCount = useMemo(
     () => activePaperThreads.reduce((sum, thread) => sum + thread.messages.length, 0),
     [activePaperThreads]
@@ -638,13 +646,13 @@ export default function PaperviewApp() {
   }, [activePaper?.id]);
 
   useEffect(() => {
-    if (!selectedRootFolderId || !hasWritableAgentContext) {
+    if (!agentRootFolderId) {
       setActiveAgentChatId(null);
       return;
     }
 
     const rootThreads = agentThreads
-      .filter((thread) => thread.rootFolderId === selectedRootFolderId)
+      .filter((thread) => thread.rootFolderId === agentRootFolderId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
 
     if (rootThreads.some((thread) => thread.id === activeAgentChatId)) {
@@ -656,18 +664,45 @@ export default function PaperviewApp() {
       return;
     }
 
-    const thread = createAgentChatThreadRecord(selectedRootFolderId);
+    const thread = createAgentChatThreadRecord(agentRootFolderId);
     setAgentThreads((prev) => [thread, ...prev]);
     saveAgentChat(thread)
-      .then(() => syncRootFolderSnapshotRef.current?.(selectedRootFolderId))
+      .then(() => syncRootFolderSnapshotRef.current?.(agentRootFolderId))
       .catch(() => {});
     setActiveAgentChatId(thread.id);
-  }, [selectedRootFolderId, hasWritableAgentContext, activeAgentChatId, agentThreads]);
+  }, [agentRootFolderId, activeAgentChatId, agentThreads]);
+
+  const ensureBrowserAgentWorkspace = useCallback(() => {
+    setFolders((prev) => {
+      if (prev.some((folder) => folder.id === UPLOADS_FOLDER_ID)) return prev;
+      return [
+        ...prev,
+        {
+          id: UPLOADS_FOLDER_ID,
+          name: UPLOADS_FOLDER_NAME,
+          expanded: true,
+          papers: [],
+          depth: 0,
+          directoryHandle: null,
+          rootHandle: null,
+          rootFolderId: UPLOADS_FOLDER_ID,
+          relativePath: "",
+          folderPath: buildFolderPath(UPLOADS_FOLDER_NAME),
+        },
+      ];
+    });
+    setSelectedFolderId((prev) => prev || UPLOADS_FOLDER_ID);
+    setUpFolder((prev) => prev || UPLOADS_FOLDER_ID);
+  }, []);
+
+  useEffect(() => {
+    if (currentView !== "agent") return;
+    if (hasWritableAgentContext) return;
+    ensureBrowserAgentWorkspace();
+  }, [currentView, ensureBrowserAgentWorkspace, hasWritableAgentContext]);
 
   const {
     foldersRef,
-    selectedFolderId,
-    setSelectedFolderId,
     newFolder,
     nfName,
     setNfName,
@@ -688,6 +723,8 @@ export default function PaperviewApp() {
   } = useFolders({
     folders,
     setFolders,
+    selectedFolderId,
+    setSelectedFolderId,
     setOpenTabs,
     setActiveTabId,
     activeTabId,
@@ -743,7 +780,7 @@ export default function PaperviewApp() {
     currentAgentMessages,
     agentContextPapers,
     selectedAgentTool,
-    selectedRootFolderId,
+    selectedRootFolderId: agentRootFolderId,
     folders,
     agentWorkspacePapers,
     activeTabId,
@@ -770,11 +807,13 @@ export default function PaperviewApp() {
 
   useEffect(() => {
     const pinnedIds = new Set([activeTabId, agentPreviewState?.paperId].filter(Boolean));
-    const evictedIds = Object.keys(paperPayloads).filter((paperId) => !pinnedIds.has(paperId));
-    if (!evictedIds.length) return;
-    evictedIds.forEach((paperId) => clearOcrMemoryCache(paperId));
-    setPaperPayloads((prev) => evictUnpinnedPayloads(prev, pinnedIds));
-  }, [activeTabId, agentPreviewState?.paperId, paperPayloads]);
+    setPaperPayloads((prev) => {
+      const evictedIds = Object.keys(prev).filter((paperId) => !pinnedIds.has(paperId));
+      if (!evictedIds.length) return prev;
+      evictedIds.forEach((paperId) => clearOcrMemoryCache(paperId));
+      return evictUnpinnedPayloads(prev, pinnedIds);
+    });
+  }, [activeTabId, agentPreviewState?.paperId]);
 
 
   const startChatResize = useCallback(
@@ -796,9 +835,10 @@ export default function PaperviewApp() {
   );
 
   const openPaper = async (paper, folderId) => {
+    const liveFolders = foldersRef.current?.length ? foldersRef.current : folders;
     const ownerFolder =
-      folders.find((f) => f.id === folderId) ||
-      folders.find((f) => f.papers.some((p) => p.id === paper.id));
+      liveFolders.find((f) => f.id === folderId) ||
+      liveFolders.find((f) => f.papers.some((p) => p.id === paper.id));
     if (ownerFolder) {
       setSelectedFolderId(ownerFolder.id);
       setFolders((prev) => prev.map((f) => (f.id === ownerFolder.id ? { ...f, expanded: true } : f)));
@@ -1112,7 +1152,7 @@ export default function PaperviewApp() {
                   <button
                     className="paper-result-btn"
                     type="button"
-                    disabled={!source.pdfUrl}
+                    disabled={!source.pdfUrl || agentImportStates[importKey]?.status === "loading"}
                     onClick={() => {
                       if (source.hydrationStatus === "manual_required") {
                         openPdfInBrowser();
@@ -1129,6 +1169,24 @@ export default function PaperviewApp() {
                   >
                     {source.hydrationStatus === "manual_required" ? "Open PDF in browser" : "Open PDF"}
                   </button>
+                  {!localPaper && source.pdfUrl && source.hydrationStatus !== "manual_required" ? (
+                    <button
+                      className="paper-result-btn"
+                      type="button"
+                      title={hasWritableAgentContext ? `Save into ${AGENT_IMPORTS_FOLDER_NAME}` : `Add to ${UPLOADS_FOLDER_NAME}`}
+                      disabled={agentImportStates[importKey]?.status === "loading" || agentImportStates[importKey]?.status === "done"}
+                      onClick={() => importPaperResult(source, message.id)}
+                    >
+                      {agentImportStates[importKey]?.status === "loading"
+                        ? "Importing..."
+                        : agentImportStates[importKey]?.status === "done"
+                          ? (agentImportStates[importKey]?.label || "Imported")
+                          : "Import"}
+                    </button>
+                  ) : null}
+                  {agentImportStates[importKey]?.status === "error" ? (
+                    <span className="agent-found-source-badge">{agentImportStates[importKey].label}</span>
+                  ) : null}
                 </div>
               </article>
             );
@@ -1136,7 +1194,7 @@ export default function PaperviewApp() {
         </div>
       </section>
     );
-  }, [activeAgentChatId, activeAgentRemotePapers, agentFolderCheckStates, agentWorkspacePapers, hasWritableAgentContext, openAgentPaper, openAgentPreviewPaper, refreshRootFolderContents, selectedRootFolder?.name, selectedRootFolderId]);
+  }, [activeAgentChatId, activeAgentRemotePapers, agentFolderCheckStates, agentImportStates, agentWorkspacePapers, hasWritableAgentContext, importPaperResult, openAgentPaper, openAgentPreviewPaper, refreshRootFolderContents, selectedRootFolder?.name, selectedRootFolderId]);
 
 
 
@@ -1166,6 +1224,11 @@ export default function PaperviewApp() {
         fileLastModified: pendingFile.lastModified,
         updatedAt: Date.now(),
       });
+      updatePaperPayload(paperId, {
+        pdfBytes: uint8,
+        fileSize: pendingFile.size,
+        fileLastModified: pendingFile.lastModified,
+      });
       const paper = {
         id: paperId,
         name: stripPdfExtension(pendingFile.name),
@@ -1183,8 +1246,8 @@ export default function PaperviewApp() {
 
       const noFolder = !upFolder || !folders.some((f) => f.id === upFolder);
       if (noFolder) {
-        // No folder open yet — create an in-memory "Uploads" folder
-        const uploadsId = 'f-uploads';
+        // No folder open yet — create an in-memory Uploads folder
+        const uploadsId = UPLOADS_FOLDER_ID;
         const existing = folders.find((f) => f.id === uploadsId);
         const readyPaper = {
           ...paper,
@@ -1197,7 +1260,7 @@ export default function PaperviewApp() {
         } else {
           const uploadsFolder = {
             id: uploadsId,
-            name: 'Uploads',
+            name: UPLOADS_FOLDER_NAME,
             expanded: true,
             papers: [readyPaper],
             depth: 0,
@@ -1205,7 +1268,7 @@ export default function PaperviewApp() {
             rootHandle: null,
             rootFolderId: uploadsId,
             relativePath: "",
-            folderPath: buildFolderPath('Uploads'),
+            folderPath: buildFolderPath(UPLOADS_FOLDER_NAME),
           };
           setFolders([uploadsFolder]);
           setSelectedFolderId(uploadsId);
@@ -1416,16 +1479,14 @@ export default function PaperviewApp() {
                   {currentView === "library"
                     ? "Library"
                     : currentView === "agent"
-                      ? (selectedRootFolder?.name ? `Agent · ${selectedRootFolder.name}` : "Agent")
+                      ? (agentRootFolder?.name ? `Agent · ${agentRootFolder.name}` : "Agent")
                       : activeFolder?.name || "Reader"}
                 </span>
                 <span className="topbar-subtitle">
                   {currentView === "library"
                     ? `${totalPaperCount} paper${totalPaperCount === 1 ? "" : "s"} across ${folders.length} folders`
                     : currentView === "agent"
-                      ? (hasWritableAgentContext
-                        ? `Research across the web and ${agentWorkspacePapers.length} local paper${agentWorkspacePapers.length === 1 ? "" : "s"} in this workspace`
-                        : "Open a writable folder to enable agent search, imports, and synced chats")
+                      ? `Research across the web and ${agentWorkspacePapers.length} local paper${agentWorkspacePapers.length === 1 ? "" : "s"} in this workspace`
                       : activePaper?.pdfBytes
                         ? "Search, annotate, and verify with source-backed answers"
                         : "Reading from extracted text with chat grounded in the document"}
@@ -1435,7 +1496,7 @@ export default function PaperviewApp() {
 
             <div className="topbar-right">
               {openTabs.length > 0 && <span className="topbar-count">{openTabs.length} file{openTabs.length > 1 ? "s" : ""} open</span>}
-              {currentView === "agent" && selectedRootFolder && <span className="topbar-mode">{selectedRootAgentThreads.length} thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>}
+              {currentView === "agent" && agentRootFolder && <span className="topbar-mode">{selectedRootAgentThreads.length} thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>}
               {currentView === "reader" && activePaper && <span className="topbar-mode">{activePaper.pdfBytes ? "Rendered PDF" : "Text mode"}</span>}
               <div className="tb-divider" />
               {currentView === "reader" && (
@@ -1471,1165 +1532,174 @@ export default function PaperviewApp() {
 
           <div className={`content ${currentView === "reader" ? "content-reader" : ""}`}>
             {currentView === "library" ? (
-              <div className="library-view">
-                <div className="library-head">
-                  <div className="library-title">Library</div>
-                  <div className="library-actions">
-                    {typeof window.showDirectoryPicker === 'function' && (
-                      <button className="lib-btn dark" onClick={() => setShowFolderPermModal(true)}><IFolder size={12} /> Open Folder</button>
-                    )}
-                    <button className="lib-btn" onClick={startNewFolder}><IPlus size={12} /> New Folder</button>
-                    <button className="lib-btn dark" onClick={() => setShowUpload(true)}><IUpload size={12} /> Upload PDF</button>
-                  </div>
-                </div>
-
-                {newFolder && (
-                  <div style={{ maxWidth: 420, marginBottom: 12 }}>
-                    <input
-                      autoFocus
-                      className="nf-input"
-                      value={nfName}
-                      onChange={(e) => {
-                        setNfName(e.target.value);
-                        if (folderError) setFolderError("");
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") createFolder();
-                        if (e.key === "Escape") cancelNewFolder();
-                      }}
-                      placeholder="Folder name…"
-                    />
-                    {folderError && <div className="nf-error">{folderError}</div>}
-                    <div className="nf-ctrl">
-                      <button className="lib-btn dark" onClick={createFolder}><IPlus size={12} /> Create</button>
-                      <button className="lib-btn" onClick={cancelNewFolder}>Cancel</button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="library-db">
-                  <div className="db-head">
-                    <div className="db-h">Name</div>
-                    <div className="db-h">Type</div>
-                    <div className="db-h">Files</div>
-                    <div className="db-h">Open Tabs</div>
-                    <div className="db-h">Actions</div>
-                  </div>
-
-                  {folders.map((folder) => (
-                    <React.Fragment key={folder.id}>
-                      <div
-                        className={`db-row folder ${selectedFolderId === folder.id ? "selected" : ""}`}
-                        onClick={() => openFolderTabs(folder.id, { forceReader: false })}
-                        title="Select this folder"
-                      >
-                        <div className="db-cell">
-                          <button
-                            className="db-toggle"
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleFolder(folder.id);
-                            }}
-                            title={folder.expanded ? "Collapse" : "Expand"}
-                          >
-                            {folder.expanded ? <IChevronDown size={12} /> : <IRight size={12} />}
-                          </button>
-                          {folder.expanded ? <IFolderOpen size={14} /> : <IFolder size={14} />}
-                          <span className="db-title">{folder.name}</span>
-                        </div>
-                        <div className="db-cell"><span className="db-chip">Folder</span></div>
-                        <div className="db-cell">{folder.papers.length}</div>
-                        <div className="db-cell">{openTabs.filter((tab) => folder.papers.some((p) => p.id === tab.id)).length}</div>
-                        <div className="db-cell">
-                          <div className="db-actions">
-                            <button
-                              className="db-open"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openAllPapersInFolder(folder.id, { forceReader: true });
-                              }}
-                            >
-                              Open all
-                            </button>
-                            <button
-                              className="lib-icon-btn"
-                              title="Upload file to folder"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setUpFolder(folder.id);
-                                setShowUpload(true);
-                              }}
-                            >
-                              <IUpload size={13} />
-                            </button>
-                            <button
-                              className="lib-icon-btn"
-                              title="Delete folder"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteFolder(folder.id);
-                              }}
-                            >
-                              <ITrash size={13} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      {folder.expanded && (
-                        <div className="db-folder-files">
-                          {folder.papers.length === 0 ? (
-                            <div className="db-file-row empty">
-                              <div className="db-cell db-file-indent" style={{ gridColumn: "1 / span 5", gap: 10 }}>
-                                <span>No files in this folder.</span>
-                                <button
-                                  className="empty-upload-btn"
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setUpFolder(folder.id);
-                                    setShowUpload(true);
-                                  }}
-                                >
-                                  <IUpload size={11} /> Upload your first pdf
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            folder.papers.map((paper) => (
-                              <div className="db-file-row" key={paper.id}>
-                                <div className="db-cell db-file-indent">
-                                  <IFile size={12} />
-                                  <span className="db-file-name">{paper.name}</span>
-                                </div>
-                                <div className="db-cell"><span className="db-chip">PDF</span></div>
-                                <div className="db-cell">{paper.pages ?? "-"}</div>
-                                <div className="db-cell"><span className="db-meta">{openTabs.some((t) => t.id === paper.id) ? "Open" : "-"}</span></div>
-                                <div className="db-cell">
-                                  <div className="db-actions">
-                                    <button className="db-open" onClick={() => openPaper(paper, folder.id)}>Open</button>
-                                    <button className="lib-icon-btn" title="Delete file" onClick={() => deletePaper(folder.id, paper.id)}><ITrash size={13} /></button>
-                                  </div>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </div>
-              </div>
+              <LibraryView
+                newFolder={newFolder}
+                nfName={nfName}
+                folderError={folderError}
+                folders={folders}
+                selectedFolderId={selectedFolderId}
+                openTabs={openTabs}
+                setShowFolderPermModal={setShowFolderPermModal}
+                setShowUpload={setShowUpload}
+                setNfName={setNfName}
+                setFolderError={setFolderError}
+                setUpFolder={setUpFolder}
+                startNewFolder={startNewFolder}
+                createFolder={createFolder}
+                cancelNewFolder={cancelNewFolder}
+                openFolderTabs={openFolderTabs}
+                toggleFolder={toggleFolder}
+                openAllPapersInFolder={openAllPapersInFolder}
+                deleteFolder={deleteFolder}
+                openPaper={openPaper}
+                deletePaper={deletePaper}
+              />
             ) : currentView === "agent" ? (
-              <div className={`agent-view ${agentSidebarOpen ? "" : "sidebar-collapsed"}`}>
-                {!hasWritableAgentContext ? (
-                  <div className="agent-gate">
-                    <div className="agent-empty-icon"><ISpark size={18} /></div>
-                    <div className="agent-gate-copy">
-                      <div className="agent-empty-eyebrow">Folder-backed workspace required</div>
-                      <h2>Open a writable folder to use Agent</h2>
-                      <p>Agent chats sync into that folder&apos;s <code>.paperview.json</code>, and imported PDFs are written back to the same workspace on disk.</p>
-                    </div>
-                    <div className="agent-gate-actions">
-                      {typeof window.showDirectoryPicker === 'function' ? (
-                        <button className="lib-btn dark" type="button" onClick={() => setShowFolderPermModal(true)}>
-                          <IFolder size={12} /> Open Folder
-                        </button>
-                      ) : null}
-                      <button className="lib-btn" type="button" onClick={() => setCurrentView("library")}>
-                        <IGrid size={12} /> Go to Library
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <aside className={`agent-sidebar ${agentSidebarOpen ? "" : "collapsed"}`}>
-                      <div className="agent-sidebar-head">
-                        <div className="agent-sidebar-topbar">
-                          {agentSidebarOpen ? (
-                            <div className="agent-sidebar-copy">
-                              <div className="agent-empty-eyebrow">Workspace threads</div>
-                              <div className="agent-sidebar-title">{selectedRootFolder?.name || "Agent"}</div>
-                              <div className="agent-sidebar-subtitle">
-                                {agentWorkspacePapers.length} local paper{agentWorkspacePapers.length === 1 ? "" : "s"} available for grounded comparisons.
-                              </div>
-                            </div>
-                          ) : null}
-                          <button
-                            className="chat-topbar-btn agent-sidebar-toggle"
-                            type="button"
-                            onClick={() => setAgentSidebarOpen((open) => !open)}
-                            title={agentSidebarOpen ? "Collapse threads" : "Expand threads"}
-                            aria-label={agentSidebarOpen ? "Collapse threads" : "Expand threads"}
-                          >
-                            <IPanel size={14} />
-                          </button>
-                          {!agentSidebarOpen ? (
-                            <button
-                              className="chat-topbar-btn agent-sidebar-toggle agent-sidebar-chat-icon"
-                              type="button"
-                              onClick={() => setAgentSidebarOpen(true)}
-                              title="Show chats"
-                              aria-label="Show chats"
-                            >
-                              <IChat size={14} />
-                            </button>
-                          ) : null}
-                        </div>
-                        {agentSidebarOpen ? (
-                          <div className="agent-sidebar-head-actions">
-                            <button className="lib-btn dark" type="button" onClick={startNewAgentChat}>
-                              <IPlus size={12} /> New thread
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {agentSidebarOpen ? (
-                        <>
-                          <div className="agent-context-card">
-                            <div className="agent-context-row">
-                              <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
-                              <span className="agent-context-meta">{selectedRootAgentThreads.length} saved thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>
-                            </div>
-                            <p className="agent-context-copy">
-                              Web research, local-paper context, and imported PDFs stay anchored to this writable root so the workspace travels with its <code>.paperview.json</code>.
-                            </p>
-                          </div>
-
-                          <div className="agent-thread-list">
-                            {selectedRootAgentThreads.length === 0 ? (
-                              <div className="chat-overview-empty-state">
-                                <div className="chat-overview-empty-title">No agent threads yet</div>
-                                <div className="chat-overview-empty-copy">Start a thread to search the web, compare papers, and save the conversation with this folder.</div>
-                              </div>
-                            ) : (
-                              selectedRootAgentThreads.map((thread) => (
-                                <div key={thread.id} className={`agent-thread-row ${thread.id === activeAgentChatId ? "active" : ""}`}>
-                                  <button className="agent-thread-main" type="button" onClick={() => openAgentThread(thread.id)}>
-                                    <div className="agent-thread-title" title={thread.title}>{thread.title}</div>
-                                  </button>
-                                  <button
-                                    className="thread-compact-delete"
-                                    type="button"
-                                    onClick={() => deleteAgentThread(thread.id)}
-                                    title="Delete agent thread"
-                                    aria-label={`Delete ${thread.title}`}
-                                  >
-                                    <ITrash size={13} />
-                                  </button>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </>
-                      ) : null}
-                    </aside>
-
-                    <section className="agent-main citation-popover-boundary">
-                      <div
-                        className={`agent-workspace-body ${hasAgentPreview ? "has-preview" : ""}`}
-                        style={hasAgentPreview && agentPreviewWidth
-                          ? { gridTemplateColumns: `minmax(0,1fr) 5px minmax(300px, ${agentPreviewWidth}px)` }
-                          : undefined}
-                      >
-                        <div className="agent-conversation-pane">
-                          <div className="agent-main-head">
-                            <div className="agent-main-copy">
-                              <div className="agent-empty-eyebrow">Paperview Agent</div>
-                              <div className="agent-main-title">{activeAgentChat?.title || "New thread"}</div>
-                              <div className="agent-main-subtitle">{activeAgentSummary}</div>
-                            </div>
-                            <div className="agent-main-actions">
-                              <span className="agent-root-badge">{selectedRootFolder?.name || "Workspace"}</span>
-                              <button
-                                className="chat-history-btn"
-                                type="button"
-                                onClick={resetActiveAgentHistory}
-                                disabled={!currentAgentMessages.length && !agentInput.trim()}
-                              >
-                                Reset current
-                              </button>
-                            </div>
-                          </div>
-                          <div className="agent-msgs">
-                            {currentAgentMessages.length === 0 ? (
-                              <div className="agent-empty">
-                                <div className="agent-empty-hero">
-                                  <div className="agent-empty-icon"><ISpark size={18} /></div>
-                                  <div className="agent-empty-copy">
-                                    <div className="agent-empty-eyebrow">Research across web + local PDFs</div>
-                                    <h2>Search for papers, compare them with your library, and import the best ones to disk.</h2>
-                                    <p>Select an Agent tool below to attach a mode to the composer without adding extra instruction text to your message.</p>
-                                  </div>
-                                </div>
-
-                                <div className="agent-quick-grid">
-                                  {agentTools.map((item) => (
-                                    <button
-                                      key={item.title}
-                                      className={`agent-quick-chip ${selectedAgentToolId === item.id ? "active" : ""}`}
-                                      type="button"
-                                      onClick={() => selectAgentTool(item.id)}
-                                    >
-                                      <span className="chat-suggestion-icon">{item.icon}</span>
-                                      <span className="chat-suggestion-text">
-                                        <span className="chat-suggestion-title">{item.title}</span>
-                                        <span className="chat-suggestion-meta">{item.meta}</span>
-                                      </span>
-                                    </button>
-                                  ))}
-                                </div>
-
-                                <div className="agent-empty-block">
-                                  <div className="agent-empty-block-title">Local workspace context</div>
-                                  <div className="agent-empty-note">
-                                    {agentWorkspacePapers.length
-                                      ? `${agentWorkspacePapers.length} paper${agentWorkspacePapers.length === 1 ? "" : "s"} are ready in this root. Attach only the ones you want the agent to search locally.`
-                                      : "No local PDFs were found in this root yet. You can still use web search, and imported papers will be saved back into this workspace."}
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              currentAgentMessages.map((m) => (
-                                <div key={m.id}>
-                                  {m.role === "user" ? (
-                                    <div className="msg-u">
-                                      <div className="msg-u-bubble-wrap">
-                                        {m.agentToolTitle ? (
-                                          <div className="agent-msg-tool">
-                                            <span className="agent-msg-tool-chip">{m.agentToolTitle}</span>
-                                          </div>
-                                        ) : null}
-                                        <div className="msg-u-bubble">{m.content}</div>
-                                        {renderUsageMeta(m)}
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <div className="msg-a">
-                                      <div className="msg-a-row">
-                                        <div className="msg-a-avatar">A</div>
-                                        <div className="msg-a-bubble-wrap">
-                                          {m.thinkingTrace?.length > 0 ? (
-                                            <ThinkingTrace
-                                              steps={m.thinkingTrace}
-                                              isLive={false}
-                                              expanded={!!agentThinkingExpanded[m.id]}
-                                              onToggle={() => setAgentThinkingExpanded((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
-                                            />
-                                          ) : null}
-                                          {renderUsageMeta(m)}
-                                          {renderFoundSourcesPanel(m)}
-                                          {m.content ? (
-                                            <div className="msg-a-bubble">
-                                              <InlineCitedAnswer
-                                                text={m.content}
-                                                citations={m.citations || []}
-                                                onCitationClick={handleCitationClick}
-                                              />
-                                            </div>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              ))
-                            )}
-
-                            {isAgentLoading ? (
-                              <div className="chat-thinking">
-                                {agentThinkingSteps.filter((step) => step.chatId === activeAgentChatId).length > 0 ? (
-                                  <ThinkingTrace
-                                    steps={agentThinkingSteps.filter((step) => step.chatId === activeAgentChatId)}
-                                    isLive={true}
-                                  />
-                                ) : (
-                                  <>
-                                    <div className="typing"><span /><span /><span /></div>
-                                    <span style={{ fontSize: 13, color: "#888", marginLeft: 4 }}>{agentLoadingLabel}</span>
-                                  </>
-                                )}
-                              </div>
-                            ) : null}
-                            <div ref={agentEndRef} />
-                          </div>
-
-                          <div className="agent-input-area">
-                        {agentWorkspacePapers.length > 0 ? (
-                          <div className="attach-picker attach-picker-inline" ref={agentAttachMenuRef}>
-                            <div className="composer-context-row">
-                              <button
-                                className="composer-context-trigger"
-                                type="button"
-                                onClick={() => setAgentAttachMenuOpen((value) => !value)}
-                                title="Review local paper context"
-                              >
-                                <IPaperclip size={12} />
-                                <span>Local papers</span>
-                              </button>
-                              <div className="composer-context-list">
-                                {agentContextPapers.slice(0, 2).map((paper) => (
-                                  <button
-                                    key={paper.id}
-                                    className="composer-context-pill composer-context-pill-btn"
-                                    type="button"
-                                    title={paper.name}
-                                    onClick={() => openAgentPaper(paper)}
-                                  >
-                                    <IFile size={11} style={{ flexShrink: 0 }} />
-                                    <span className="composer-context-pill-text">{paper.name}</span>
-                                  </button>
-                                ))}
-                                {agentContextPapers.length > 2 ? (
-                                  <span className="composer-context-pill composer-context-pill-more">
-                                    +{agentContextPapers.length - 2} more
-                                  </span>
-                                ) : null}
-                                {agentContextPapers.length === 0 ? (
-                                  <span className="composer-context-pill composer-context-pill-more">No local papers attached</span>
-                                ) : null}
-                              </div>
-                            </div>
-
-                            {agentAttachMenuOpen ? (
-                              <div className="attach-menu">
-                                <div className="attach-head">
-                                  <span className="attach-title">Local paper context</span>
-                                  <div style={{ display: "flex", gap: 4 }}>
-                                    <button
-                                      className="attach-mini-btn"
-                                      type="button"
-                                      onClick={() => setSelectedAgentPaperIds(agentWorkspacePapers.map((paper) => paper.id))}
-                                    >
-                                      All
-                                    </button>
-                                    <button
-                                      className="attach-mini-btn"
-                                      type="button"
-                                      onClick={() => setSelectedAgentPaperIds([])}
-                                    >
-                                      Clear
-                                    </button>
-                                  </div>
-                                </div>
-
-                                <div className="attach-list">
-                                  {agentWorkspacePapers.map((paper) => {
-                                    const checked = selectedAgentPaperIds.includes(paper.id);
-                                    return (
-                                      <label key={paper.id} className="attach-item">
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={() => {
-                                            setSelectedAgentPaperIds((prev) =>
-                                              prev.includes(paper.id)
-                                                ? prev.filter((id) => id !== paper.id)
-                                                : [...prev, paper.id]
-                                            );
-                                          }}
-                                        />
-                                        <IFile size={12} style={{ color: "#888", flexShrink: 0 }} />
-                                        <span className="attach-name">{paper.name}</span>
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-
-                        <div className="chat-composer agent-composer">
-                          <div className="agent-tool-row" ref={agentToolMenuRef}>
-                            <button
-                              className={`agent-tool-trigger ${agentToolMenuOpen ? "active" : ""}`}
-                              type="button"
-                              onClick={() => setAgentToolMenuOpen((value) => !value)}
-                              title="Select an Agent tool"
-                            >
-                              <IPlus size={12} />
-                              <span>{selectedAgentTool ? "Change tool" : "Add tool"}</span>
-                            </button>
-
-                            {selectedAgentTool ? (
-                              <span className="agent-tool-chip">
-                                <span className="agent-tool-chip-label">
-                                  {selectedAgentTool.icon}
-                                  <span>{selectedAgentTool.title}</span>
-                                </span>
-                                <button
-                                  className="agent-tool-chip-clear"
-                                  type="button"
-                                  onClick={() => setSelectedAgentToolId(null)}
-                                  title="Remove selected Agent tool"
-                                >
-                                  <IClose size={11} />
-                                </button>
-                              </span>
-                            ) : (
-                              <span className="agent-tool-hint">No Agent tool selected</span>
-                            )}
-
-                            {agentToolMenuOpen ? (
-                              <div className="agent-tool-menu">
-                                <div className="agent-tool-menu-title">Agent tools</div>
-                                <div className="agent-tool-menu-list">
-                                  {agentTools.map((tool) => (
-                                    <button
-                                      key={tool.id}
-                                      className={`agent-tool-option ${selectedAgentToolId === tool.id ? "active" : ""}`}
-                                      type="button"
-                                      onClick={() => selectAgentTool(tool.id)}
-                                    >
-                                      <span className="agent-tool-option-icon">{tool.icon}</span>
-                                      <span className="agent-tool-option-copy">
-                                        <span className="agent-tool-option-title">{tool.title}</span>
-                                        <span className="agent-tool-option-meta">{tool.meta}</span>
-                                      </span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            ) : null}
-                          </div>
-
-                          <textarea
-                            ref={agentTaRef}
-                            rows={1}
-                            value={agentInput}
-                            onChange={(event) => {
-                              setAgentInput(event.target.value);
-                              event.target.style.height = "auto";
-                              event.target.style.height = `${event.target.scrollHeight}px`;
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" && !event.shiftKey) {
-                                event.preventDefault();
-                                doSendAgent();
-                              }
-                            }}
-                            placeholder={selectedAgentTool?.placeholder || "Search for papers, compare them with your workspace, or import a PDF to this folder..."}
-                          />
-
-                          <div className="composer-bottom">
-                            <div className="composer-tools">
-                              <div className="model-picker" ref={modelMenuRef}>
-                                <button
-                                  className="model-chip"
-                                  title="Model"
-                                  onClick={() => setModelMenuOpen((value) => !value)}
-                                  type="button"
-                                >
-                                  {selectedModel} <IChevronDown size={12} />
-                                </button>
-                                {modelMenuOpen ? (
-                                  <div className="model-menu">
-                                    {OPENAI_MODELS.map((modelName) => (
-                                      <button
-                                        key={modelName}
-                                        className={`model-option ${selectedModel === modelName ? "active" : ""}`}
-                                        onClick={() => {
-                                          setSelectedModel(modelName);
-                                          setModelMenuOpen(false);
-                                        }}
-                                        type="button"
-                                      >
-                                        {modelName}
-                                      </button>
-                                    ))}
-                                  </div>
-                                ) : null}
-                              </div>
-                            </div>
-
-                            {agentLoadingState ? (
-                              <button
-                                className="chat-history-btn composer-stop-btn"
-                                onClick={stopAgentRun}
-                                title="Stop"
-                                type="button"
-                              >
-                                Stop
-                              </button>
-                            ) : (
-                              <button
-                                className="icon-btn send-btn"
-                                onClick={() => doSendAgent()}
-                                disabled={!agentInput.trim()}
-                                title="Send"
-                                type="button"
-                              >
-                                <IArrowUp size={14} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                          </div>
-                        </div>
-
-                        {hasAgentPreview ? (
-                          <div
-                            className="agent-preview-resize-handle"
-                            onMouseDown={startAgentPreviewResize}
-                            role="separator"
-                            aria-orientation="vertical"
-                            aria-label="Resize in-chat PDF preview"
-                          >
-                            <span className="agent-preview-resize-grip" />
-                          </div>
-                        ) : null}
-
-                        {renderAgentPreviewDrawer()}
-                      </div>
-                    </section>
-                  </>
-                )}
-              </div>
+              <AgentView
+                agentSidebarOpen={agentSidebarOpen}
+                agentRootFolder={agentRootFolder}
+                agentWorkspacePapers={agentWorkspacePapers}
+                selectedRootAgentThreads={selectedRootAgentThreads}
+                activeAgentChatId={activeAgentChatId}
+                activeAgentChat={activeAgentChat}
+                activeAgentSummary={activeAgentSummary}
+                hasAgentPreview={hasAgentPreview}
+                agentPreviewWidth={agentPreviewWidth}
+                currentAgentMessages={currentAgentMessages}
+                agentInput={agentInput}
+                agentTools={agentTools}
+                selectedAgentToolId={selectedAgentToolId}
+                selectedAgentTool={selectedAgentTool}
+                selectedAgentPaperIds={selectedAgentPaperIds}
+                agentContextPapers={agentContextPapers}
+                agentThinkingExpanded={agentThinkingExpanded}
+                agentThinkingSteps={agentThinkingSteps}
+                isAgentLoading={isAgentLoading}
+                agentLoadingLabel={agentLoadingLabel}
+                agentLoadingState={agentLoadingState}
+                agentAttachMenuOpen={agentAttachMenuOpen}
+                agentToolMenuOpen={agentToolMenuOpen}
+                modelMenuOpen={modelMenuOpen}
+                selectedModel={selectedModel}
+                setAgentSidebarOpen={setAgentSidebarOpen}
+                setAgentInput={setAgentInput}
+                setAgentThinkingExpanded={setAgentThinkingExpanded}
+                setAgentAttachMenuOpen={setAgentAttachMenuOpen}
+                setAgentToolMenuOpen={setAgentToolMenuOpen}
+                setSelectedAgentPaperIds={setSelectedAgentPaperIds}
+                setSelectedAgentToolId={setSelectedAgentToolId}
+                setModelMenuOpen={setModelMenuOpen}
+                setSelectedModel={setSelectedModel}
+                openAgentThread={openAgentThread}
+                deleteAgentThread={deleteAgentThread}
+                startNewAgentChat={startNewAgentChat}
+                resetActiveAgentHistory={resetActiveAgentHistory}
+                selectAgentTool={selectAgentTool}
+                renderUsageMeta={renderUsageMeta}
+                renderFoundSourcesPanel={renderFoundSourcesPanel}
+                renderAgentPreviewDrawer={renderAgentPreviewDrawer}
+                handleCitationClick={handleCitationClick}
+                openAgentPaper={openAgentPaper}
+                doSendAgent={doSendAgent}
+                stopAgentRun={stopAgentRun}
+                startAgentPreviewResize={startAgentPreviewResize}
+                agentEndRef={agentEndRef}
+                agentTaRef={agentTaRef}
+                agentAttachMenuRef={agentAttachMenuRef}
+                agentToolMenuRef={agentToolMenuRef}
+                modelMenuRef={modelMenuRef}
+              />
             ) : activePaper ? (
               <>
-                <div className="viewer">
-                  <div className="viewer-frame">
-                    <div className="viewer-toolbar">
-                      <div className="vt-left">
-                        <button className="vt-btn" onClick={handleSearchClick} title="Search in this PDF">
-                          <ISearch />
-                        </button>
-                        {viewerSearchOpen && (
-                          <div className="vt-search-wrap">
-                            <input
-                              ref={viewerSearchInputRef}
-                              className="vt-search-input"
-                              value={viewerSearchQuery}
-                              onChange={(e) => {
-                                setViewerSearchQuery(e.target.value);
-                                setViewerSearchStatus("");
-                                setViewerSearchIndex(-1);
-                                setViewerSearchMatches([]);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") runViewerSearch(e.shiftKey ? -1 : 1);
-                                if (e.key === "ArrowDown") {
-                                  e.preventDefault();
-                                  runViewerSearch(1);
-                                }
-                                if (e.key === "ArrowUp") {
-                                  e.preventDefault();
-                                  runViewerSearch(-1);
-                                }
-                                if (e.key === "Escape") setViewerSearchOpen(false);
-                              }}
-                              placeholder="Find text..."
-                            />
-                            <div className="vt-search-nav">
-                              <button
-                                className="vt-btn"
-                                onClick={() => runViewerSearch(-1)}
-                                disabled={!canRunViewerSearch}
-                                title="Previous match"
-                              >
-                                <IArrowUp size={14} />
-                              </button>
-                              <button
-                                className="vt-btn"
-                                onClick={() => runViewerSearch(1)}
-                                disabled={!canRunViewerSearch}
-                                title="Next match"
-                              >
-                                <IArrowDown size={14} />
-                              </button>
-                            </div>
-                            {viewerSearchStatus && <span className="vt-search-meta">{viewerSearchStatus}</span>}
-                            {!viewerSearchStatus && hasViewerSearchResults && (
-                              <span className="vt-search-meta">{viewerSearchIndex + 1}/{viewerSearchMatches.length}</span>
-                            )}
-                          </div>
-                        )}
-                        <div className="vt-sep" />
-                        <div className="vt-zoom">
-                          <button className="vt-btn" onClick={() => setScale((s) => Math.max(0.5, +(s - 0.15).toFixed(2)))}><IZoomOut /></button>
-                          <span className="vt-zoom-val">{Math.round(scale * 100)}%</span>
-                          <button className="vt-btn" onClick={() => setScale((s) => Math.min(3, +(s + 0.15).toFixed(2)))}><IZoomIn /></button>
-                        </div>
-                        </div>
-                        <div className="vt-page">
-                          <button className="vt-btn" onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1}><ILeft /></button>
-                          <span className="vt-page-total">{currentPage} of {activePaperTotalPages}</span>
-                          <button className="vt-btn" onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= activePaperTotalPages}><IRight /></button>
-                        </div>
-                      </div>
-
-                      <div className={`pdf-scroll ${debugCitations ? "debug-text-layer" : ""}`}>
-                        {activePaper.pdfBytes ? (
-                        <PdfViewer
-                            paperId={activePaper.id}
-                            pdfBytes={activePaper.pdfBytes}
-                            fileSize={activePaper.fileSize}
-                            fileLastModified={activePaper.fileLastModified}
-                            scale={scale}
-                            onReady={handlePdfReady}
-                            onDocumentLoad={handlePdfDocumentLoad}
-                            onPageChange={setCurrentPage}
-                            debugCitations={debugCitations}
-                          annotations={annotations}
-                          onAnnotationClick={handleAnnotationClick}
-                        />
-                      ) : (
-                        <TextFallback text={materializeFullText(searchablePageTexts)} />
-                      )}
-                    </div>
-                  </div>
-                </div>
-
+                <ReaderView
+                  activePaper={activePaper}
+                  scale={scale}
+                  currentPage={currentPage}
+                  activePaperTotalPages={activePaperTotalPages}
+                  annotations={annotations}
+                  debugCitations={debugCitations}
+                  viewerSearchOpen={viewerSearchOpen}
+                  viewerSearchQuery={viewerSearchQuery}
+                  viewerSearchStatus={viewerSearchStatus}
+                  viewerSearchMatches={viewerSearchMatches}
+                  viewerSearchIndex={viewerSearchIndex}
+                  canRunViewerSearch={canRunViewerSearch}
+                  hasViewerSearchResults={hasViewerSearchResults}
+                  searchablePageTexts={searchablePageTexts}
+                  chatOpen={chatOpen}
+                  setScale={setScale}
+                  setCurrentPage={setCurrentPage}
+                  setViewerSearchOpen={setViewerSearchOpen}
+                  setViewerSearchQuery={setViewerSearchQuery}
+                  setViewerSearchStatus={setViewerSearchStatus}
+                  setViewerSearchMatches={setViewerSearchMatches}
+                  setViewerSearchIndex={setViewerSearchIndex}
+                  goToPage={goToPage}
+                  handlePdfReady={handlePdfReady}
+                  handlePdfDocumentLoad={handlePdfDocumentLoad}
+                  handleAnnotationClick={handleAnnotationClick}
+                  runViewerSearch={runViewerSearch}
+                  handleSearchClick={handleSearchClick}
+                  startChatResize={startChatResize}
+                  viewerSearchInputRef={viewerSearchInputRef}
+                />
                 {chatOpen && (
-                  <>
-                  <div
-                    className="chat-resize-handle"
-                    onMouseDown={startChatResize}
-                    role="separator"
-                    aria-orientation="vertical"
-                    aria-label="Resize chat panel"
-                  >
-                    <span className="chat-resize-grip" />
-                  </div>
-                  <div className="chat-panel" style={{ width: chatWidth }}>
-                    <div className="chat-topbar">
-                      <div className="chat-topbar-copy">
-                        <span className="chat-topbar-title">{chatPaneMode === "overview" ? "Recent chats" : chatPaneMode === "notes" ? "Notes" : (activeChat?.title || "Chat")}</span>
-                        <span className="chat-topbar-subtitle">{chatPaneMode === "overview" ? "Open, reset, or remove saved conversations." : chatPaneMode === "notes" ? `${annotations.length} annotation${annotations.length === 1 ? '' : 's'}` : activeChatSummary}</span>
-                      </div>
-                      <div className="chat-topbar-actions">
-                        {chatPaneMode === "chat" && (
-                          <button className="chat-topbar-btn" onClick={startNewChat} title="Start new chat">
-                            <IPlus size={14} />
-                          </button>
-                        )}
-                        {chatPaneMode === "chat" ? (
-                          <button
-                            className="chat-topbar-btn"
-                            onClick={resetActiveChatHistory}
-                            title="Reset active chat"
-                            disabled={!currentMessages.length && !chip && !input}
-                          >
-                            <ITrash size={14} />
-                          </button>
-                        ) : null}
-                        <button
-                          className={`chat-topbar-btn${chatPaneMode === 'notes' ? ' active' : ''}`}
-                          onClick={() => setChatPaneMode((mode) => (mode === "notes" ? "chat" : "notes"))}
-                          title={chatPaneMode === "notes" ? "Back to chat" : "Notes"}
-                        >
-                          <INotes size={14} />
-                        </button>
-                        <button
-                          className="chat-topbar-btn chat-topbar-btn-label"
-                          onClick={() => setChatPaneMode((mode) => (mode === "chat" ? "overview" : "chat"))}
-                          title={chatPaneMode === "overview" ? "Back to chat" : "View chats"}
-                        >
-                          <IPanel size={14} />
-                          <span>{chatPaneMode === "overview" ? "Back to chat" : "View chats"}</span>
-                        </button>
-                        <button className="chat-topbar-btn" onClick={() => setChatOpen(false)} title="Collapse chat">
-                          <IChevronRightDouble size={14} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {chatPaneMode === "chat" && isActivePaperScanning && (
-                      <div className="chat-scan-banner">
-                        <div className="chat-scan-banner-top">
-                          <div className="chat-scan-banner-copy">
-                            <span className="chat-scan-banner-title">Scanning paper for chat</span>
-                            <span className="chat-scan-banner-meta">{activePaper?.name || "Current paper"}</span>
-                          </div>
-                          <span className="chat-scan-banner-badge">{activePaperScanPercent}%</span>
-                        </div>
-                        <div className="chat-scan-banner-status">{activePaperScanLabel}</div>
-                        <div className="chat-scan-progress" aria-hidden="true">
-                          <span className="chat-scan-progress-bar" style={{ width: `${activePaperScanPercent}%` }} />
-                        </div>
-                      </div>
-                    )}
-
-                    {chatPaneMode === "overview" ? (
-                      <div className="chat-history-panel chat-history-standalone">
-                        <div className="chat-overview-shell">
-                          <div className="chat-overview-hero">
-                            <div className="chat-overview-hero-top">
-                              <div className="chat-overview-copy">
-                                <div className="chat-overview-eyebrow">Current thread</div>
-                                <div className="chat-overview-title">{activeChat?.title || "No active chat"}</div>
-                                <div className="chat-overview-subtitle">
-                                  {activeChat
-                                    ? "Keep this thread focused on the paper you are reading, or branch into a fresh conversation when you need a new line of inquiry."
-                                    : "Start a conversation to begin asking grounded questions about this paper."}
-                                </div>
-                              </div>
-                              {activeChat ? <span className="chat-overview-badge">Open now</span> : null}
-                            </div>
-
-                            <div className="chat-overview-stats">
-                              <div className="chat-overview-stat">
-                                <span className="chat-overview-stat-value">{activePaperThreads.length}</span>
-                                <span className="chat-overview-stat-label">Thread{activePaperThreads.length === 1 ? "" : "s"} for this paper</span>
-                              </div>
-                              <div className="chat-overview-stat">
-                                <span className="chat-overview-stat-value">{activePaperMessageCount}</span>
-                                <span className="chat-overview-stat-label">Total saved messages</span>
-                              </div>
-                            </div>
-
-                            <div className="chat-overview-primary-actions">
-                              {activeChat ? <button className="chat-history-btn" onClick={() => setChatPaneMode("chat")}>Resume chat</button> : null}
-                              <button className="chat-history-btn" onClick={startNewChat}>New chat</button>
-                              {activeChat ? (
-                                <button className="chat-history-btn" onClick={resetActiveChatHistory} disabled={!currentMessages.length}>
-                                  Reset current
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          <div className="chat-overview-section">
-                            <div className="chat-overview-section-head">
-                              <div className="chat-overview-section-copy">
-                                <div className="chat-overview-section-title">Saved chats</div>
-                                <div className="chat-overview-section-subtitle">Re-open an older thread or clean it up before you go back to reading.</div>
-                              </div>
-                              <div className="chat-overview-count">{savedPaperThreads.length}</div>
-                            </div>
-
-                            {savedPaperThreads.length ? (
-                              <div className="chat-overview-list">
-                                {savedPaperThreads.map((thread) => (
-                                  <div key={thread.id} className="chat-overview-row">
-                                    <button className="chat-overview-row-main" type="button" onClick={() => openChatThread(thread.id)}>
-                                      <span className="chat-overview-row-title" title={thread.title}>{thread.title}</span>
-                                    </button>
-                                    <button
-                                      className="thread-compact-delete"
-                                      type="button"
-                                      onClick={() => deleteChatThread(thread.id)}
-                                      title="Delete chat"
-                                      aria-label={`Delete ${thread.title}`}
-                                    >
-                                      <ITrash size={13}/>
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="chat-overview-empty-state">
-                                <div className="chat-overview-empty-title">No additional chats yet</div>
-                                <div className="chat-overview-empty-copy">Create another thread when you want to explore a new question without losing your current conversation.</div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ) : chatPaneMode === "notes" ? (
-                      <div className="notes-panel">
-                        {annotations.length === 0 ? (
-                          <div className="notes-empty">
-                            <div className="notes-empty-icon">📝</div>
-                            <h3>No annotations yet</h3>
-                            <p>Select text in the PDF and click <b>Highlight</b> to add notes.</p>
-                          </div>
-                        ) : (
-                          (() => {
-                            const grouped = {};
-                            annotations.forEach((a) => {
-                              (grouped[a.pageNum] = grouped[a.pageNum] || []).push(a);
-                            });
-                            return Object.keys(grouped).sort((a, b) => Number(a) - Number(b)).map((pg) => (
-                              <div key={pg} className="notes-group">
-                                <div className="notes-group-title">Page {pg}</div>
-                                {grouped[pg].sort((a, b) => a.startOffset - b.startOffset).map((ann) => (
-                                  <div key={ann.id} className="note-card" onClick={() => goToPage(ann.pageNum)}>
-                                    <div className="note-card-text">"{ann.selectedText}"</div>
-                                    {ann.comment ? (
-                                      <div className="note-card-comment">{ann.comment}</div>
-                                    ) : (
-                                      <div className="note-card-no-comment">No comment</div>
-                                    )}
-                                    <div className="note-card-footer">
-                                      <span className="note-card-page">Page {ann.pageNum}</span>
-                                      <button className="note-card-delete" onClick={(e) => { e.stopPropagation(); deleteAnnotationById(ann.id); }} title="Delete annotation">
-                                        <ITrash size={12} />
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ));
-                          })()
-                        )}
-                      </div>
-                    ) : (
-                      <>
-                        <div className="chat-msgs">
-                          {currentMessages.length === 0 ? (
-                            <div className="chat-empty">
-                              <div className="chat-empty-intro">
-                                <div className="chat-empty-icon"><ISpark size={14} /></div>
-                                <div className="chat-empty-copy">
-                                  <h3>Ask anything about this paper</h3>
-                                  <p>Use the task list below or select text in the document to send focused context into chat.</p>
-                                </div>
-                              </div>
-
-                              <div className="chat-empty-sections">
-                                <div className="chat-empty-block">
-                                  <div className="chat-empty-block-title">Quick actions</div>
-                                  <div className="chat-empty-suggestions">
-                                    {chatQuickActions.map((item) => (
-                                      <button key={item.title} className="chat-suggestion" type="button" onClick={() => doSend(item.prompt)}>
-                                        <span className="chat-suggestion-icon">{item.icon}</span>
-                                        <span className="chat-suggestion-text">
-                                          <span className="chat-suggestion-title">{item.title}</span>
-                                          <span className="chat-suggestion-meta">{item.meta}</span>
-                                        </span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-
-                                <div className="chat-empty-block">
-                                  <div className="chat-empty-block-title">Working set</div>
-                                  <div className="chat-empty-note">
-                                    {activeFolderPapers.length || openTabs.length} file{(activeFolderPapers.length || openTabs.length) === 1 ? " is" : "s are"} available in the current workspace. Answers stay grounded in the documents you attach through the paper picker.
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            currentMessages.map((m, i) => (
-                              <div key={i}>
-                                {m.role === "user" ? (
-                                  <div className="msg-u">
-                                    <div className="msg-u-bubble-wrap">
-                                      <div className="msg-u-bubble">{m.content}</div>
-                                      {renderUsageMeta(m)}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="msg-a">
-                                    <div className="msg-a-row">
-                                      <div className="msg-a-avatar">A</div>
-                                      <div className="msg-a-bubble-wrap">
-                                        {m.thinkingTrace?.length > 0 && (
-                                          <ThinkingTrace
-                                            steps={m.thinkingTrace}
-                                            isLive={false}
-                                            expanded={!!thinkingExpanded[m.id]}
-                                            onToggle={() => setThinkingExpanded(prev => ({ ...prev, [m.id]: !prev[m.id] }))}
-                                          />
-                                        )}
-                                        <div className="msg-a-bubble">
-                                          <InlineCitedAnswer
-                                            text={m.content}
-                                            citations={m.citations || []}
-                                            fileName={activePaper.name}
-                                            onCitationClick={handleCitationClick}
-                                          />
-                                        </div>
-                                        {renderUsageMeta(m)}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            ))
-                          )}
-
-                          {isChatLoading && (
-                            <div className="chat-thinking">
-                              {thinkingSteps.filter(s => s.chatId === activeChatId).length > 0 ? (
-                                <ThinkingTrace
-                                  steps={thinkingSteps.filter(s => s.chatId === activeChatId)}
-                                  isLive={true}
-                                />
-                              ) : (
-                                <>
-                                  <div className="typing"><span /><span /><span /></div>
-                                  <span style={{ fontSize: 13, color: "#888", marginLeft: 4 }}>{chatLoadingLabel}</span>
-                                </>
-                              )}
-                            </div>
-                          )}
-                          <div ref={endRef} />
-                        </div>
-
-                        <div className="chat-input-area">
-                          {chip && (
-                            <div className="ctx-chip">
-                              <span style={{ fontSize: 11, fontWeight: 600 }}>Selected text:</span>
-                              <span className="ctx-chip-text">"{chip}"</span>
-                              <span className="ctx-chip-x" onClick={() => setChip(null)}><IClose size={12} /></span>
-                            </div>
-                          )}
-
-                          {(chatContextPapers.length > 0 || activeFolderPapers.length > 0) && (
-                            <div className="attach-picker attach-picker-inline" ref={attachMenuRef}>
-                              <div className="composer-context-row">
-                                <button
-                                  className="composer-context-trigger"
-                                  type="button"
-                                  onClick={() => setAttachMenuOpen((v) => !v)}
-                                  title="Review chat context PDFs"
-                                >
-                                  <IPaperclip size={12} />
-                                  <span>Context</span>
-                                </button>
-                                <div className="composer-context-list">
-                                  {chatContextPapers.slice(0, 2).map((paper) => (
-                                    <span key={paper.id} className="composer-context-pill" title={paper.name}>
-                                      <IFile size={11} style={{ flexShrink: 0 }} />
-                                      <span className="composer-context-pill-text">{paper.name}</span>
-                                    </span>
-                                  ))}
-                                  {chatContextPapers.length > 2 && (
-                                    <span className="composer-context-pill composer-context-pill-more">
-                                      +{chatContextPapers.length - 2} more
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              {attachMenuOpen && (
-                                <div className="attach-menu">
-                                  <div className="attach-head">
-                                    <span className="attach-title">Chat context PDFs</span>
-                                    <div style={{ display: "flex", gap: 4 }}>
-                                      <button
-                                        className="attach-mini-btn"
-                                        type="button"
-                                        onClick={() => {
-                                          setChatContextMode("manual");
-                                          setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id));
-                                        }}
-                                      >
-                                        All
-                                      </button>
-                                      <button
-                                        className="attach-mini-btn"
-                                        type="button"
-                                        onClick={() => {
-                                          setChatContextMode("auto");
-                                          setSelectedChatPaperIds(activePaper?.id ? [activePaper.id] : []);
-                                        }}
-                                      >
-                                        Active
-                                      </button>
-                                    </div>
-                                  </div>
-
-                                  {activeFolderPapers.length === 0 ? (
-                                    <div className="attach-empty">No PDFs in this folder yet.</div>
-                                  ) : (
-                                    <div className="attach-list">
-                                      {activeFolderPapers.map((paper) => {
-                                        const checked = chatContextMode === "auto"
-                                          ? paper.id === activePaper?.id
-                                          : selectedChatPaperIds.includes(paper.id);
-                                        return (
-                                          <label key={paper.id} className="attach-item">
-                                            <input
-                                              type="checkbox"
-                                              checked={checked}
-                                              onChange={() => {
-                                                setChatContextMode("manual");
-                                                setSelectedChatPaperIds((prev) =>
-                                                  prev.includes(paper.id)
-                                                    ? prev.filter((id) => id !== paper.id)
-                                                    : [...prev, paper.id]
-                                                );
-                                              }}
-                                            />
-                                            <IFile size={12} style={{ color: "#888", flexShrink: 0 }} />
-                                            <span className="attach-name">{paper.name}</span>
-                                          </label>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="chat-composer">
-                            <textarea
-                              ref={taRef}
-                              rows={1}
-                              value={input}
-                              onChange={(e) => {
-                                setInput(e.target.value);
-                                e.target.style.height = "auto";
-                                e.target.style.height = `${e.target.scrollHeight}px`;
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                  e.preventDefault();
-                                  doSend();
-                                }
-                                }}
-                              placeholder="Ask about this PDF..."
-                            />
-
-                            <div className="composer-bottom">
-                              <div className="composer-tools">
-                                <div className="model-picker" ref={modelMenuRef}>
-                                  <button
-                                    className="model-chip"
-                                    title="Model"
-                                    onClick={() => setModelMenuOpen((v) => !v)}
-                                    type="button"
-                                  >
-                                    {selectedModel} <IChevronDown size={12} />
-                                  </button>
-                                  {modelMenuOpen && (
-                                    <div className="model-menu">
-                                      {OPENAI_MODELS.map((modelName) => (
-                                        <button
-                                          key={modelName}
-                                          className={`model-option ${selectedModel === modelName ? "active" : ""}`}
-                                          onClick={() => {
-                                            setSelectedModel(modelName);
-                                            setModelMenuOpen(false);
-                                          }}
-                                          type="button"
-                                        >
-                                          {modelName}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-
-                              {chatLoadingState ? (
-                                <button
-                                  className="chat-history-btn composer-stop-btn"
-                                  onClick={stopChatRun}
-                                  title="Stop"
-                                  type="button"
-                                >
-                                  Stop
-                                </button>
-                              ) : (
-                                <button className="icon-btn send-btn" onClick={() => doSend()} disabled={!input.trim() && !chip} title="Send" type="button">
-                                  <IArrowUp size={14} />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  </>
+                  <ChatPanel
+                    chatWidth={chatWidth}
+                    chatPaneMode={chatPaneMode}
+                    activeChat={activeChat}
+                    activeChatSummary={activeChatSummary}
+                    annotations={annotations}
+                    currentMessages={currentMessages}
+                    chip={chip}
+                    input={input}
+                    isActivePaperScanning={isActivePaperScanning}
+                    activePaper={activePaper}
+                    activePaperScanPercent={activePaperScanPercent}
+                    activePaperScanLabel={activePaperScanLabel}
+                    activePaperThreads={activePaperThreads}
+                    activePaperMessageCount={activePaperMessageCount}
+                    savedPaperThreads={savedPaperThreads}
+                    chatQuickActions={chatQuickActions}
+                    activeFolderPapers={activeFolderPapers}
+                    openTabs={openTabs}
+                    thinkingExpanded={thinkingExpanded}
+                    isChatLoading={isChatLoading}
+                    thinkingSteps={thinkingSteps}
+                    activeChatId={activeChatId}
+                    chatLoadingLabel={chatLoadingLabel}
+                    chatContextPapers={chatContextPapers}
+                    attachMenuOpen={attachMenuOpen}
+                    selectedChatPaperIds={selectedChatPaperIds}
+                    chatContextMode={chatContextMode}
+                    modelMenuOpen={modelMenuOpen}
+                    selectedModel={selectedModel}
+                    chatLoadingState={chatLoadingState}
+                    setChatPaneMode={setChatPaneMode}
+                    setChip={setChip}
+                    setInput={setInput}
+                    setChatOpen={setChatOpen}
+                    setThinkingExpanded={setThinkingExpanded}
+                    setAttachMenuOpen={setAttachMenuOpen}
+                    setChatContextMode={setChatContextMode}
+                    setSelectedChatPaperIds={setSelectedChatPaperIds}
+                    setModelMenuOpen={setModelMenuOpen}
+                    setSelectedModel={setSelectedModel}
+                    startNewChat={startNewChat}
+                    resetActiveChatHistory={resetActiveChatHistory}
+                    openChatThread={openChatThread}
+                    deleteChatThread={deleteChatThread}
+                    goToPage={goToPage}
+                    deleteAnnotationById={deleteAnnotationById}
+                    doSend={doSend}
+                    renderUsageMeta={renderUsageMeta}
+                    handleCitationClick={handleCitationClick}
+                    stopChatRun={stopChatRun}
+                    endRef={endRef}
+                    attachMenuRef={attachMenuRef}
+                    taRef={taRef}
+                    modelMenuRef={modelMenuRef}
+                  />
                 )}
               </>
             ) : (
