@@ -32,6 +32,7 @@ function clearAnnotationHighlights(wrap) {
     node.classList.remove('ann-hl');
     delete node.dataset.annId;
     node.style.removeProperty('background-color');
+    node.style.removeProperty('mix-blend-mode');
   });
 }
 
@@ -55,7 +56,6 @@ function applyAnnotationHighlights(wrap, pageAnnotations) {
   [...pageAnnotations]
     .sort((a, b) => a.startOffset - b.startOffset)
     .forEach((ann) => {
-      const color = ann.color || 'rgba(255,213,79,.4)';
       spanOffsets.forEach((so) => {
         if (so.end <= ann.startOffset || so.start >= ann.endOffset) return;
         const relStart = Math.max(0, ann.startOffset - so.start);
@@ -64,7 +64,8 @@ function applyAnnotationHighlights(wrap, pageAnnotations) {
         if (relStart === 0 && relEnd === so.text.length) {
           so.span.classList.add('ann-hl');
           so.span.dataset.annId = ann.id;
-          so.span.style.backgroundColor = color;
+          so.span.style.removeProperty('background-color');
+          so.span.style.removeProperty('mix-blend-mode');
           return;
         }
 
@@ -80,7 +81,6 @@ function applyAnnotationHighlights(wrap, pageAnnotations) {
         hSpan.textContent = highlighted;
         hSpan.classList.add('ann-hl');
         hSpan.dataset.annId = ann.id;
-        hSpan.style.backgroundColor = color;
         so.span.appendChild(hSpan);
 
         if (after) so.span.appendChild(document.createTextNode(after));
@@ -634,7 +634,14 @@ export default function PdfViewer({
         return;
       }
       pdfRef.current = pdf;
-      onDocumentLoadRef.current?.({ totalPages: pdf.numPages });
+      const firstPage = await pdf.getPage(1);
+      const baseViewport = firstPage.getViewport({ scale: 1 });
+      try { firstPage.cleanup?.(); } catch { /* ignore */ }
+      onDocumentLoadRef.current?.({
+        totalPages: pdf.numPages,
+        pageWidth: baseViewport.width,
+        pageHeight: baseViewport.height,
+      });
 
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
         if (!isActive()) return;

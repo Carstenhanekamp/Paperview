@@ -20,11 +20,6 @@ export function useExplainSelection({
     async (popup) => {
       if (!popup?.text) return;
 
-      if (!apiKey && !import.meta.env.VITE_OPENAI_API_KEY) {
-        openSettingsModal?.();
-        return;
-      }
-
       const passage = String(popup.text).trim().slice(0, EXPLAIN_MAX_CHARS);
       abortRef.current?.abort();
       const controller = new AbortController();

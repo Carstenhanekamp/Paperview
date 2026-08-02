@@ -49,3 +49,28 @@ describe('pdfViewerUtils', () => {
     });
   });
 });
+
+describe('computeFitWidthScale', () => {
+  it('fits the page into the available width', async () => {
+    const { computeFitWidthScale } = await import('./pdfFitUtils');
+    expect(
+      computeFitWidthScale({
+        containerWidth: 836,
+        pageWidth: 612,
+        horizontalPadding: 36,
+      })
+    ).toBeCloseTo(800 / 612, 5);
+  });
+
+  it('returns null for invalid sizes', async () => {
+    const { computeFitWidthScale } = await import('./pdfFitUtils');
+    expect(computeFitWidthScale({ containerWidth: 0, pageWidth: 612 })).toBeNull();
+    expect(computeFitWidthScale({ containerWidth: 800, pageWidth: 0 })).toBeNull();
+  });
+
+  it('clamps extreme scales', async () => {
+    const { computeFitWidthScale } = await import('./pdfFitUtils');
+    expect(computeFitWidthScale({ containerWidth: 100, pageWidth: 1000, minScale: 0.4 })).toBe(0.4);
+    expect(computeFitWidthScale({ containerWidth: 5000, pageWidth: 100, maxScale: 4 })).toBe(4);
+  });
+});

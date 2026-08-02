@@ -337,12 +337,7 @@ export function useChatSend({
     }
   };
 
-  const askAI = async () => {
-    const t = popup.text;
-    setPopup(null);
-    window.getSelection()?.removeAllRanges();
-    await doSend(`Explain this passage: "${t.substring(0, 200)}${t.length > 200 ? "..." : ""}"`);
-  };
+
 
   const handleCitationClick = (citation) => {
     if (citation?.kind === "web" || citation?.url) {
@@ -446,5 +441,5 @@ export function useChatSend({
     return null;
   }, []);
 
-  return { doSend, askAI, handleCitationClick, renderUsageMeta };
+  return { doSend, handleCitationClick, renderUsageMeta };
 }

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { IClose, ICopy, IFile, ISpark } from '../icons';
+import { IClose, ISpark } from '../icons';
 import {
   displayPaperTitle,
   extractArxivIdFromFilename,
@@ -8,22 +8,12 @@ import {
   toBibtexEntry,
 } from '../biblioUtils';
 
-function Field({ label, children }) {
-  return (
-    <div className="lib-detail-field">
-      <div className="lib-detail-label">{label}</div>
-      <div className="lib-detail-value">{children || '—'}</div>
-    </div>
-  );
-}
-
 export default function LibraryPaperDetail({
   paper,
   folder,
   meta,
   onClose,
   onOpen,
-  onPreviewBibtex,
   extractPaperMetaWithAI,
   showOpenButton = true,
 }) {
@@ -54,7 +44,9 @@ export default function LibraryPaperDetail({
   if (!paper) return null;
 
   const doiUrl = meta?.doi ? `https://doi.org/${meta.doi}` : '';
-  const arxivUrl = arxivId ? `https://arxiv.org/abs/${arxivId}` : '';
+  const highlightCount = Number(paper?.highlightCount ?? meta?.highlightCount ?? 0);
+  const chatCount = Number(paper?.chatCount ?? meta?.chatCount ?? 0);
+  const chatMessages = Number(paper?.chatMessageCount ?? meta?.chatMessageCount ?? 0);
 
   const handleCopyBibtex = async () => {
     try {
@@ -73,106 +65,109 @@ export default function LibraryPaperDetail({
     try {
       await extractPaperMetaWithAI(paper);
     } catch (err) {
-      setAiError(err?.message || 'Could not extract metadata.');
+      let message = err?.message || 'Could not extract metadata.';
+      try {
+        const parsed = JSON.parse(message);
+        if (parsed?.error?.message) message = parsed.error.message;
+      } catch {
+        // keep original string
+      }
+      setAiError(message);
     } finally {
       setAiBusy(false);
     }
   };
 
+  const chatsLabel = chatCount
+    ? `${chatCount} thread${chatCount === 1 ? '' : 's'}${chatMessages ? ` · ${chatMessages} messages` : ''}`
+    : '—';
+
+  const addedLabel = folder?.name ? `from ~/${folder.name}` : '—';
+
   return (
     <aside className="lib-detail" aria-label="Document details">
       <div className="lib-detail-head">
-        <div className="lib-detail-kicker">Details</div>
+        <div className="lib-detail-kicker">Paper details</div>
         <button className="lib-icon-btn" type="button" onClick={onClose} title="Close details">
           <IClose size={13} />
         </button>
       </div>
 
       <div className="lib-detail-scroll">
-        <div className="lib-detail-icon"><IFile size={18} /></div>
         <h2 className="lib-detail-title">{title}</h2>
         {authors ? <p className="lib-detail-authors">{authors}</p> : null}
 
-        <button
-          className="lib-btn lib-detail-ai-btn"
-          type="button"
-          disabled={aiBusy || !extractPaperMetaWithAI}
-          onClick={handleExtractAi}
-          title="Read the first pages and fill title, authors, year, DOI, venue"
-        >
-          <ISpark size={12} />
-          {aiBusy ? 'Extracting…' : 'Extract with AI'}
-        </button>
-        {aiError && <div className="lib-detail-error">{aiError}</div>}
-        {aiBusy && (
-          <div className="lib-detail-status">
-            Scanning pages and asking the model for citation fields…
-          </div>
-        )}
-
-        <div className="lib-detail-grid">
-          <Field label="Year">{year || '—'}</Field>
-          <Field label="Venue">{meta?.venue || '—'}</Field>
-          <Field label="DOI">
-            {doiUrl ? (
-              <a href={doiUrl} target="_blank" rel="noreferrer">{meta.doi}</a>
-            ) : (
-              '—'
-            )}
-          </Field>
-          <Field label="arXiv">
-            {arxivUrl ? (
-              <a href={arxivUrl} target="_blank" rel="noreferrer">{arxivId}</a>
-            ) : (
-              '—'
-            )}
-          </Field>
-          <Field label="Folder">{folder?.name || '—'}</Field>
-          <Field label="Filename">{paper.name || '—'}</Field>
-          <Field label="Pages">{paper.pages ?? '—'}</Field>
-          <Field label="Source">{meta?.source || 'not extracted yet'}</Field>
+        <div className="lib-detail-chips">
+          {meta?.venue ? (
+            <span className="lib-chip accent">
+              {meta.venue}{year ? ` ${year}` : ''}
+            </span>
+          ) : year ? (
+            <span className="lib-chip accent">{year}</span>
+          ) : null}
+          {paper.pages != null ? <span className="lib-chip">{paper.pages} pages</span> : null}
+          <span className="lib-chip">
+            {paper.pdfBytes || paper.hasTextLayer ? 'Text layer ✓' : 'Scanned'}
+          </span>
         </div>
 
-        {meta?.abstract ? (
-          <div className="lib-detail-section">
-            <div className="lib-detail-section-head"><span>Abstract</span></div>
-            <p className="lib-detail-abstract">{meta.abstract}</p>
+        <dl className="lib-dl">
+          <div className="lib-dl-row">
+            <dt>DOI</dt>
+            <dd>
+              {doiUrl ? (
+                <a href={doiUrl} target="_blank" rel="noreferrer">{meta.doi}</a>
+              ) : (
+                '—'
+              )}
+            </dd>
           </div>
-        ) : null}
+          <div className="lib-dl-row">
+            <dt>Added</dt>
+            <dd>{addedLabel}</dd>
+          </div>
+          <div className="lib-dl-row">
+            <dt>Highlights</dt>
+            <dd>{highlightCount || '—'}</dd>
+          </div>
+          <div className="lib-dl-row">
+            <dt>Chats</dt>
+            <dd>{chatsLabel}</dd>
+          </div>
+        </dl>
 
-        <div className="lib-detail-section">
-          <div className="lib-detail-section-head">
-            <span>BibTeX</span>
-            <div className="lib-detail-section-actions">
-              <button className="lib-btn" type="button" onClick={handleCopyBibtex}>
-                <ICopy size={12} /> {copied ? 'Copied' : 'Copy'}
-              </button>
+        <div className="lib-meta-block">
+          <div className="lib-meta-label">Metadata</div>
+          <div className="lib-meta-card">
+            <ISpark size={14} />
+            <div className="lib-meta-copy">
+              <p>
+                Title, authors, venue and DOI were extracted from the PDF. Re-run if the file was replaced.
+              </p>
               <button
-                className="lib-btn"
+                className="extract"
                 type="button"
-                onClick={() =>
-                  onPreviewBibtex?.({
-                    title: title || 'BibTeX',
-                    filename: `${(paper.name || 'paper').replace(/\.pdf$/i, '')}.bib`,
-                    content: bibtex,
-                  })
-                }
+                disabled={aiBusy || !extractPaperMetaWithAI}
+                onClick={handleExtractAi}
               >
-                Preview
+                {aiBusy ? 'Extracting…' : 'Extract with AI · ~$0.001'}
               </button>
+              {aiError && <div className="lib-detail-error">{aiError}</div>}
             </div>
           </div>
-          <pre className="lib-detail-bibtex">{bibtex}</pre>
         </div>
       </div>
 
-      {showOpenButton && (
-        <div className="lib-detail-footer">
-          <button className="lib-btn dark" type="button" onClick={() => onOpen?.(paper, folder?.id)}>
-            Open PDF
+      <div className="lib-detail-footer">
+        {showOpenButton && (
+          <button className="primary" type="button" onClick={() => onOpen?.(paper, folder?.id)}>
+            Open in reader
           </button>
-        </div>
-      )}
+        )}
+        <button className="ghost" type="button" onClick={handleCopyBibtex}>
+          {copied ? 'Copied' : 'Copy BibTeX'}
+        </button>
+      </div>
     </aside>
   );
 }

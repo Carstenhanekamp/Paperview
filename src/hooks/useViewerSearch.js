@@ -1,29 +1,75 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { derivePageTexts } from "../chatUtils";
 
-export function useViewerSearch({ activePaper, currentPage, goToPage, resetKey }) {
+export function useViewerSearch({ activePaper, currentPage, goToPage, resetKey, enabled = true }) {
   const [viewerSearchOpen, setViewerSearchOpen] = useState(false);
   const [viewerSearchQuery, setViewerSearchQuery] = useState("");
   const [viewerSearchStatus, setViewerSearchStatus] = useState("");
   const [viewerSearchMatches, setViewerSearchMatches] = useState([]);
   const [viewerSearchIndex, setViewerSearchIndex] = useState(-1);
   const viewerSearchInputRef = useRef(null);
+  const runViewerSearchRef = useRef(null);
 
   const searchablePageTexts = useMemo(() => derivePageTexts(activePaper), [activePaper]);
   const canRunViewerSearch = Boolean(viewerSearchQuery.trim()) && searchablePageTexts.length > 0;
   const hasViewerSearchResults = viewerSearchMatches.length > 0;
 
-  useEffect(() => {
+  const clearResults = useCallback(() => {
     setViewerSearchStatus("");
     setViewerSearchMatches([]);
     setViewerSearchIndex(-1);
-  }, [resetKey]);
+  }, []);
+
+  const closeViewerSearch = useCallback(() => {
+    setViewerSearchOpen(false);
+    setViewerSearchQuery("");
+    clearResults();
+    viewerSearchInputRef.current?.blur();
+  }, [clearResults]);
+
+  const openViewerSearch = useCallback(() => {
+    setViewerSearchOpen(true);
+    requestAnimationFrame(() => {
+      const el = viewerSearchInputRef.current;
+      if (!el) return;
+      el.focus();
+      el.select();
+    });
+  }, []);
 
   useEffect(() => {
-    if (viewerSearchOpen) {
-      setTimeout(() => viewerSearchInputRef.current?.focus(), 0);
-    }
-  }, [viewerSearchOpen]);
+    clearResults();
+  }, [resetKey, clearResults]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+
+    const onKeyDown = (e) => {
+      const key = e.key?.toLowerCase?.() || "";
+      const mod = e.metaKey || e.ctrlKey;
+
+      if (mod && key === "f") {
+        e.preventDefault();
+        openViewerSearch();
+        return;
+      }
+
+      if (mod && key === "g") {
+        if (!viewerSearchOpen) return;
+        e.preventDefault();
+        runViewerSearchRef.current?.(e.shiftKey ? -1 : 1);
+        return;
+      }
+
+      if (key === "escape" && viewerSearchOpen) {
+        e.preventDefault();
+        closeViewerSearch();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [enabled, viewerSearchOpen, closeViewerSearch, openViewerSearch]);
 
   const buildViewerSearchMatches = useCallback((rawQuery) => {
     const q = String(rawQuery || "").trim();
@@ -88,6 +134,10 @@ export function useViewerSearch({ activePaper, currentPage, goToPage, resetKey }
     goToPage(nextMatch.page, q, nextMatch.occurrenceIndex);
   }, [viewerSearchQuery, searchablePageTexts, buildViewerSearchMatches, currentPage, viewerSearchIndex, goToPage]);
 
+  useEffect(() => {
+    runViewerSearchRef.current = runViewerSearch;
+  }, [runViewerSearch]);
+
   const handleSearchClick = () => {
     if (!viewerSearchOpen) {
       setViewerSearchOpen(true);
@@ -96,11 +146,18 @@ export function useViewerSearch({ activePaper, currentPage, goToPage, resetKey }
     runViewerSearch(1);
   };
 
+  const setQuery = useCallback((value) => {
+    setViewerSearchQuery(value);
+    clearResults();
+  }, [clearResults]);
+
   return {
     viewerSearchOpen,
     setViewerSearchOpen,
+    openViewerSearch,
+    closeViewerSearch,
     viewerSearchQuery,
-    setViewerSearchQuery,
+    setViewerSearchQuery: setQuery,
     viewerSearchStatus,
     setViewerSearchStatus,
     viewerSearchMatches,

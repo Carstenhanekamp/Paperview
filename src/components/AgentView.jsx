@@ -1,7 +1,5 @@
 import React from 'react';
 import {
-  IPanel,
-  IChat,
   IPlus,
   ITrash,
   ISpark,
@@ -11,26 +9,24 @@ import {
   IChevronDown,
   IArrowUp,
 } from '../icons';
-import TextFallback from '../TextFallback';
 import InlineCitedAnswer from '../InlineCitedAnswer';
 import ThinkingTrace from '../ThinkingTrace';
 import { OPENAI_MODELS } from '../constants';
+import { AGENT_QUARTO_CSS } from '../agentQuartoStyles';
+import { useScopedStyles } from '../hooks/useScopedStyles';
+import { formatChatTimestamp, formatChatMessageCount } from '../chatUtils';
+import '../agentQuarto.css';
 
 export default function AgentView({
   agentSidebarOpen,
-  setAgentSidebarOpen,
   agentRootFolder,
   agentWorkspacePapers,
   selectedRootAgentThreads,
   activeAgentChatId,
   openAgentThread,
   deleteAgentThread,
-  startNewAgentChat,
   hasAgentPreview,
   agentPreviewWidth,
-  activeAgentChat,
-  activeAgentSummary,
-  resetActiveAgentHistory,
   currentAgentMessages,
   agentInput,
   agentTools,
@@ -70,73 +66,38 @@ export default function AgentView({
   startAgentPreviewResize,
   renderAgentPreviewDrawer,
 }) {
+  useScopedStyles('pv-agent-quarto', AGENT_QUARTO_CSS);
+  const localPaperCount = agentWorkspacePapers?.length || 0;
+
   return (
               <div className={`agent-view ${agentSidebarOpen ? "" : "sidebar-collapsed"}`}>
                     <aside className={`agent-sidebar ${agentSidebarOpen ? "" : "collapsed"}`}>
                       <div className="agent-sidebar-head">
-                        <div className="agent-sidebar-topbar">
-                          {agentSidebarOpen ? (
-                            <div className="agent-sidebar-copy">
-                              <div className="agent-empty-eyebrow">Workspace threads</div>
-                              <div className="agent-sidebar-title">{agentRootFolder?.name || "Agent"}</div>
-                              <div className="agent-sidebar-subtitle">
-                                {agentWorkspacePapers.length} local paper{agentWorkspacePapers.length === 1 ? "" : "s"} available for grounded comparisons.
-                              </div>
-                            </div>
-                          ) : null}
-                          <button
-                            className="chat-topbar-btn agent-sidebar-toggle"
-                            type="button"
-                            onClick={() => setAgentSidebarOpen((open) => !open)}
-                            title={agentSidebarOpen ? "Collapse threads" : "Expand threads"}
-                            aria-label={agentSidebarOpen ? "Collapse threads" : "Expand threads"}
-                          >
-                            <IPanel size={14} />
-                          </button>
-                          {!agentSidebarOpen ? (
-                            <button
-                              className="chat-topbar-btn agent-sidebar-toggle agent-sidebar-chat-icon"
-                              type="button"
-                              onClick={() => setAgentSidebarOpen(true)}
-                              title="Show chats"
-                              aria-label="Show chats"
-                            >
-                              <IChat size={14} />
-                            </button>
-                          ) : null}
+                        <div className="agent-empty-eyebrow">Workspace threads</div>
+                        <div className="agent-sidebar-subtitle">
+                          Saved with this folder, not your account.
                         </div>
-                        {agentSidebarOpen ? (
-                          <div className="agent-sidebar-head-actions">
-                            <button className="lib-btn dark" type="button" onClick={startNewAgentChat}>
-                              <IPlus size={12} /> New thread
-                            </button>
-                          </div>
-                        ) : null}
                       </div>
 
                       {agentSidebarOpen ? (
                         <>
-                          <div className="agent-context-card">
-                            <div className="agent-context-row">
-                              <span className="agent-root-badge">{agentRootFolder?.name || "Workspace"}</span>
-                              <span className="agent-context-meta">{selectedRootAgentThreads.length} saved thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>
-                            </div>
-                            <p className="agent-context-copy">
-                              Web research, local papers, and imports stay with this workspace so your threads remain easy to pick up later.
-                            </p>
-                          </div>
-
                           <div className="agent-thread-list">
                             {selectedRootAgentThreads.length === 0 ? (
-                              <div className="chat-overview-empty-state">
-                                <div className="chat-overview-empty-title">No agent threads yet</div>
-                                <div className="chat-overview-empty-copy">Start a thread to search the web, compare papers, and save the conversation with this workspace.</div>
+                              <div className="chat-overview-empty-state" style={{ padding: '12px 9px' }}>
+                                <div className="chat-overview-empty-title" style={{ fontSize: 12.5, fontWeight: 600 }}>No threads yet</div>
+                                <div className="chat-overview-empty-copy" style={{ fontSize: 11.5, color: 'var(--text-5)', marginTop: 4 }}>
+                                  Start a thread from the title bar.
+                                </div>
                               </div>
                             ) : (
                               selectedRootAgentThreads.map((thread) => (
                                 <div key={thread.id} className={`agent-thread-row ${thread.id === activeAgentChatId ? "active" : ""}`}>
                                   <button className="agent-thread-main" type="button" onClick={() => openAgentThread(thread.id)}>
                                     <div className="agent-thread-title" title={thread.title}>{thread.title}</div>
+                                    <div className="agent-thread-meta">
+                                      {formatChatMessageCount(thread.messages?.length || 0)}
+                                      {thread.updatedAt ? ` · ${formatChatTimestamp(thread.updatedAt)}` : ''}
+                                    </div>
                                   </button>
                                   <button
                                     className="thread-compact-delete"
@@ -151,6 +112,13 @@ export default function AgentView({
                               ))
                             )}
                           </div>
+
+                          <div className="agent-context-card">
+                            <span className="agent-root-badge">Imports land on disk</span>
+                            <p className="agent-context-copy">
+                              Saved PDFs are written into <strong>{agentRootFolder?.name || "~/papers"}</strong> as real files.
+                            </p>
+                          </div>
                         </>
                       ) : null}
                     </aside>
@@ -163,38 +131,24 @@ export default function AgentView({
                           : undefined}
                       >
                         <div className="agent-conversation-pane">
-                          <div className="agent-main-head">
-                            <div className="agent-main-copy">
-                              <div className="agent-empty-eyebrow">Paperview Agent</div>
-                              <div className="agent-main-title">{activeAgentChat?.title || "New thread"}</div>
-                              <div className="agent-main-subtitle">{activeAgentSummary}</div>
-                            </div>
-                            <div className="agent-main-actions">
-                              <span className="agent-root-badge">{agentRootFolder?.name || "Workspace"}</span>
-                              <button
-                                className="chat-history-btn"
-                                type="button"
-                                onClick={resetActiveAgentHistory}
-                                disabled={!currentAgentMessages.length && !agentInput.trim()}
-                              >
-                                Reset current
-                              </button>
-                            </div>
-                          </div>
                           <div className="agent-msgs">
                             {currentAgentMessages.length === 0 ? (
                               <div className="agent-empty">
                                 <div className="agent-empty-hero">
-                                  <div className="agent-empty-icon"><ISpark size={18} /></div>
+                                  <div className="agent-empty-icon"><ISpark size={16} /></div>
                                   <div className="agent-empty-copy">
                                     <div className="agent-empty-eyebrow">Research across web + local PDFs</div>
                                     <h2>Search for papers, compare them with your library, and import the best ones.</h2>
-                                    <p>Select an Agent tool below to attach a mode to the composer without adding extra instruction text to your message.</p>
+                                    <p>
+                                      Attach a tool in the composer, then ask. Imports land on disk in{' '}
+                                      <strong>{agentRootFolder?.name || '~/papers'}</strong>
+                                      {localPaperCount ? ` · ${localPaperCount} local paper${localPaperCount === 1 ? '' : 's'} in scope` : ''}.
+                                    </p>
                                   </div>
                                 </div>
 
                                 <div className="agent-quick-grid">
-                                  {agentTools.map((item) => (
+                                  {agentTools.slice(0, 4).map((item) => (
                                     <button
                                       key={item.title}
                                       className={`agent-quick-chip ${selectedAgentToolId === item.id ? "active" : ""}`}
@@ -208,15 +162,6 @@ export default function AgentView({
                                       </span>
                                     </button>
                                   ))}
-                                </div>
-
-                                <div className="agent-empty-block">
-                                  <div className="agent-empty-block-title">Local workspace context</div>
-                                  <div className="agent-empty-note">
-                                    {agentWorkspacePapers.length
-                                      ? `${agentWorkspacePapers.length} paper${agentWorkspacePapers.length === 1 ? "" : "s"} are ready in this root. Attach only the ones you want the agent to search locally.`
-                                      : "No local PDFs were found in this root yet. You can still use web search, and imported papers will be saved back into this workspace."}
-                                  </div>
                                 </div>
                               </div>
                             ) : (
@@ -237,7 +182,7 @@ export default function AgentView({
                                   ) : (
                                     <div className="msg-a">
                                       <div className="msg-a-row">
-                                        <div className="msg-a-avatar">A</div>
+                                        <div className="msg-a-avatar"><ISpark size={12} /></div>
                                         <div className="msg-a-bubble-wrap">
                                           {m.thinkingTrace?.length > 0 ? (
                                             <ThinkingTrace
@@ -247,8 +192,6 @@ export default function AgentView({
                                               onToggle={() => setAgentThinkingExpanded((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
                                             />
                                           ) : null}
-                                          {renderUsageMeta(m)}
-                                          {renderFoundSourcesPanel(m)}
                                           {m.content ? (
                                             <div className="msg-a-bubble">
                                               <InlineCitedAnswer
@@ -258,6 +201,8 @@ export default function AgentView({
                                               />
                                             </div>
                                           ) : null}
+                                          {renderFoundSourcesPanel(m)}
+                                          {renderUsageMeta(m)}
                                         </div>
                                       </div>
                                     </div>
@@ -322,48 +267,61 @@ export default function AgentView({
                             </div>
 
                             {agentAttachMenuOpen ? (
-                              <div className="attach-menu">
-                                <div className="attach-head">
-                                  <span className="attach-title">Local paper context</span>
-                                  <div style={{ display: "flex", gap: 4 }}>
-                                    <button
-                                      className="attach-mini-btn"
-                                      type="button"
-                                      onClick={() => setSelectedAgentPaperIds(agentWorkspacePapers.map((paper) => paper.id))}
-                                    >
-                                      All
-                                    </button>
-                                    <button
-                                      className="attach-mini-btn"
-                                      type="button"
-                                      onClick={() => setSelectedAgentPaperIds([])}
-                                    >
-                                      Clear
-                                    </button>
-                                  </div>
-                                </div>
+                              <div className="attach-menu" role="dialog" aria-label="Local paper context">
+                                <div className="attach-menu-bezel">
+                                  <div className="attach-menu-core">
+                                    <header className="attach-head">
+                                      <div className="attach-head-copy">
+                                        <span className="attach-eyebrow">Context</span>
+                                        <h3 className="attach-title">Local papers</h3>
+                                      </div>
+                                      <span className="attach-meta">
+                                        {agentContextPapers.length}
+                                        <span className="attach-meta-label"> selected</span>
+                                      </span>
+                                    </header>
 
-                                <div className="attach-list">
-                                  {agentWorkspacePapers.map((paper) => {
-                                    const checked = selectedAgentPaperIds.includes(paper.id);
-                                    return (
-                                      <label key={paper.id} className="attach-item">
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={() => {
-                                            setSelectedAgentPaperIds((prev) =>
-                                              prev.includes(paper.id)
-                                                ? prev.filter((id) => id !== paper.id)
-                                                : [...prev, paper.id]
-                                            );
-                                          }}
-                                        />
-                                        <IFile size={12} style={{ color: "#888", flexShrink: 0 }} />
-                                        <span className="attach-name">{paper.name}</span>
-                                      </label>
-                                    );
-                                  })}
+                                    <div className="attach-modes" role="tablist" aria-label="Selection">
+                                      <button
+                                        className="attach-mode"
+                                        type="button"
+                                        onClick={() => setSelectedAgentPaperIds(agentWorkspacePapers.map((paper) => paper.id))}
+                                      >
+                                        All
+                                      </button>
+                                      <button
+                                        className="attach-mode"
+                                        type="button"
+                                        onClick={() => setSelectedAgentPaperIds([])}
+                                      >
+                                        Clear
+                                      </button>
+                                    </div>
+
+                                    <div className="attach-list">
+                                      {agentWorkspacePapers.map((paper) => {
+                                        const checked = selectedAgentPaperIds.includes(paper.id);
+                                        return (
+                                          <label key={paper.id} className={`attach-item${checked ? " is-on" : ""}`}>
+                                            <input
+                                              type="checkbox"
+                                              checked={checked}
+                                              onChange={() => {
+                                                setSelectedAgentPaperIds((prev) =>
+                                                  prev.includes(paper.id)
+                                                    ? prev.filter((id) => id !== paper.id)
+                                                    : [...prev, paper.id]
+                                                );
+                                              }}
+                                            />
+                                            <span className="attach-check" aria-hidden="true" />
+                                            <IFile size={13} className="attach-file-icon" />
+                                            <span className="attach-name" title={paper.name}>{paper.name}</span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             ) : null}
@@ -372,16 +330,6 @@ export default function AgentView({
 
                         <div className="chat-composer agent-composer">
                           <div className="agent-tool-row" ref={agentToolMenuRef}>
-                            <button
-                              className={`agent-tool-trigger ${agentToolMenuOpen ? "active" : ""}`}
-                              type="button"
-                              onClick={() => setAgentToolMenuOpen((value) => !value)}
-                              title="Select an Agent tool"
-                            >
-                              <IPlus size={12} />
-                              <span>{selectedAgentTool ? "Change tool" : "Add tool"}</span>
-                            </button>
-
                             {selectedAgentTool ? (
                               <span className="agent-tool-chip">
                                 <span className="agent-tool-chip-label">
@@ -398,10 +346,22 @@ export default function AgentView({
                                 </button>
                               </span>
                             ) : (
-                              <span className="agent-tool-hint">No Agent tool selected</span>
+                              <button
+                                className={`agent-tool-trigger ${agentToolMenuOpen ? "active" : ""}`}
+                                type="button"
+                                onClick={() => setAgentToolMenuOpen((value) => !value)}
+                                title="Select an Agent tool"
+                              >
+                                <IPlus size={12} />
+                                <span>Add tool</span>
+                              </button>
                             )}
 
-                            {agentToolMenuOpen ? (
+                            <span className="agent-context-chip">
+                              {localPaperCount} local paper{localPaperCount === 1 ? '' : 's'}
+                            </span>
+
+                            {agentToolMenuOpen && !selectedAgentTool ? (
                               <div className="agent-tool-menu">
                                 <div className="agent-tool-menu-title">Agent tools</div>
                                 <div className="agent-tool-menu-list">
@@ -439,7 +399,7 @@ export default function AgentView({
                                 doSendAgent();
                               }
                             }}
-                            placeholder={selectedAgentTool?.placeholder || "Search for papers, compare them with your workspace, or import a PDF to this folder..."}
+                            placeholder={selectedAgentTool?.placeholder || "Search the literature, compare with your workspace, or import a PDF..."}
                           />
 
                           <div className="composer-bottom">
@@ -484,7 +444,7 @@ export default function AgentView({
                               </button>
                             ) : (
                               <button
-                                className="icon-btn send-btn"
+                                className="composer-send"
                                 onClick={() => doSendAgent()}
                                 disabled={!agentInput.trim()}
                                 title="Send"

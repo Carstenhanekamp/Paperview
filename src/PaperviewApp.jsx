@@ -5,8 +5,9 @@ import {
   saveUploadedPdf,
 } from './db';
 import { clearOcrMemoryCache, terminateTesseractWorkerNow } from './pdfUtils';
-import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, IGrid, IChat, IRight, ISpark, IChevronDown, IChevronLeftDouble, IChevronRightDouble, IGear, INotes } from './icons';
+import { IFolder, IFolderOpen, IFile, IPlus, ISearch, IUpload, IClose, IGrid, IChat, IRight, ILeft, ISpark, IChevronDown, IChevronLeftDouble, IChevronRightDouble, IGear, INotes } from './icons';
 import { CSS } from './styles';
+import { useScopedStyles } from './hooks/useScopedStyles';
 import { createAgentChatThreadRecord, createChatThreadRecord, formatChatTimestamp, formatChatMessageCount, derivePageTexts } from './chatUtils';
 import { evictUnpinnedPayloads, stripPaperPayload } from './paperPayloadUtils';
 import { usePaperPayloads } from './hooks/usePaperPayloads';
@@ -35,6 +36,7 @@ import LibraryPaperDetail from './components/LibraryPaperDetail';
 import BibtexPreviewModal from './components/BibtexPreviewModal';
 import AgentView from './components/AgentView';
 import ReaderView from './components/ReaderView';
+import ViewerSearchField from './components/ViewerSearchField';
 import ChatPanel from './components/ChatPanel';
 import UploadModal from './components/UploadModal';
 import FolderPermModal from './components/FolderPermModal';
@@ -55,6 +57,43 @@ import { usePaperMeta } from './hooks/usePaperMeta';
 import { useLibraryIndex } from './hooks/useLibraryIndex';
 
 export default function PaperviewApp() {
+  // Vite can strip mix-blend-mode from JSX <style>{CSS}</style>; inject critically for PDF highlights.
+  useScopedStyles(
+    'pv-pdf-highlight',
+    `.textLayer,.ocrLayer{mix-blend-mode:multiply;}
+.ann-hl{background:color-mix(in srgb,var(--highlight) 72%,#fff)!important;border-radius:2px;cursor:pointer;color:transparent!important;box-decoration-break:clone;-webkit-box-decoration-break:clone;}
+.ann-hl::selection{background:rgba(85,105,127,.30);color:transparent;}
+.vt-btn.hl-btn:disabled{opacity:.4;cursor:not-allowed;}
+.topbar-find{display:flex;align-items:center;gap:2px;height:28px;min-width:126px;max-width:126px;padding:0 4px 0 8px;border-radius:8px;background:#fff;box-shadow:var(--sh-hairline);transition:max-width .22s cubic-bezier(0.32,0.72,0,1),box-shadow .18s cubic-bezier(0.32,0.72,0,1);}
+.topbar-find.open{max-width:320px;min-width:220px;box-shadow:var(--sh-hairline),0 0 0 2px color-mix(in srgb,var(--accent) 28%,transparent);}
+.topbar-find-ico{display:flex;color:var(--text-4);flex-shrink:0;}
+.topbar-find-input{flex:1;min-width:0;height:100%;border:0;outline:none;background:transparent;font-size:12.5px;font-family:inherit;color:var(--ink);padding:0 4px;}
+.topbar-find-input::placeholder{color:var(--text-5);}
+.topbar-find-input::-webkit-search-cancel-button{display:none;}
+.topbar-find-actions{display:flex;align-items:center;gap:1px;flex-shrink:0;}
+.topbar-find-meta{font-size:11px;font-weight:600;color:var(--text-4);font-variant-numeric:tabular-nums;padding:0 4px;white-space:nowrap;}
+.topbar-find-btn{width:22px;height:22px;border:none;border-radius:5px;background:transparent;color:var(--text-3);cursor:pointer;display:grid;place-items:center;padding:0;}
+.topbar-find-btn:hover{background:var(--hover);color:var(--ink);}
+.topbar-find-btn:disabled{opacity:.35;cursor:not-allowed;}
+.vt-page-current{appearance:none;border:none;background:transparent;padding:0 2px;margin:0;font:inherit;font-variant-numeric:tabular-nums;font-size:12.5px;font-weight:600;color:var(--ink);cursor:text;border-radius:4px;line-height:1;}
+.vt-page-current:hover{background:var(--hover);}
+.vt-page-input{width:2.75ch;min-width:2.75ch;border:none;outline:none;background:var(--fill-1);border-radius:4px;padding:1px 3px;font:inherit;font-variant-numeric:tabular-nums;font-size:12.5px;font-weight:600;color:var(--ink);text-align:center;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent);}
+.sb-folder{margin-bottom:6px;}
+.sb-papers{padding:4px 0 2px 18px!important;gap:3px!important;}
+:root{--answer:var(--sans);}
+.msg-a-bubble,.cited-answer-p,.cited-answer-li{font-family:var(--sans)!important;line-height:1.65!important;}
+.agent-view .msg-a-bubble{font-family:var(--sans)!important;}
+.msg-a-bubble strong,.cited-answer-body strong{font-weight:600;}
+.cited-answer{display:flex;flex-direction:column;gap:14px;}
+.cited-sources{display:flex;flex-direction:column;gap:8px;}
+.source-card-list{margin-left:0!important;display:flex;align-items:flex-start;gap:10px;text-align:left;width:100%;font:inherit;border:none;cursor:pointer;background:var(--fill-2);border-radius:10px;padding:10px 11px;}
+.source-card-list:hover{background:#F1F3F6;}
+.source-card-num{min-width:18px;height:18px;padding:0 5px;border-radius:5px;flex-shrink:0;margin-top:1px;background:var(--accent-tint);color:var(--accent-on-tint);font-family:var(--sans);font-size:10px;font-weight:700;line-height:18px;text-align:center;}
+.source-card-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}
+.source-card-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-family:var(--sans);font-size:11.5px;font-weight:500;color:var(--text-3);}
+.source-card-meta .source-card-jump{margin-left:auto;font-size:12px;color:var(--accent);font-weight:700;}`
+  );
+
   const [folders, setFolders] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [openTabs, setOpenTabs] = useState([]);
@@ -90,11 +129,9 @@ export default function PaperviewApp() {
   const [selectedAgentPaperIds, setSelectedAgentPaperIds] = useState([]);
   const [agentImportStates, setAgentImportStates] = useState({});
   const { width: chatWidth, startResize: startChatResizeBase } = usePanelResize({ initialWidth: 480, min: 340, max: 760, direction: "right" });
-  const { width: sidebarWidth, startResize: startSbResizeBase } = usePanelResize({ initialWidth: 260, min: 180, max: 520, direction: "left" });
+  const { width: sidebarWidth, startResize: startSbResizeBase } = usePanelResize({ initialWidth: 238, min: 200, max: 360, direction: "left" });
   const { startResize: startAgentPreviewResizeBase } = usePanelResize({ initialWidth: 420, min: 300, max: 900, direction: "right" });
   const [currentPage, setCurrentPage] = useState(1);
-
-  const [scale, setScale] = useState(1.4);
 
   const [privacyAccepted, setPrivacyAccepted] = useState(() => !!localStorage.getItem('pv-privacy-ok'));
   const [showFolderPermModal, setShowFolderPermModal] = useState(false);
@@ -479,7 +516,10 @@ export default function PaperviewApp() {
   }, []);
 
   useEffect(() => {
-    const handler = () => {
+    const handler = (e) => {
+      // Floating/selection chrome preserves the range via preventDefault;
+      // don't clear the popup on their mouseup.
+      if (e.target?.closest?.('.sel-pop, .hl-btn, .ann-popover, .viewer-float-toolbar')) return;
       setTimeout(() => {
         const sel = window.getSelection();
         const text = sel?.toString().trim();
@@ -1022,24 +1062,26 @@ export default function PaperviewApp() {
 
   const {
     viewerSearchOpen,
-    setViewerSearchOpen,
+    openViewerSearch,
+    closeViewerSearch,
     viewerSearchQuery,
     setViewerSearchQuery,
     viewerSearchStatus,
-    setViewerSearchStatus,
     viewerSearchMatches,
-    setViewerSearchMatches,
     viewerSearchIndex,
-    setViewerSearchIndex,
     viewerSearchInputRef,
     canRunViewerSearch,
-    hasViewerSearchResults,
     runViewerSearch,
-    handleSearchClick,
-  } = useViewerSearch({ activePaper, currentPage, goToPage, resetKey: activeTabId });
+  } = useViewerSearch({
+    activePaper,
+    currentPage,
+    goToPage,
+    resetKey: activeTabId,
+    enabled: currentView === "reader" && Boolean(activePaper),
+  });
 
 
-  const { doSend, askAI, handleCitationClick, renderUsageMeta } = useChatSend({
+  const { doSend, handleCitationClick, renderUsageMeta } = useChatSend({
     input,
     setInput,
     chip,
@@ -1107,37 +1149,16 @@ export default function PaperviewApp() {
 
     return (
       <section className="agent-found-sources">
-        <div className="agent-found-sources-head">
-          <div className="agent-found-sources-title">
-            Found {foundSourcesMeta.total} source{foundSourcesMeta.total === 1 ? "" : "s"}
-          </div>
-          <div className="agent-found-sources-subtitle">
-            Showing the top {foundSourcesMeta.shown.length} ranked by relevance
-          </div>
-        </div>
+        <div className="found-label">Found</div>
 
         <div className="agent-found-sources-list">
           {foundSourcesMeta.shown.map((source, index) => {
             const authorLine = formatSourceAuthors(source.authors);
-            const venueLine = [source.venue, source.year].filter(Boolean).join(", ");
+            const venueLine = [source.venue || source.sourceHost, source.year].filter(Boolean).join(" · ");
             const secondaryLine = venueLine || source.sourceHost || "Source";
             const importKey = buildAgentImportKey(message.id, source);
             const folderCheckState = agentFolderCheckStates[importKey] || null;
             const localPaper = findWorkspacePaperForSource(agentWorkspacePapers, source);
-            const badgeLabel =
-              localPaper
-                ? "Found in folder"
-                : source.hydrationStatus === "ready"
-                  ? "Searchable PDF"
-                  : source.hydrationStatus === "preview_only"
-                    ? "Previewable PDF"
-                    : source.hydrationStatus === "loading"
-                      ? "Fetching PDF"
-                      : source.hydrationStatus === "manual_required"
-                        ? "Open in browser"
-                        : source.hasPdf
-                          ? "PDF link found"
-                          : "";
             const openPdfInBrowser = () => {
               const targetUrl = normalizeAgentSourceUrl(source.pdfUrl || source.sourceUrl || "");
               if (targetUrl) window.open(targetUrl, "_blank", "noopener,noreferrer");
@@ -1169,101 +1190,41 @@ export default function PaperviewApp() {
             };
             return (
               <article key={source.id || `${message.id}-source-${index}`} className="agent-found-source-row">
-                <div className="agent-found-source-copy">
+                <div className="agent-found-source-copy" style={{ minWidth: 0, flex: 1 }}>
                   <div className="agent-found-source-title">{source.title || `Source ${index + 1}`}</div>
-                  {authorLine ? (
-                    <div className="agent-found-source-authors">{authorLine}</div>
-                  ) : null}
                   {secondaryLine ? (
-                    <div className="agent-found-source-meta">{secondaryLine}</div>
-                  ) : null}
-                  {source.summary ? (
-                    <div className="agent-found-source-summary">{source.summary}</div>
+                    <div className="agent-found-source-meta">
+                      {[authorLine, secondaryLine].filter(Boolean).join(" · ")}
+                    </div>
                   ) : null}
                   {source.hydrationError ? (
                     <div className="agent-found-source-summary" style={{ color: "#9a3412" }}>{source.hydrationError}</div>
                   ) : null}
-                  {source.hydrationStatus === "manual_required" && hasWritableAgentContext ? (
-                    <div className="agent-found-source-summary">
-                      Open the PDF in a browser tab, save it into <b>{selectedRootFolder?.name || "this workspace"}</b>, then click <b>Check folder</b>.
-                    </div>
-                  ) : null}
                   {folderCheckState?.label ? (
                     <div className="agent-found-source-summary">{folderCheckState.label}</div>
                   ) : null}
-                  <div className="agent-found-source-link">{source.sourceUrl || source.pdfUrl || source.sourceHost}</div>
                 </div>
 
                 <div className="agent-found-source-actions">
-                  {badgeLabel ? (
-                    <span className="agent-found-source-badge">{badgeLabel}</span>
-                  ) : null}
-                  {source.sourceUrl ? (
+                  {localPaper || agentImportStates[importKey]?.status === "done" ? (
+                    <span className="agent-found-source-badge">In library</span>
+                  ) : (
                     <button
-                      className="paper-result-btn"
+                      className="save-btn"
                       type="button"
-                      onClick={() => window.open(source.sourceUrl, "_blank", "noopener,noreferrer")}
-                    >
-                      Open source
-                    </button>
-                  ) : null}
-                  {localPaper ? (
-                    <button
-                      className="paper-result-btn"
-                      type="button"
-                      onClick={() => openAgentPaper(localPaper)}
-                    >
-                      Open in agent mode
-                    </button>
-                  ) : null}
-                  {!localPaper && source.hydrationStatus === "manual_required" && hasWritableAgentContext ? (
-                    <button
-                      className="paper-result-btn"
-                      type="button"
-                      onClick={() => checkFolderForPaper()}
-                      disabled={folderCheckState?.status === "loading"}
-                    >
-                      Check folder
-                    </button>
-                  ) : null}
-                  <button
-                    className="paper-result-btn"
-                    type="button"
-                    disabled={!source.pdfUrl || agentImportStates[importKey]?.status === "loading"}
-                    onClick={() => {
-                      if (source.hydrationStatus === "manual_required") {
+                      disabled={agentImportStates[importKey]?.status === "loading"}
+                      onClick={() => {
+                        if (source.pdfUrl && source.hydrationStatus !== "manual_required") {
+                          importPaperResult(source, message.id);
+                          return;
+                        }
                         openPdfInBrowser();
-                        return;
-                      }
-                      openAgentPreviewPaper({
-                        remotePaperId: source.remotePaperId,
-                        title: source.title,
-                        sourceUrl: source.sourceUrl,
-                        pdfUrl: source.pdfUrl,
-                        doi: source.doi,
-                      }, { chatId: activeAgentChatId }).catch(() => {});
-                    }}
-                  >
-                    {source.hydrationStatus === "manual_required" ? "Open PDF in browser" : "Open PDF"}
-                  </button>
-                  {!localPaper && source.pdfUrl && source.hydrationStatus !== "manual_required" ? (
-                    <button
-                      className="paper-result-btn"
-                      type="button"
-                      title={hasWritableAgentContext ? `Save into ${AGENT_IMPORTS_FOLDER_NAME}` : `Add to ${UPLOADS_FOLDER_NAME}`}
-                      disabled={agentImportStates[importKey]?.status === "loading" || agentImportStates[importKey]?.status === "done"}
-                      onClick={() => importPaperResult(source, message.id)}
+                        if (source.hydrationStatus === "manual_required") checkFolderForPaper();
+                      }}
                     >
-                      {agentImportStates[importKey]?.status === "loading"
-                        ? "Importing..."
-                        : agentImportStates[importKey]?.status === "done"
-                          ? (agentImportStates[importKey]?.label || "Imported")
-                          : "Import"}
+                      {agentImportStates[importKey]?.status === "loading" ? "Saving…" : "+ Save to folder"}
                     </button>
-                  ) : null}
-                  {agentImportStates[importKey]?.status === "error" ? (
-                    <span className="agent-found-source-badge">{agentImportStates[importKey].label}</span>
-                  ) : null}
+                  )}
                 </div>
               </article>
             );
@@ -1406,45 +1367,49 @@ export default function PaperviewApp() {
     <>
       <style>{CSS}</style>
       <div className="app" onMouseDown={(e) => {
-        if (!e.target.closest(".sel-pop")) setPopup(null);
+        if (!e.target.closest(".sel-pop, .viewer-float-toolbar, .hl-btn")) setPopup(null);
         if (!e.target.closest(".ann-popover") && !e.target.closest("[data-ann-id]")) setAnnPopover(null);
         if (!e.target.closest(".explain-popover") && !e.target.closest(".sel-pop")) dismissExplain();
       }}>
         <div className={`sb ${sidebarOpen ? "" : "closed"}`} style={sidebarOpen ? { width: sidebarWidth, minWidth: sidebarWidth } : undefined}>
           <div className="sb-inner" style={{ width: sidebarWidth }}>
-            <div className="sb-user">
-              <div className="sb-avatar" style={{background:'#2563eb',color:'#fff',fontWeight:800,fontSize:13}}>P</div>
-              <span className="sb-username">Paperview</span>
+            <div className="sb-chrome">
+              <button type="button" className="sb-workspace" onClick={() => setCurrentView("library")} title="Workspace">
+                <span className="sb-workspace-mark" aria-hidden="true" />
+                <span className="sb-workspace-label">{activeFolder?.name || "Thesis library"}</span>
+                <span className="sb-workspace-chev"><IChevronDown size={12} /></span>
+              </button>
               <button className="sb-tog" onClick={() => setSidebarOpen(false)} title="Collapse">
                 <IChevronLeftDouble size={14} />
               </button>
             </div>
 
             <div className="sb-nav">
-              <button className={`sb-nav-item ${currentView === "reader" ? "active" : ""}`} onClick={() => setCurrentView("reader")}>
-                <IGrid size={14} /> Reader
+              <button className={`sb-nav-item ${currentView === "reader" && chatPaneMode !== "notes" ? "active" : ""}`} onClick={() => { setCurrentView("reader"); setChatPaneMode("chat"); setChatOpen(true); }}>
+                <IGrid size={14} /> Reading
               </button>
               <button className={`sb-nav-item ${currentView === "library" ? "active" : ""}`} onClick={() => setCurrentView("library")}>
                 <IFolder size={14} /> Library
+                <span className="sb-nav-count">{totalPaperCount || ""}</span>
               </button>
               <button className={`sb-nav-item ${currentView === "agent" ? "active" : ""}`} onClick={() => setCurrentView("agent")}>
-                <ISpark size={14} /> Agent
+                <ISpark size={14} /> Research agent
               </button>
-            </div>
-
-            <div className="sb-search-wrap">
-              <div className="sb-search-icon"><ISearch size={12} /></div>
-              <input
-                className="sb-search-input"
-                placeholder="Search…"
-                value={searchQ}
-                onChange={(e) => setSearchQ(e.target.value)}
-              />
+              <button
+                className={`sb-nav-item ${currentView === "reader" && chatPaneMode === "notes" ? "active" : ""}`}
+                onClick={() => { setCurrentView("reader"); setChatPaneMode("notes"); setChatOpen(true); }}
+              >
+                <INotes size={14} /> Annotations
+              </button>
             </div>
 
             <div className="sb-section">
-              <div className="sb-section-label">Folders</div>
-              {filtered.map((folder) => (
+              <div className="sb-section-hd">
+                <IChevronDown size={12} />
+                <span className="sb-section-label">Folders</span>
+                <button type="button" className="sb-section-add" onClick={startNewFolder} title="New folder"><IPlus size={13} /></button>
+              </div>
+              {filtered.map((folder, folderIdx) => (
                 <div key={folder.id} className="sb-folder">
                   <div
                     className={`sb-folder-hd ${selectedFolderId === folder.id ? "active" : ""}`}
@@ -1463,7 +1428,7 @@ export default function PaperviewApp() {
                     >
                       {folder.expanded ? <IChevronDown size={12} /> : <IRight size={12} />}
                     </button>
-                    {folder.expanded ? <IFolderOpen size={14} /> : <IFolder size={14} />}
+                    <span className={`sb-folder-swatch ${folderIdx % 3 === 1 ? "s2" : folderIdx % 3 === 2 ? "s3" : ""}`} aria-hidden="true" />
                     <span className="sb-folder-name">{folder.name}</span>
                     <span className="sb-folder-cnt">{folder.papers.length}</span>
                   </div>
@@ -1518,18 +1483,14 @@ export default function PaperviewApp() {
               )}
             </div>
 
-            <div className="sb-settings-bar">
-              <span className="sb-settings-dot" style={{ background: apiKey ? '#22c55e' : rememberedApiKeyAvailable ? '#f59e0b' : '#ef4444' }} />
-              <span className="sb-settings-label">{apiKey ? `API key ••••${apiKey.slice(-4)}` : rememberedApiKeyAvailable ? 'API key saved (locked)' : 'No API key'}</span>
-              <button className="sb-settings-gear" onClick={() => openSettingsModal(apiKey)} title="Settings"><IGear size={14} /></button>
-            </div>
-
             <div className="sb-footer">
-              {typeof window.showDirectoryPicker === 'function' && (
-                <button className="sb-upload-btn" onClick={() => setShowFolderPermModal(true)}><IFolder size={13} /> Open Folder</button>
-              )}
-              <button className={typeof window.showDirectoryPicker === 'function' ? "sb-new-folder" : "sb-upload-btn"} onClick={() => { if (folders.length) setUpFolder(folders[0].id); setShowUpload(true); }}><IUpload size={13} /> Upload PDF</button>
-              <button className="sb-new-folder" onClick={startNewFolder}><IPlus size={13} /> New Folder</button>
+              <div className="sb-key-status">
+                <span className={`sb-key-dot ${apiKey ? "" : "off"}`} />
+                <span className="sb-key-label">
+                  {apiKey ? `Your key · ••${apiKey.slice(-4)}` : rememberedApiKeyAvailable ? "Key saved (locked)" : "No API key"}
+                </span>
+              </div>
+              <button className="sb-footer-gear" onClick={() => openSettingsModal(apiKey)} title="Settings"><IGear size={14} /></button>
             </div>
           </div>
         </div>
@@ -1550,75 +1511,132 @@ export default function PaperviewApp() {
           <div className="topbar">
             <div className="topbar-left">
               {!sidebarOpen && (
-                <button className="topbar-btn" onClick={() => setSidebarOpen(true)}>
-                  <IChevronRightDouble size={14} /> Library
+                <button className="topbar-icon-btn" onClick={() => setSidebarOpen(true)} title="Show sidebar">
+                  <IChevronRightDouble size={14} />
                 </button>
               )}
-              <IFolder size={15} style={{ color: "#777" }} />
-              <div className="topbar-title-stack">
-                <span className="topbar-folder-name">
-                  {currentView === "library"
-                    ? "Library"
-                    : currentView === "agent"
-                      ? (agentRootFolder?.name ? `Agent · ${agentRootFolder.name}` : "Agent")
-                      : activeFolder?.name || "Reader"}
-                </span>
-                <span className="topbar-subtitle">
-                  {currentView === "library"
-                    ? `${totalPaperCount} paper${totalPaperCount === 1 ? "" : "s"} across ${folders.length} folders`
-                    : currentView === "agent"
-                      ? `Research across the web and ${agentWorkspacePapers.length} local paper${agentWorkspacePapers.length === 1 ? "" : "s"} in this workspace`
-                      : activePaper?.pdfBytes
-                        ? "Search, annotate, and verify with source-backed answers"
-                        : "Reading from extracted text with chat grounded in the document"}
-                </span>
+              <div className="topbar-nav-btns">
+                <button type="button" className="topbar-icon-btn" disabled title="Back"><ILeft size={14} /></button>
+                <button type="button" className="topbar-icon-btn" disabled title="Forward"><IRight size={14} /></button>
               </div>
+              {currentView === "reader" && openTabs.length > 0 ? (
+                <div className="topbar-tabs">
+                  {openTabs.map((tab) => {
+                    const active = tab.id === activeTabId;
+                    return (
+                      <div
+                        key={tab.id}
+                        className={`tab ${active ? "active" : ""}`}
+                        onClick={() => activateReaderTab(tab.id)}
+                      >
+                        <span className="tab-dot" aria-hidden="true" />
+                        <span className="tab-name">{tab.name}</span>
+                        <button className="tab-close" onClick={(e) => closeTab(e, tab.id)}><IClose size={10} /></button>
+                      </div>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    className="tab-add"
+                    title="Upload PDF"
+                    onClick={() => { if (folders.length) setUpFolder(folders[0].id); setShowUpload(true); }}
+                  >
+                    <IPlus size={14} />
+                  </button>
+                </div>
+              ) : (
+                <div className="topbar-title-stack">
+                  <span className="topbar-folder-name">
+                    {currentView === "library"
+                      ? "Library"
+                      : currentView === "agent"
+                        ? (activeAgentChat?.title || "Research agent")
+                        : activeFolder?.name || "Reading"}
+                  </span>
+                  <span className="topbar-subtitle">
+                    {currentView === "library"
+                      ? `${totalPaperCount} papers · ${folders.length} folders`
+                      : currentView === "agent"
+                        ? `Research agent · ${agentWorkspacePapers.length} local papers in scope`
+                        : `${activeFolder?.name || "Folder"} · ${openTabs.length} open`}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="topbar-right">
-              {openTabs.length > 0 && <span className="topbar-count">{openTabs.length} file{openTabs.length > 1 ? "s" : ""} open</span>}
-              {currentView === "agent" && agentRootFolder && <span className="topbar-mode">{selectedRootAgentThreads.length} thread{selectedRootAgentThreads.length === 1 ? "" : "s"}</span>}
-              {currentView === "reader" && activePaper && <span className="topbar-mode">{activePaper.pdfBytes ? "Rendered PDF" : "Text mode"}</span>}
-              <div className="tb-divider" />
+              {currentView === "reader" && (
+                <span className="topbar-subtitle" style={{ marginRight: 4 }}>
+                  {activeFolder?.name ? `${activeFolder.name} · ${openTabs.length} open` : `${openTabs.length} open`}
+                </span>
+              )}
+              {currentView === "library" && (
+                <input
+                  className="topbar-search lib-wide"
+                  placeholder="Search the library"
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                />
+              )}
+              {currentView === "reader" && (
+                <ViewerSearchField
+                  open={viewerSearchOpen}
+                  query={viewerSearchQuery}
+                  status={viewerSearchStatus}
+                  matchIndex={viewerSearchIndex}
+                  matchCount={viewerSearchMatches.length}
+                  canSearch={canRunViewerSearch}
+                  inputRef={viewerSearchInputRef}
+                  onOpen={openViewerSearch}
+                  onClose={closeViewerSearch}
+                  onQueryChange={setViewerSearchQuery}
+                  onFindNext={() => runViewerSearch(1)}
+                  onFindPrev={() => runViewerSearch(-1)}
+                />
+              )}
+              {currentView === "library" && (
+                <>
+                  <button type="button" className="topbar-btn ghost" onClick={() => exportLibraryBibtex?.()}>BibTeX</button>
+                  <button
+                    type="button"
+                    className="topbar-btn primary"
+                    onClick={() => (typeof window.showDirectoryPicker === "function" ? setShowFolderPermModal(true) : setShowUpload(true))}
+                  >
+                    Open folder
+                  </button>
+                </>
+              )}
+              {currentView === "agent" && (
+                <>
+                  {agentRootFolder && (
+                    <span className="topbar-btn ghost" style={{ pointerEvents: "none" }}>
+                      <span style={{ width: 6, height: 6, borderRadius: 99, background: "var(--accent)", display: "inline-block" }} />
+                      ~/{agentRootFolder.name}
+                    </span>
+                  )}
+                  <button type="button" className="topbar-btn primary" onClick={startNewAgentChat}>
+                    New thread
+                  </button>
+                </>
+              )}
               {currentView === "reader" && (
                 <>
                   {activePaper && (
                     <button
-                      className={`topbar-btn ${readerDetailOpen ? "active" : ""}`}
+                      className={`topbar-btn ghost ${readerDetailOpen ? "primary" : ""}`}
                       onClick={() => setReaderDetailOpen((v) => !v)}
                       title="Document details"
                     >
-                      <INotes size={13} /> Details
+                      Details
                     </button>
                   )}
-                  <button className={`topbar-btn ${chatOpen ? "active" : ""}`} onClick={() => setChatOpen((v) => !v)}>
-                    <IChat size={13} /> Chat
+                  <button className={`topbar-btn ${chatOpen ? "primary" : "ghost"}`} onClick={() => setChatOpen((v) => !v)}>
+                    Chat
                   </button>
                 </>
               )}
             </div>
           </div>
-
-          {currentView === "reader" && openTabs.length > 0 && (
-            <div className="tabbar">
-              {openTabs.map((tab, idx) => {
-                const active = tab.id === activeTabId;
-                return (
-                <div
-                  key={tab.id}
-                  className={`tab ${active ? "active" : ""} ${idx === 0 ? "tab-first" : ""} ${idx === openTabs.length - 1 ? "tab-last" : ""}`}
-                  style={{ zIndex: active ? openTabs.length + 2 : idx + 1 }}
-                  onClick={() => activateReaderTab(tab.id)}
-                >
-                  <span className="tab-icon"><IFile size={13} /></span>
-                  <span className="tab-name">{tab.name}</span>
-                  <button className="tab-close" onClick={(e) => closeTab(e, tab.id)}><IClose size={10} /></button>
-                </div>
-              );
-              })}
-              <div className="tabbar-tail" />
-            </div>
-          )}
 
           <div className={`content ${currentView === "reader" ? "content-reader" : ""}`}>
             {currentView === "library" ? (
@@ -1629,12 +1647,10 @@ export default function PaperviewApp() {
                 folders={folders}
                 selectedFolderId={selectedFolderId}
                 openTabs={openTabs}
-                setShowFolderPermModal={setShowFolderPermModal}
                 setShowUpload={setShowUpload}
                 setNfName={setNfName}
                 setFolderError={setFolderError}
                 setUpFolder={setUpFolder}
-                startNewFolder={startNewFolder}
                 createFolder={createFolder}
                 cancelNewFolder={cancelNewFolder}
                 openFolderTabs={openFolderTabs}
@@ -1647,11 +1663,7 @@ export default function PaperviewApp() {
                 getAuthorsLine={getAuthorsLine}
                 getMeta={getMeta}
                 exportFolderBibtex={exportFolderBibtex}
-                exportLibraryBibtex={exportLibraryBibtex}
                 extractPaperMetaWithAI={extractPaperMetaWithAI}
-                librarySearch={librarySearch}
-                onLibrarySearch={setLibrarySearch}
-                searchResults={searchResults}
               />
             ) : currentView === "agent" ? (
               <AgentView
@@ -1714,35 +1726,18 @@ export default function PaperviewApp() {
                   <div className="reader-main">
                     <ReaderView
                       activePaper={activePaper}
-                      scale={scale}
                       currentPage={currentPage}
                       activePaperTotalPages={activePaperTotalPages}
                       annotations={annotations}
                       debugCitations={debugCitations}
-                      viewerSearchOpen={viewerSearchOpen}
-                      viewerSearchQuery={viewerSearchQuery}
-                      viewerSearchStatus={viewerSearchStatus}
-                      viewerSearchMatches={viewerSearchMatches}
-                      viewerSearchIndex={viewerSearchIndex}
-                      canRunViewerSearch={canRunViewerSearch}
-                      hasViewerSearchResults={hasViewerSearchResults}
                       searchablePageTexts={searchablePageTexts}
-                      chatOpen={chatOpen}
-                      setScale={setScale}
                       setCurrentPage={setCurrentPage}
-                      setViewerSearchOpen={setViewerSearchOpen}
-                      setViewerSearchQuery={setViewerSearchQuery}
-                      setViewerSearchStatus={setViewerSearchStatus}
-                      setViewerSearchMatches={setViewerSearchMatches}
-                      setViewerSearchIndex={setViewerSearchIndex}
                       goToPage={goToPage}
                       handlePdfReady={handlePdfReady}
                       handlePdfDocumentLoad={handlePdfDocumentLoad}
                       handleAnnotationClick={handleAnnotationClick}
-                      runViewerSearch={runViewerSearch}
-                      handleSearchClick={handleSearchClick}
-                      startChatResize={startChatResize}
-                      viewerSearchInputRef={viewerSearchInputRef}
+                      onHighlightSelection={handleHighlight}
+                      canHighlight={Boolean(popup)}
                     />
                   </div>
                   {readerDetailOpen && (
@@ -1764,6 +1759,17 @@ export default function PaperviewApp() {
                   content={readerBibtexPreview?.content}
                   onClose={() => setReaderBibtexPreview(null)}
                 />
+                {chatOpen && (
+                  <div
+                    className="chat-resize-handle"
+                    onMouseDown={startChatResize}
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize chat panel"
+                  >
+                    <span className="chat-resize-grip" />
+                  </div>
+                )}
                 {chatOpen && (
                   <ChatPanel
                     chatWidth={chatWidth}
@@ -1830,9 +1836,9 @@ export default function PaperviewApp() {
                     <IChevronRightDouble size={14} /> Library
                   </button>
                 )}
-                <div style={{ fontSize: 40, opacity: 0.15 }}>📄</div>
-                <h2 style={{ fontSize: 20, color: "#333", margin: "14px 0 8px" }}>Welcome to Paperview</h2>
-                <p style={{ fontSize: 14, lineHeight: 1.7, maxWidth: 380 }}>Open a folder of PDFs or upload individual papers, then chat with AI-powered citations.</p>
+                <div className="welcome-mark" aria-hidden="true"><IFile size={26} /></div>
+                <h2 className="welcome-title">Welcome to Paperview</h2>
+                <p className="welcome-sub">Open a folder of PDFs or upload individual papers, then chat with AI-powered citations grounded in the source text.</p>
                 <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
                   {typeof window.showDirectoryPicker === 'function' && (
                     <button className="welcome-upload" type="button" onClick={() => setShowFolderPermModal(true)}>
@@ -1859,7 +1865,6 @@ export default function PaperviewApp() {
 
         <SelectionToolbar
           popup={popup}
-          onAskAI={askAI}
           onExplain={handleExplainSelection}
           onAddToChat={addToChat}
           onHighlight={handleHighlight}

@@ -192,6 +192,14 @@ export async function requestOpenAIResponse(apiKey, payload, options = {}) {
 
   if (!res.ok) {
     const errText = await res.text();
+    try {
+      const parsed = JSON.parse(errText);
+      if (parsed?.error?.message) {
+        throw new Error(parsed.error.message);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message && err.message !== errText) throw err;
+    }
     throw new Error(errText || "OpenAI request failed");
   }
 

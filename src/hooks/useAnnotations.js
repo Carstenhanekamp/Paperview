@@ -15,8 +15,18 @@ export function useAnnotations({ activePaper, popup, setPopup, syncFolderForPape
 
   const handleHighlight = () => {
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !popup) return;
-    const range = sel.getRangeAt(0);
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+
+    let range;
+    try {
+      range = sel.getRangeAt(0);
+    } catch {
+      return;
+    }
+
+    const selectedText = (popup?.text || sel.toString() || '').trim();
+    if (selectedText.length < 1) return;
+
     const viewer = document.querySelector('.viewer');
     if (!viewer) return;
 
@@ -27,10 +37,11 @@ export function useAnnotations({ activePaper, popup, setPopup, syncFolderForPape
     if (!pageWrap) return;
 
     const pageNum = parseInt(pageWrap.dataset.page, 10);
+    // Prefer top-level text-layer spans so offsets match applyAnnotationHighlights
     const tl = pageWrap.querySelector('.textLayer');
     if (!tl) return;
 
-    const spans = Array.from(tl.querySelectorAll('span'));
+    const spans = Array.from(tl.querySelectorAll(':scope > span'));
     if (!spans.length) return;
 
     // Build character offset from text layer spans
@@ -41,7 +52,6 @@ export function useAnnotations({ activePaper, popup, setPopup, syncFolderForPape
     for (const span of spans) {
       const text = span.textContent || '';
       const spanStart = charPos;
-      const spanEnd = charPos + text.length;
 
       if (range.intersectsNode(span)) {
         // Compute where selection starts/ends within this span
@@ -70,19 +80,19 @@ export function useAnnotations({ activePaper, popup, setPopup, syncFolderForPape
 
     if (startOffset === -1 || endOffset === -1 || startOffset >= endOffset) return;
 
-    const selectedText = popup.text;
     const newAnn = {
       id: createRandomId('ann'),
       paperId: activePaper?.id,
       pageNum,
       selectedText,
       comment: '',
-      color: 'rgba(255,213,79,.4)',
+      color: 'var(--highlight)',
       startOffset,
       endOffset,
       createdAt: Date.now(),
     };
 
+    const rect = range.getBoundingClientRect();
     setAnnotations((prev) => [...prev, newAnn]);
     saveAnnotation(newAnn).catch(() => {});
     syncFolderForPaper(newAnn.paperId);
@@ -90,7 +100,6 @@ export function useAnnotations({ activePaper, popup, setPopup, syncFolderForPape
     window.getSelection()?.removeAllRanges();
 
     // Show popover for comment entry
-    const rect = range.getBoundingClientRect();
     setAnnPopover({ ann: newAnn, x: rect.left + rect.width / 2, y: rect.bottom + 4, isNew: true });
     setAnnComment('');
   };

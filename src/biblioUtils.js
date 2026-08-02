@@ -280,7 +280,12 @@ Rules:
       input: [
         {
           role: 'user',
-          content: `Filename: ${fileName || 'unknown.pdf'}\n\nPaper text (first pages):\n${sample}`,
+          content: `Extract bibliographic metadata as a JSON object for this paper.
+
+Filename: ${fileName || 'unknown.pdf'}
+
+Paper text (first pages):
+${sample}`,
         },
       ],
     },

@@ -47,7 +47,7 @@ export default function UploadModal({
               </div>
               {pendingFile ? (
                 <>
-                  <h3>{pendingFile.name}</h3>
+                  <h3 className="dz-filename" title={pendingFile.name}>{pendingFile.name}</h3>
                   <p>{(pendingFile.size / 1024 / 1024).toFixed(1)} MB · click to change</p>
                 </>
               ) : (

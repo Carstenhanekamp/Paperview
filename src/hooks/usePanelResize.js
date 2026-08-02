@@ -33,6 +33,8 @@ export function usePanelResize({ initialWidth, min, max, direction }) {
 
   const startResize = useCallback((event, { enabled = true, startWidth } = {}) => {
     if (!enabled) return;
+    event.preventDefault();
+    event.stopPropagation();
     resizeRef.current = {
       active: true,
       startX: event.clientX,

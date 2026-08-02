@@ -1,5 +1,5 @@
 import React from 'react';
-import { IPlus, ITrash, INotes, IPanel, IChevronRightDouble, ISpark, IClose, IPaperclip, IFile, IChevronDown, IArrowUp } from '../icons';
+import { IPlus, ITrash, INotes, IChats, IChevronRightDouble, ISpark, IClose, IPaperclip, IFile, IChevronDown, IArrowUp } from '../icons';
 import InlineCitedAnswer from '../InlineCitedAnswer';
 import ThinkingTrace from '../ThinkingTrace';
 import { OPENAI_MODELS } from '../constants';
@@ -68,37 +68,50 @@ export default function ChatPanel({
           <span className="chat-topbar-subtitle">{chatPaneMode === "overview" ? "Open, reset, or remove saved conversations." : chatPaneMode === "notes" ? `${annotations.length} annotation${annotations.length === 1 ? '' : 's'}` : activeChatSummary}</span>
         </div>
         <div className="chat-topbar-actions">
-          {chatPaneMode === "chat" && (
-            <button className="chat-topbar-btn" onClick={startNewChat} title="Start new chat">
-              <IPlus size={14} />
-            </button>
-          )}
-          {chatPaneMode === "chat" ? (
-            <button
-              className="chat-topbar-btn"
-              onClick={resetActiveChatHistory}
-              title="Reset active chat"
-              disabled={!currentMessages.length && !chip && !input}
-            >
-              <ITrash size={14} />
-            </button>
-          ) : null}
+          <div className="chat-topbar-island" aria-label="Chat actions">
+            <div className="chat-topbar-island-inner">
+              {chatPaneMode === "chat" && (
+                <button className="chat-topbar-btn" onClick={startNewChat} data-tooltip="New chat" aria-label="New chat">
+                  <IPlus size={14} />
+                </button>
+              )}
+              {chatPaneMode === "chat" ? (
+                <button
+                  className="chat-topbar-btn"
+                  onClick={resetActiveChatHistory}
+                  data-tooltip="Reset chat"
+                  aria-label="Reset chat"
+                  disabled={!currentMessages.length && !chip && !input}
+                >
+                  <ITrash size={14} />
+                </button>
+              ) : null}
+              <button
+                className={`chat-topbar-btn${chatPaneMode === "notes" ? " on" : ""}`}
+                onClick={() => setChatPaneMode((mode) => (mode === "notes" ? "chat" : "notes"))}
+                data-tooltip={chatPaneMode === "notes" ? "Back to chat" : "Notes"}
+                aria-label={chatPaneMode === "notes" ? "Back to chat" : "Notes"}
+                aria-pressed={chatPaneMode === "notes"}
+              >
+                <INotes size={14} />
+              </button>
+              <button
+                className={`chat-topbar-btn${chatPaneMode === "overview" ? " on" : ""}`}
+                onClick={() => setChatPaneMode((mode) => (mode === "overview" ? "chat" : "overview"))}
+                data-tooltip={chatPaneMode === "overview" ? "Back to chat" : "View chats"}
+                aria-label={chatPaneMode === "overview" ? "Back to chat" : "View chats"}
+                aria-pressed={chatPaneMode === "overview"}
+              >
+                <IChats size={14} />
+              </button>
+            </div>
+          </div>
           <button
-            className={`chat-topbar-btn${chatPaneMode === 'notes' ? ' active' : ''}`}
-            onClick={() => setChatPaneMode((mode) => (mode === "notes" ? "chat" : "notes"))}
-            title={chatPaneMode === "notes" ? "Back to chat" : "Notes"}
+            className="chat-topbar-btn chat-topbar-collapse"
+            onClick={() => setChatOpen(false)}
+            data-tooltip="Collapse"
+            aria-label="Collapse chat"
           >
-            <INotes size={14} />
-          </button>
-          <button
-            className="chat-topbar-btn chat-topbar-btn-label"
-            onClick={() => setChatPaneMode((mode) => (mode === "chat" ? "overview" : "chat"))}
-            title={chatPaneMode === "overview" ? "Back to chat" : "View chats"}
-          >
-            <IPanel size={14} />
-            <span>{chatPaneMode === "overview" ? "Back to chat" : "View chats"}</span>
-          </button>
-          <button className="chat-topbar-btn" onClick={() => setChatOpen(false)} title="Collapse chat">
             <IChevronRightDouble size={14} />
           </button>
         </div>
@@ -284,7 +297,7 @@ export default function ChatPanel({
                   ) : (
                     <div className="msg-a">
                       <div className="msg-a-row">
-                        <div className="msg-a-avatar">A</div>
+                        <div className="msg-a-avatar"><ISpark size={12} /></div>
                         <div className="msg-a-bubble-wrap">
                           {m.thinkingTrace?.length > 0 && (
                             <ThinkingTrace
@@ -365,86 +378,107 @@ export default function ChatPanel({
                   </div>
                 </div>
                 {attachMenuOpen && (
-                  <div className="attach-menu">
-                    <div className="attach-head">
-                      <span className="attach-title">Chat context PDFs</span>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        <button
-                          className="attach-mini-btn"
-                          type="button"
-                          onClick={() => {
-                            setChatContextMode("manual");
-                            setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id));
-                          }}
-                        >
-                          All
-                        </button>
-                        <button
-                          className="attach-mini-btn"
-                          type="button"
-                          onClick={() => {
-                            setChatContextMode("folder");
-                            setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id));
-                          }}
-                          title="Ask across this folder (ranked)"
-                        >
-                          Folder
-                        </button>
-                        <button
-                          className="attach-mini-btn"
-                          type="button"
-                          onClick={() => {
-                            setChatContextMode("library");
-                          }}
-                          title="Ask across the whole library (ranked)"
-                        >
-                          Library
-                        </button>
-                        <button
-                          className="attach-mini-btn"
-                          type="button"
-                          onClick={() => {
-                            setChatContextMode("auto");
-                            setSelectedChatPaperIds(activePaper?.id ? [activePaper.id] : []);
-                          }}
-                        >
-                          Active
-                        </button>
+                  <div className="attach-menu" role="dialog" aria-label="Chat context papers">
+                    <div className="attach-menu-bezel">
+                      <div className="attach-menu-core">
+                        <header className="attach-head">
+                          <div className="attach-head-copy">
+                            <span className="attach-eyebrow">Context</span>
+                            <h3 className="attach-title">Papers for this chat</h3>
+                          </div>
+                          <span className="attach-meta">
+                            {chatContextPapers.length}
+                            <span className="attach-meta-label"> selected</span>
+                          </span>
+                        </header>
+
+                        <div className="attach-modes" role="tablist" aria-label="Context scope">
+                          <button
+                            className={`attach-mode${chatContextMode === "manual" ? " on" : ""}`}
+                            type="button"
+                            role="tab"
+                            aria-selected={chatContextMode === "manual"}
+                            onClick={() => {
+                              setChatContextMode("manual");
+                              setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id));
+                            }}
+                          >
+                            All
+                          </button>
+                          <button
+                            className={`attach-mode${chatContextMode === "folder" ? " on" : ""}`}
+                            type="button"
+                            role="tab"
+                            aria-selected={chatContextMode === "folder"}
+                            title="Ask across this folder (ranked)"
+                            onClick={() => {
+                              setChatContextMode("folder");
+                              setSelectedChatPaperIds(activeFolderPapers.map((p) => p.id));
+                            }}
+                          >
+                            Folder
+                          </button>
+                          <button
+                            className={`attach-mode${chatContextMode === "library" ? " on" : ""}`}
+                            type="button"
+                            role="tab"
+                            aria-selected={chatContextMode === "library"}
+                            title="Ask across the whole library (ranked)"
+                            onClick={() => {
+                              setChatContextMode("library");
+                            }}
+                          >
+                            Library
+                          </button>
+                          <button
+                            className={`attach-mode${chatContextMode === "auto" ? " on" : ""}`}
+                            type="button"
+                            role="tab"
+                            aria-selected={chatContextMode === "auto"}
+                            onClick={() => {
+                              setChatContextMode("auto");
+                              setSelectedChatPaperIds(activePaper?.id ? [activePaper.id] : []);
+                            }}
+                          >
+                            Active
+                          </button>
+                        </div>
+
+                        {activeFolderPapers.length === 0 ? (
+                          <div className="attach-empty">No PDFs in this folder yet.</div>
+                        ) : (
+                          <div className="attach-list">
+                            {activeFolderPapers.map((paper) => {
+                              const checked =
+                                chatContextMode === "auto"
+                                  ? paper.id === activePaper?.id
+                                  : chatContextMode === "folder" || chatContextMode === "library"
+                                    ? true
+                                    : selectedChatPaperIds.includes(paper.id);
+                              return (
+                                <label key={paper.id} className={`attach-item${checked ? " is-on" : ""}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setChatContextMode("manual");
+                                      setSelectedChatPaperIds((prev) =>
+                                        prev.includes(paper.id)
+                                          ? prev.filter((id) => id !== paper.id)
+                                          : [...prev, paper.id]
+                                      );
+                                    }}
+                                  />
+                                  <span className="attach-check" aria-hidden="true" />
+                                  <IFile size={13} className="attach-file-icon" />
+                                  <span className="attach-name" title={paper.name}>{paper.name}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
-
-                    {activeFolderPapers.length === 0 ? (
-                      <div className="attach-empty">No PDFs in this folder yet.</div>
-                    ) : (
-                      <div className="attach-list">
-                        {activeFolderPapers.map((paper) => {
-                          const checked =
-                            chatContextMode === "auto"
-                              ? paper.id === activePaper?.id
-                              : chatContextMode === "folder" || chatContextMode === "library"
-                                ? true
-                                : selectedChatPaperIds.includes(paper.id);
-                          return (
-                            <label key={paper.id} className="attach-item">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => {
-                                  setChatContextMode("manual");
-                                  setSelectedChatPaperIds((prev) =>
-                                    prev.includes(paper.id)
-                                      ? prev.filter((id) => id !== paper.id)
-                                      : [...prev, paper.id]
-                                  );
-                                }}
-                              />
-                              <IFile size={12} style={{ color: "#888", flexShrink: 0 }} />
-                              <span className="attach-name">{paper.name}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -510,7 +544,7 @@ export default function ChatPanel({
                     Stop
                   </button>
                 ) : (
-                  <button className="icon-btn send-btn" onClick={() => doSend()} disabled={!input.trim() && !chip} title="Send" type="button">
+                  <button className="composer-send" onClick={() => doSend()} disabled={!input.trim() && !chip} title="Send" type="button">
                     <IArrowUp size={14} />
                   </button>
                 )}

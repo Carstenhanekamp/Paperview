@@ -1,12 +1,22 @@
-import React, { useMemo, useState } from 'react';
-import { IFolder, IPlus, IUpload, IChevronDown, IRight, IFolderOpen, ITrash, IFile, ICopy } from '../icons';
-import LibrarySearch from './LibrarySearch';
+import React, { useEffect, useMemo, useState } from 'react';
+import { IPlus, IChevronDown, IRight, ITrash, IFile, ICopy, IUpload } from '../icons';
 import LibraryPaperDetail from './LibraryPaperDetail';
 import BibtexPreviewModal from './BibtexPreviewModal';
+import { LIBRARY_QUARTO_CSS } from '../libraryQuartoStyles';
+import { useScopedStyles } from '../hooks/useScopedStyles';
+import '../libraryQuarto.css';
+
+const SWATCHES = ['', 's2', 's3'];
+
+function formatFolderBytes(papers) {
+  const bytes = (papers || []).reduce((sum, p) => sum + (Number(p.size) || Number(p.bytes) || 0), 0);
+  if (!bytes) return null;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  const mb = bytes / (1024 * 1024);
+  return `${mb >= 10 ? Math.round(mb) : mb.toFixed(0)} MB`;
+}
 
 export default function LibraryView({
-  setShowFolderPermModal,
-  startNewFolder,
   setShowUpload,
   newFolder,
   nfName,
@@ -18,9 +28,7 @@ export default function LibraryView({
   folders,
   selectedFolderId,
   openFolderTabs,
-  toggleFolder,
   openAllPapersInFolder,
-  openTabs,
   setUpFolder,
   deleteFolder,
   openPaper,
@@ -29,15 +37,14 @@ export default function LibraryView({
   getAuthorsLine,
   getMeta,
   exportFolderBibtex,
-  exportLibraryBibtex,
   extractPaperMetaWithAI,
-  librarySearch,
-  onLibrarySearch,
-  searchResults,
 }) {
+  useScopedStyles('pv-library-quarto', LIBRARY_QUARTO_CSS);
+
   const [sortKey, setSortKey] = useState('title');
   const [selectedPaperId, setSelectedPaperId] = useState(null);
   const [bibtexPreview, setBibtexPreview] = useState(null);
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
 
   const sortedFolders = useMemo(() => {
     return (folders || []).map((folder) => {
@@ -56,6 +63,20 @@ export default function LibraryView({
     });
   }, [folders, sortKey, getMeta, getTitle, getAuthorsLine]);
 
+  useEffect(() => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const folder of sortedFolders) {
+        if (folder.papers?.length && !next.has(folder.id)) {
+          next.add(folder.id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [sortedFolders]);
+
   const selected = useMemo(() => {
     if (!selectedPaperId) return null;
     for (const folder of sortedFolders) {
@@ -65,174 +86,176 @@ export default function LibraryView({
     return null;
   }, [selectedPaperId, sortedFolders]);
 
+  useEffect(() => {
+    if (selected) return;
+    for (const folder of sortedFolders) {
+      if (folder.papers?.[0]) {
+        setSelectedPaperId(folder.papers[0].id);
+        return;
+      }
+    }
+  }, [sortedFolders, selected]);
+
+  const toggleExpanded = (folderId) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  };
+
   const openBibtexPreview = ({ title, filename, content }) => {
     setBibtexPreview({ title, filename, content });
   };
 
   return (
-    <div className={`library-view ${selected ? 'library-view-with-detail' : ''}`}>
+    <div className="library-view library-view-with-detail">
       <div className="library-main">
-        <div className="library-head">
-          <div className="library-title">Library</div>
-          <div className="library-actions">
-            {typeof window.showDirectoryPicker === 'function' && (
-              <button className="lib-btn dark" onClick={() => setShowFolderPermModal(true)}><IFolder size={12} /> Open Folder</button>
-            )}
-            <button className="lib-btn" onClick={startNewFolder}><IPlus size={12} /> New Folder</button>
-            <button className="lib-btn dark" onClick={() => setShowUpload(true)}><IUpload size={12} /> Upload PDF</button>
-            <button
-              className="lib-btn"
-              type="button"
-              title="Preview library BibTeX"
-              onClick={() =>
-                openBibtexPreview({
-                  title: 'Library BibTeX',
-                  filename: 'paperview-library.bib',
-                  content: exportLibraryBibtex?.() || '',
-                })
-              }
-            >
-              <ICopy size={12} /> BibTeX
-            </button>
-          </div>
-        </div>
-
-        {typeof onLibrarySearch === 'function' && (
-          <LibrarySearch
-            query={librarySearch}
-            onQueryChange={onLibrarySearch}
-            results={searchResults}
-            getTitle={getTitle}
-            onOpenPaper={(paper, folderId) => {
-              setSelectedPaperId(paper?.id || null);
-              openPaper?.(paper, folderId);
-            }}
-          />
-        )}
-
         {newFolder && (
-          <div style={{ maxWidth: 420, marginBottom: 12 }}>
+          <div className="library-nf">
             <input
               autoFocus
               className="nf-input"
               value={nfName}
               onChange={(e) => {
                 setNfName(e.target.value);
-                if (folderError) setFolderError("");
+                if (folderError) setFolderError('');
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") createFolder();
-                if (e.key === "Escape") cancelNewFolder();
+                if (e.key === 'Enter') createFolder();
+                if (e.key === 'Escape') cancelNewFolder();
               }}
               placeholder="Folder name…"
             />
             {folderError && <div className="nf-error">{folderError}</div>}
             <div className="nf-ctrl">
-              <button className="lib-btn dark" onClick={createFolder}><IPlus size={12} /> Create</button>
-              <button className="lib-btn" onClick={cancelNewFolder}>Cancel</button>
+              <button className="lib-btn dark" type="button" onClick={createFolder}>
+                <IPlus size={12} /> Create
+              </button>
+              <button className="lib-btn" type="button" onClick={cancelNewFolder}>
+                Cancel
+              </button>
             </div>
           </div>
         )}
 
-        <div className="library-sort">
-          <span className="library-sort-label">Sort papers</span>
-          <select className="library-sort-select" value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
-            <option value="title">Title</option>
-            <option value="authors">Authors</option>
-            <option value="year">Year</option>
-          </select>
-        </div>
-
         <div className="library-db library-db-biblio">
           <div className="db-head">
-            <div className="db-h">Title</div>
-            <div className="db-h">Authors</div>
-            <div className="db-h">Year</div>
-            <div className="db-h">DOI</div>
-            <div className="db-h">Actions</div>
+            <button
+              type="button"
+              className={`db-h ${sortKey === 'title' ? 'sorted' : ''}`}
+              onClick={() => setSortKey('title')}
+            >
+              Title {sortKey === 'title' ? <IChevronDown size={11} /> : null}
+            </button>
+            <button
+              type="button"
+              className={`db-h ${sortKey === 'authors' ? 'sorted' : ''}`}
+              onClick={() => setSortKey('authors')}
+            >
+              Authors
+            </button>
+            <button
+              type="button"
+              className={`db-h ${sortKey === 'year' ? 'sorted' : ''}`}
+              onClick={() => setSortKey('year')}
+            >
+              Year
+            </button>
+            <div className="db-h" style={{ cursor: 'default' }}>DOI</div>
+            <div className="db-h" style={{ cursor: 'default', justifyContent: 'flex-end' }}>Actions</div>
           </div>
 
-          {sortedFolders.map((folder) => (
+          {sortedFolders.map((folder, folderIndex) => {
+            const isExpanded = expandedIds.has(folder.id);
+            const sizeLabel = formatFolderBytes(folder.papers);
+            return (
             <React.Fragment key={folder.id}>
               <div
-                className={`db-row folder ${selectedFolderId === folder.id ? "selected" : ""}`}
+                className={`db-row folder ${selectedFolderId === folder.id ? 'selected' : ''}`}
                 onClick={() => openFolderTabs(folder.id, { forceReader: false })}
                 title="Select this folder"
               >
-                <div className="db-cell">
+                <div className="db-folder-main">
                   <button
                     className="db-toggle"
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggleFolder(folder.id);
+                      toggleExpanded(folder.id);
                     }}
-                    title={folder.expanded ? "Collapse" : "Expand"}
+                    title={isExpanded ? 'Collapse' : 'Expand'}
                   >
-                    {folder.expanded ? <IChevronDown size={12} /> : <IRight size={12} />}
+                    {isExpanded ? <IChevronDown size={12} /> : <IRight size={12} />}
                   </button>
-                  {folder.expanded ? <IFolderOpen size={14} /> : <IFolder size={14} />}
+                  <span
+                    className={`db-folder-swatch ${SWATCHES[folderIndex % SWATCHES.length]}`}
+                    style={folder.color ? { background: folder.color } : undefined}
+                  />
                   <span className="db-title">{folder.name}</span>
-                  <span className="db-meta" style={{ marginLeft: 8 }}>{folder.papers.length} files</span>
+                  <span className="db-meta">
+                    {folder.papers.length} file{folder.papers.length === 1 ? '' : 's'}
+                    {sizeLabel ? ` · ${sizeLabel}` : ''}
+                  </span>
                 </div>
-                <div className="db-cell"><span className="db-chip">Folder</span></div>
-                <div className="db-cell">—</div>
-                <div className="db-cell">—</div>
-                <div className="db-cell">
-                  <div className="db-actions">
-                    <button
-                      className="db-open"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openAllPapersInFolder(folder.id, { forceReader: true });
-                      }}
-                    >
-                      Open all
-                    </button>
-                    <button
-                      className="lib-icon-btn"
-                      title="Preview folder BibTeX"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openBibtexPreview({
-                          title: `${folder.name} BibTeX`,
-                          filename: `${folder.name || 'folder'}.bib`,
-                          content: exportFolderBibtex?.(folder) || '',
-                        });
-                      }}
-                    >
-                      <ICopy size={13} />
-                    </button>
-                    <button
-                      className="lib-icon-btn"
-                      title="Upload file to folder"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setUpFolder(folder.id);
-                        setShowUpload(true);
-                      }}
-                    >
-                      <IUpload size={13} />
-                    </button>
-                    <button
-                      className="lib-icon-btn"
-                      title="Delete folder"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteFolder(folder.id);
-                      }}
-                    >
-                      <ITrash size={13} />
-                    </button>
-                  </div>
+                <div className="db-folder-actions">
+                  <button
+                    className="db-open"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openAllPapersInFolder(folder.id, { forceReader: true });
+                    }}
+                  >
+                    Open all
+                  </button>
+                  <button
+                    className="lib-icon-btn"
+                    type="button"
+                    title="Preview folder BibTeX"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openBibtexPreview({
+                        title: `${folder.name} BibTeX`,
+                        filename: `${folder.name || 'folder'}.bib`,
+                        content: exportFolderBibtex?.(folder) || '',
+                      });
+                    }}
+                  >
+                    <ICopy size={13} />
+                  </button>
+                  <button
+                    className="lib-icon-btn"
+                    type="button"
+                    title="Upload file to folder"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setUpFolder(folder.id);
+                      setShowUpload(true);
+                    }}
+                  >
+                    <IUpload size={13} />
+                  </button>
+                  <button
+                    className="lib-icon-btn"
+                    type="button"
+                    title="Delete folder"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteFolder(folder.id);
+                    }}
+                  >
+                    <ITrash size={13} />
+                  </button>
                 </div>
               </div>
 
-              {folder.expanded && (
+              {isExpanded && (
                 <div className="db-folder-files">
                   {folder.papers.length === 0 ? (
                     <div className="db-file-row empty">
-                      <div className="db-cell db-file-indent" style={{ gridColumn: "1 / span 5", gap: 10 }}>
+                      <div className="db-cell db-file-indent" style={{ gridColumn: '1 / span 5', gap: 10 }}>
                         <span>No files in this folder.</span>
                         <button
                           className="empty-upload-btn"
@@ -278,22 +301,20 @@ export default function LibraryView({
                               )}
                             </div>
                           </div>
-                          <div className="db-cell"><span className="db-meta" title={authors}>{authors}</span></div>
-                          <div className="db-cell"><span className="db-meta">{year}</span></div>
-                          <div className="db-cell"><span className="db-meta" title={doi}>{doi}</span></div>
+                          <div className="db-cell">
+                            <span className="db-meta" title={authors}>{authors}</span>
+                          </div>
+                          <div className="db-cell">
+                            <span className="db-meta">{year}</span>
+                          </div>
+                          <div className="db-cell">
+                            <span className="db-meta" title={doi}>{doi}</span>
+                          </div>
                           <div className="db-cell">
                             <div className="db-actions">
                               <button
-                                className="db-open"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openPaper(paper, folder.id);
-                                }}
-                              >
-                                Open
-                              </button>
-                              <button
                                 className="lib-icon-btn"
+                                type="button"
                                 title="Delete file"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -302,6 +323,16 @@ export default function LibraryView({
                                 }}
                               >
                                 <ITrash size={13} />
+                              </button>
+                              <button
+                                className="db-open"
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openPaper(paper, folder.id);
+                                }}
+                              >
+                                Open
                               </button>
                             </div>
                           </div>
@@ -312,11 +343,12 @@ export default function LibraryView({
                 </div>
               )}
             </React.Fragment>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      {selected && (
+      {selected ? (
         <LibraryPaperDetail
           paper={selected.paper}
           folder={selected.folder}
@@ -326,6 +358,13 @@ export default function LibraryView({
           onOpen={openPaper}
           onPreviewBibtex={openBibtexPreview}
         />
+      ) : (
+        <aside className="lib-detail">
+          <div className="lib-detail-head">
+            <span className="lib-detail-kicker">Paper details</span>
+          </div>
+          <div className="lib-detail-empty">Select a paper to inspect metadata.</div>
+        </aside>
       )}
 
       <BibtexPreviewModal
