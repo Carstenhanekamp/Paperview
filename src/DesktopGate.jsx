@@ -2,27 +2,27 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 const FONT_URL =
-  "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap";
+  "https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,300;0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,300;1,7..72,400;1,7..72,500;1,7..72,600;1,7..72,700&display=swap";
 
 const STORAGE_KEY = "pv.gate.override.v1";
 const BREAKPOINT = 900;
 
 const CSS = `
 .pv-gate {
-  --bg: #FBFAF7;
-  --bg-2: #F3F1EA;
+  --bg: #FAFAFA;
+  --field: #F2F2F4;
   --surface: #FFFFFF;
-  --ink: #0E0E0C;
-  --ink-2: #2B2A26;
-  --mut: #6B6960;
-  --mut-2: #9A9789;
-  --line: #E7E4DB;
-  --line-2: #D8D3C6;
-  --accent: oklch(0.52 0.08 145);
-  --accent-ink: oklch(0.35 0.07 145);
-  --mono: "JetBrains Mono", ui-monospace, monospace;
-  --serif: "Instrument Serif", "Times New Roman", serif;
-  --sans: "Inter", -apple-system, system-ui, sans-serif;
+  --ink: #17181A;
+  --ink-2: #23262B;
+  --text-2: #5D616A;
+  --text-3: #6E7178;
+  --text-4: #9095A0;
+  --hairline: rgba(20,22,28,.10);
+  --accent: #55697F;
+  --accent-hover: #3F5063;
+  --accent-on: #2F4056;
+  --display: 'Literata', Georgia, serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
 
   position: fixed; inset: 0;
   z-index: 999;
@@ -66,15 +66,16 @@ const CSS = `
 }
 
 .pv-gate-status {
-  font-family: var(--mono); font-size: 10.5px;
-  color: var(--mut); letter-spacing: 0.14em;
+  font-size: 10.5px;
+  color: var(--text-4); letter-spacing: 0.14em;
   text-transform: uppercase;
   display: inline-flex; align-items: center; gap: 8px;
+  font-variant-numeric: tabular-nums;
 }
 .pv-gate-status .dot {
   width: 7px; height: 7px; border-radius: 50%;
-  background: #D88B6A;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #D88B6A 20%, transparent);
+  background: #FEBC2E;
+  box-shadow: 0 0 0 3px rgba(254,188,46,.22);
   animation: pv-gate-pulse 2.4s ease-in-out infinite;
 }
 @keyframes pv-gate-pulse {
@@ -94,14 +95,15 @@ const CSS = `
 }
 
 .pv-gate-eyebrow {
-  font-family: var(--mono); font-size: 10.5px;
-  color: var(--mut); letter-spacing: 0.16em;
+  font-size: 10.5px;
+  color: var(--text-4); letter-spacing: 0.16em;
   text-transform: uppercase;
   display: inline-flex; align-items: center; gap: 10px;
   margin-bottom: 28px;
+  font-weight: 700;
 }
 .pv-gate-eyebrow::before {
-  content: ""; width: 22px; height: 1px; background: var(--mut-2);
+  content: ""; width: 22px; height: 1px; background: var(--text-4);
 }
 
 .pv-gate-stack {
@@ -114,11 +116,10 @@ const CSS = `
   position: absolute;
   width: 70px; height: 88px;
   background: var(--surface);
-  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 9px 7px;
   display: flex; flex-direction: column; gap: 4px;
-  box-shadow: 0 8px 18px -12px rgba(20,20,10,.22);
+  box-shadow: 0 0 0 .5px var(--hairline), 0 8px 18px -12px rgba(20,22,28,.25);
 }
 .pv-gate-stack .paper::before {
   content: ""; display: block; height: 5px; width: 60%;
@@ -126,7 +127,7 @@ const CSS = `
 }
 .pv-gate-stack .paper i {
   display: block; height: 2px; border-radius: 1px;
-  background: var(--line-2);
+  background: #EAEBEE;
 }
 .pv-gate-stack .paper i:nth-child(2) { width: 94%; }
 .pv-gate-stack .paper i:nth-child(3) { width: 82%; }
@@ -137,38 +138,38 @@ const CSS = `
 .pv-gate-stack .p3 { top: 12px; left: 46px; transform: rotate(7deg); }
 
 .pv-gate h1 {
-  font-family: var(--serif); font-weight: 400;
+  font-family: var(--display); font-weight: 700;
   font-size: clamp(34px, 9vw, 46px);
   line-height: 1.08;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.035em;
   margin: 0 0 18px;
   color: var(--ink);
   text-wrap: balance;
 }
 .pv-gate h1 em {
-  font-style: italic; color: var(--accent-ink);
+  font-style: italic;
 }
 
 .pv-gate-lead {
   font-size: 15.5px; line-height: 1.55;
-  color: var(--mut); font-weight: 450;
+  color: var(--text-2); font-weight: 400;
   margin: 0 0 10px;
   max-width: 38ch;
   text-wrap: pretty;
 }
-.pv-gate-lead strong { color: var(--ink-2); font-weight: 500; }
+.pv-gate-lead strong { color: var(--ink-2); font-weight: 600; }
 
 .pv-gate-sub {
   font-size: 14px; line-height: 1.55;
-  color: var(--mut); font-weight: 450;
+  color: var(--text-2);
   margin: 0 0 32px;
   max-width: 40ch;
 }
 
 .pv-gate-specs {
   width: 100%;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  border-top: 1px solid #E6E7EA;
+  border-bottom: 1px solid #E6E7EA;
   padding: 16px 0;
   margin-bottom: 28px;
   display: grid; grid-template-columns: 1fr 1fr;
@@ -178,16 +179,18 @@ const CSS = `
   display: flex; flex-direction: column; gap: 3px;
 }
 .pv-gate-spec-label {
-  font-family: var(--mono); font-size: 9.5px;
-  color: var(--mut-2); letter-spacing: 0.14em;
+  font-size: 9.5px;
+  color: var(--text-4); letter-spacing: 0.14em;
   text-transform: uppercase;
+  font-weight: 700;
 }
 .pv-gate-spec-value {
-  font-family: var(--mono); font-size: 12px;
-  color: var(--ink-2); font-weight: 500;
+  font-size: 12px;
+  color: var(--ink-2); font-weight: 600;
   letter-spacing: -.005em;
+  font-variant-numeric: tabular-nums;
 }
-.pv-gate-spec-value.ok { color: var(--accent-ink); }
+.pv-gate-spec-value.ok { color: var(--accent-on); }
 
 .pv-gate-actions {
   display: flex; flex-direction: column; gap: 10px;
@@ -199,32 +202,33 @@ const CSS = `
   padding: 13px 20px;
   background: var(--ink); color: #fff;
   border: 1px solid var(--ink);
-  border-radius: 999px;
-  font-family: inherit; font-size: 14.5px; font-weight: 500;
+  border-radius: 12px;
+  font-family: inherit; font-size: 14.5px; font-weight: 600;
   letter-spacing: -.005em;
   cursor: pointer; text-decoration: none;
   transition: background .15s ease, transform .15s ease;
 }
-.pv-gate-btn:hover { background: #222; }
+.pv-gate-btn:hover { background: #23262B; }
 .pv-gate-btn:active { transform: translateY(1px); }
 .pv-gate-btn .arr { transition: transform .2s ease; }
 .pv-gate-btn:hover .arr { transform: translateX(2px); }
 
 .pv-gate-proceed {
   background: none; border: 0; cursor: pointer;
-  font-family: var(--mono); font-size: 11.5px;
-  color: var(--mut); letter-spacing: 0.04em;
+  font-size: 11.5px;
+  color: var(--text-3); letter-spacing: 0.04em;
   padding: 10px 0 2px;
   text-align: left;
   display: inline-flex; align-items: center; gap: 8px;
   text-decoration: none;
   transition: color .15s ease;
   align-self: flex-start;
+  font-family: inherit;
 }
 .pv-gate-proceed:hover { color: var(--ink-2); }
 .pv-gate-proceed u {
   text-decoration: underline;
-  text-decoration-color: var(--mut-2);
+  text-decoration-color: var(--text-4);
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
 }
@@ -232,14 +236,14 @@ const CSS = `
 .pv-gate-foot {
   margin-top: 32px;
   padding-top: 24px;
-  border-top: 1px solid var(--line);
-  font-family: var(--mono); font-size: 10.5px;
-  color: var(--mut); letter-spacing: 0.06em;
+  border-top: 1px solid #E6E7EA;
+  font-size: 10.5px;
+  color: var(--text-4); letter-spacing: 0.06em;
   display: flex; justify-content: space-between; align-items: center;
   gap: 12px; flex-wrap: wrap;
 }
-.pv-gate-foot .left { color: var(--mut-2); }
-.pv-gate-foot a { color: var(--mut); text-decoration: none; }
+.pv-gate-foot .left { color: var(--text-4); }
+.pv-gate-foot a { color: var(--text-3); text-decoration: none; }
 .pv-gate-foot a:hover { color: var(--ink-2); }
 
 @media (min-width: 480px) {

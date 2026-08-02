@@ -1,7 +1,8 @@
 import React from 'react';
 
-export const Ic = ({ size = 16, fill = "none", sw = 1.75, vb = "0 0 24 24", style, children }) => (
+export const Ic = ({ size = 16, fill = "none", sw = 1.75, vb = "0 0 24 24", style, className, children }) => (
   <svg
+    className={className}
     width={size}
     height={size}
     viewBox={vb}
@@ -103,6 +104,13 @@ export const IShare = (p) => (
 export const IChat = (p) => (
   <Ic {...p}>
     <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
+  </Ic>
+);
+/** Stacked bubbles — chat history / view all chats */
+export const IChats = (p) => (
+  <Ic {...p}>
+    <path d="M8 9.5h9.5a1.75 1.75 0 0 1 1.75 1.75v4.25a1.75 1.75 0 0 1-1.75 1.75H12.2L9.5 19.5v-2.25H8A1.75 1.75 0 0 1 6.25 15.5v-4.25A1.75 1.75 0 0 1 8 9.5z" />
+    <path d="M7.2 9.35V7.75A1.75 1.75 0 0 1 8.95 6h9.3A1.75 1.75 0 0 1 20 7.75v4.1" />
   </Ic>
 );
 export const IMore = (p) => (

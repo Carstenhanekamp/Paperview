@@ -71,6 +71,83 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
     hideTimerRef.current = setTimeout(() => setHoveredCitation(null), 120);
   };
 
+  const renderSourceCard = (c, ci, { list = false } = {}) => {
+    const isWebCitation = c?.kind === "web" || Boolean(c?.url);
+    const sectionLabel = c?.section
+      ? (/^§/.test(String(c.section)) ? c.section : `§${c.section}`)
+      : null;
+    const pageLabel = c?.page ? `page ${c.page}` : null;
+    const metaBits = [
+      sectionLabel,
+      pageLabel,
+      isWebCitation ? (c.source || "Web") : null,
+      !isWebCitation && !pageLabel && !sectionLabel ? (c.title || c.fileName || fileName || null) : null,
+    ].filter(Boolean);
+
+    const open = () => onCitationClick?.(c);
+
+    if (list) {
+      return (
+        <button
+          key={`src-${ci}`}
+          type="button"
+          className="source-card source-card-list"
+          onClick={open}
+        >
+          <span className="source-card-num" aria-hidden="true">{ci + 1}</span>
+          <div className="source-card-body">
+            {c.text ? (
+              <div className="source-card-text">
+                {isWebCitation ? c.text : `"${c.text}"`}
+              </div>
+            ) : (
+              <div className="source-card-text">
+                {c.title || c.fileName || fileName || `Source ${ci + 1}`}
+              </div>
+            )}
+            <div className="source-card-meta">
+              <span>{metaBits.join(" · ") || `Source ${ci + 1}`}</span>
+              <span className="source-card-jump">{isWebCitation ? "Open →" : "Jump →"}</span>
+            </div>
+          </div>
+        </button>
+      );
+    }
+
+    return (
+      <div
+        className="source-card"
+        role="button"
+        tabIndex={0}
+        onClick={open}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            open();
+          }
+        }}
+      >
+        <div className="source-card-top">
+          <IFile size={12} style={{ color: "#6f7786", flexShrink: 0 }} />
+          <span className="source-card-file">{c.title || c.fileName || fileName || `Source ${ci + 1}`}</span>
+          {isWebCitation ? (
+            <span className="source-card-page">{c.source || "Web"}</span>
+          ) : c.page ? (
+            <span className="source-card-page">p.{c.page}</span>
+          ) : null}
+          <span className="source-card-jump">{isWebCitation ? "Open →" : "Jump →"}</span>
+        </div>
+        {c.section ? <div className="source-card-section">{c.section}</div> : null}
+        {c.note ? <div className="source-card-note">{c.note}</div> : null}
+        {c.text ? (
+          <div className="source-card-text">
+            {isWebCitation ? c.text : `"${c.text}"`}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderCitationAnchor = (ci, key) => {
     const c = citations[ci];
     if (!c) return null;
@@ -110,36 +187,7 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
             onMouseEnter={() => showPopover(anchorKey, ci)}
             onMouseLeave={scheduleHide}
           >
-            <div
-              className="source-card"
-              role="button"
-              tabIndex={0}
-              onClick={() => onCitationClick?.(c)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onCitationClick?.(c);
-                }
-              }}
-            >
-              <div className="source-card-top">
-                <IFile size={12} style={{ color: "#6f7786", flexShrink: 0 }} />
-                <span className="source-card-file">{c.title || c.fileName || fileName || `Source ${ci + 1}`}</span>
-                {isWebCitation ? (
-                  <span className="source-card-page">{c.source || "Web"}</span>
-                ) : c.page ? (
-                  <span className="source-card-page">p.{c.page}</span>
-                ) : null}
-                <span className="source-card-jump">{isWebCitation ? "Open" : "Jump"}</span>
-              </div>
-              {c.section ? <div className="source-card-section">{c.section}</div> : null}
-              {c.note ? <div className="source-card-note">{c.note}</div> : null}
-              {c.text ? (
-                <div className="source-card-text">
-                  {isWebCitation ? c.text : `"${c.text}"`}
-                </div>
-              ) : null}
-            </div>
+            {renderSourceCard(c, ci)}
           </div>
         )}
       </span>
@@ -356,8 +404,15 @@ export default function InlineCitedAnswer({ text, citations = [], fileName, onCi
   };
 
   return (
-    <div className="cited-answer-body">
-      {blocks.map((block, bi) => renderBlock(block, bi))}
+    <div className="cited-answer">
+      <div className="cited-answer-body">
+        {blocks.map((block, bi) => renderBlock(block, bi))}
+      </div>
+      {citations.length > 0 ? (
+        <div className="cited-sources" aria-label="Sources">
+          {citations.map((c, ci) => renderSourceCard(c, ci, { list: true }))}
+        </div>
+      ) : null}
     </div>
   );
 }
