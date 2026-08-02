@@ -5,3 +5,17 @@ dist
 !.env.example
 .vite
 .claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# Local Cursor / agent artifacts
+.cursor/plans/
+
+# Local verification / design handoff (not shipped)
+.tmp-verify/
+.smoke-papers/
+design_handoff_paperview_4a/
+
+# Draft docs not ready to land
+docs/pay-per-use-plan.md
