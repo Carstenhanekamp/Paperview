@@ -28,7 +28,11 @@ export default function SettingsModal({
   handleUnlockRememberedApiKey,
   handleSaveSettingsApiKey,
   setRememberedApiKeyAvailable,
+  auth = null,
 }) {
+  const profile = auth?.profile;
+  const userEmail = auth?.user?.email || profile?.email || '';
+
   return (
     <div className="ov" onClick={closeSettingsModal}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -36,6 +40,36 @@ export default function SettingsModal({
           <span className="m-title">Settings</span>
           <button className="m-x" onClick={closeSettingsModal}><IClose /></button>
         </div>
+
+        {auth?.configured ? (
+          <div className="settings-field" style={{ marginBottom: 18 }}>
+            <label className="settings-label">Account</label>
+            {auth.user ? (
+              <>
+                <p className="settings-info" style={{ marginBottom: 8 }}>
+                  Signed in as <strong>{userEmail || 'your email'}</strong>
+                </p>
+                <p className="settings-info" style={{ marginBottom: 8 }}>
+                  {profile?.founding
+                    ? `Founding member #${profile.founder_number} · Credits: coming — grant ${profile.launch_grant_status === 'pending' ? 'pending (€2 at launch)' : profile.launch_grant_status}`
+                    : 'On the credits waitlist · BYOK stays free forever'}
+                </p>
+                <button
+                  className="btn-sec"
+                  type="button"
+                  disabled={auth.authBusy}
+                  onClick={() => auth.signOut()}
+                >
+                  {auth.authBusy ? 'Signing out…' : 'Sign out'}
+                </button>
+              </>
+            ) : (
+              <p className="settings-info">
+                No account in this browser. Claim a founding spot or join the waitlist from the homepage pricing section.
+              </p>
+            )}
+          </div>
+        ) : null}
 
         <div className="settings-field">
           <label className="settings-label">OpenAI API Key</label>

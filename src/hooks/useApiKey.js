@@ -27,6 +27,18 @@ export function useApiKey() {
   useEffect(() => {
     clearLegacyStoredApiKey();
     setRememberedApiKeyAvailable(hasRememberedApiKey());
+    if (!ENV_API_KEY) {
+      try {
+        const fromWelcome = sessionStorage.getItem('pv.welcome.apikey');
+        if (fromWelcome) {
+          setApiKey(fromWelcome);
+          setApiKeySource('memory');
+          sessionStorage.removeItem('pv.welcome.apikey');
+        }
+      } catch {
+        /* ignore */
+      }
+    }
   }, []);
 
   const resetSettingsInputs = useCallback(() => {
@@ -142,5 +154,7 @@ export function useApiKey() {
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
     setRememberedApiKeyAvailable,
+    setApiKey,
+    setApiKeySource,
   };
 }

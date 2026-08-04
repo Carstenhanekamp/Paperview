@@ -31,6 +31,7 @@ import {
   buildFolderPath,
 } from './miscUtils';
 import SettingsModal from './components/SettingsModal';
+import FoundingWelcome from './components/FoundingWelcome';
 import LibraryView from './components/LibraryView';
 import LibraryPaperDetail from './components/LibraryPaperDetail';
 import BibtexPreviewModal from './components/BibtexPreviewModal';
@@ -42,6 +43,7 @@ import UploadModal from './components/UploadModal';
 import FolderPermModal from './components/FolderPermModal';
 import SelectionToolbar from './components/SelectionToolbar';
 import ExplainPopover from './components/ExplainPopover';
+import { useAuthContext } from './AuthContext';
 import { useApiKey } from './hooks/useApiKey';
 import { useRequestRuns } from './hooks/useRequestRun';
 import { usePanelResize } from './hooks/usePanelResize';
@@ -135,6 +137,7 @@ export default function PaperviewApp() {
 
   const [privacyAccepted, setPrivacyAccepted] = useState(() => !!localStorage.getItem('pv-privacy-ok'));
   const [showFolderPermModal, setShowFolderPermModal] = useState(false);
+  const auth = useAuthContext();
   const {
     apiKey,
     apiKeySource,
@@ -163,6 +166,8 @@ export default function PaperviewApp() {
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
     setRememberedApiKeyAvailable,
+    setApiKey,
+    setApiKeySource,
   } = useApiKey();
   const [edgeToast, setEdgeToast] = useState(false);
   const [debugCitations] = useState(() => {
@@ -1949,8 +1954,19 @@ export default function PaperviewApp() {
             handleUnlockRememberedApiKey={handleUnlockRememberedApiKey}
             handleSaveSettingsApiKey={handleSaveSettingsApiKey}
             setRememberedApiKeyAvailable={setRememberedApiKeyAvailable}
+            auth={auth}
           />
         )}
+
+        <FoundingWelcome
+          auth={auth}
+          apiKey={apiKey}
+          onOpenSettings={() => openSettingsModal(apiKey)}
+          onSaveApiKey={(key) => {
+            setApiKey(key);
+            setApiKeySource('memory');
+          }}
+        />
 
         {edgeToast && (
           <div className="edge-toast">

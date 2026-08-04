@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuthContext } from "./AuthContext";
+import FoundingSignup from "./components/FoundingSignup";
+import FoundingWelcome from "./components/FoundingWelcome";
 
 const FONT_URL =
   "https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,300;0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,300;1,7..72,400;1,7..72,500;1,7..72,600;1,7..72,700&display=swap";
@@ -7,6 +10,9 @@ const FONT_URL =
 const GITHUB_URL = "https://github.com/Carstenhanekamp/Paperview/";
 const GITHUB_REPO = "Carstenhanekamp/paperview";
 const OPENAI_KEY_URL = "https://platform.openai.com/api-keys";
+/** Source for the hero mock PDF (Joshi 2025). */
+const MOCK_PAPER_URL =
+  "https://www.researchgate.net/publication/391978285_Comprehensive_Review_of_AI_Hallucinations_Impacts_and_Mitigation_Strategies_for_Financial_and_Business_Applications";
 const STAR_CACHE_KEY = "pv.gh.stars.v1";
 const STAR_CACHE_TTL = 60 * 60 * 1000;
 
@@ -254,6 +260,91 @@ const CSS = `
   font-size: 12.5px; font-weight: 500;
   color: rgba(255,255,255,.9);
   text-shadow: 0 1px 8px rgba(12,18,26,.6);
+  background: none; border: 0; padding: 0;
+  cursor: pointer; text-align: left;
+  font-family: inherit;
+  transition: color .22s cubic-bezier(0.32,0.72,0,1);
+}
+.pv-landing .hero-caption:hover { color: #fff; }
+
+/* Founding band — sits under the hero, owns the conversion moment */
+.pv-landing .founding-band {
+  position: relative;
+  z-index: 2;
+  max-width: 1280px;
+  margin: -36px auto 0;
+  padding: 0 42px;
+}
+.pv-landing .founding-band-shell {
+  padding: 6px;
+  border-radius: 28px;
+  background: rgba(20,22,28,.035);
+  box-shadow: inset 0 0 0 .5px rgba(20,22,28,.08);
+}
+.pv-landing .founding-band-core {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: 28px 48px;
+  align-items: center;
+  padding: 34px 40px;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.9),
+    0 24px 56px -36px rgba(12,16,28,.35);
+}
+.pv-landing .founding-band-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 38ch;
+}
+.pv-landing .founding-band-kicker {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-on);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.pv-landing .founding-band-kicker .pulse {
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(85,105,127,.45);
+  animation: pv-founding-pulse 2.4s cubic-bezier(0.32,0.72,0,1) infinite;
+}
+.pv-landing .founding-band-title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -.03em;
+  color: var(--ink);
+}
+.pv-landing .founding-band-lead {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.pv-landing .founding-band-form {
+  min-width: 0;
+}
+@keyframes pv-founding-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(85,105,127,.4); }
+  70% { box-shadow: 0 0 0 8px rgba(85,105,127,0); }
+  100% { box-shadow: 0 0 0 0 rgba(85,105,127,0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pv-landing .founding-band-kicker .pulse { animation: none; }
 }
 
 /* Right-anchored mock: 24px bleed matches 1280 handoff arithmetic;
@@ -398,42 +489,96 @@ const CSS = `
   background: var(--desk);
   box-shadow: 0 0 0 .5px var(--hairline);
   overflow: hidden;
-  display: flex; justify-content: center;
+  display: flex; justify-content: center; align-items: flex-start;
   padding-top: 14px;
   position: relative;
 }
 .pv-landing .win-sheet {
-  width: 100%; max-width: 344px;
+  /* Size from the page image; never force a mismatched box + object-fit:cover
+     (that was cropping the left margin of the PDF). Reader clips the bottom. */
+  position: relative;
+  width: min(100%, 344px);
+  max-height: 100%;
   background: #fff; border-radius: 3px;
   box-shadow: 0 0 0 .5px var(--hairline), 0 10px 24px -14px rgba(20,22,28,.32);
-  padding: 16px 20px 0;
   overflow: hidden;
+  align-self: flex-start;
+  flex-shrink: 0;
 }
-.pv-landing .win-sheet-hd {
-  display: flex; justify-content: space-between;
-  font-size: 4.4px; color: #9BA0A8; line-height: 1.4;
-  border-bottom: .5px solid #EDEEF1;
-  padding-bottom: 4px; margin-bottom: 7px;
+.pv-landing .win-sheet-page {
+  position: relative;
+  width: 100%;
 }
-.pv-landing .win-sheet-title {
-  font-family: Georgia, serif; font-weight: 500;
-  font-size: 10px; line-height: 1.2; text-align: center;
-  color: var(--ink); margin-bottom: 4px;
+.pv-landing .win-sheet-img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
-.pv-landing .win-sheet-author {
-  font-size: 5px; color: #7E838C; text-align: center;
-  line-height: 1.5; margin-bottom: 8px;
-}
-.pv-landing .win-sheet-p {
-  font-family: Georgia, serif;
-  font-size: 5.6px; line-height: 1.52;
-  color: #2A2D33; text-align: justify;
-  margin: 0 0 4px;
-}
+/* Citation band — PDF coords for the chat quote on page 1 (A4). */
 .pv-landing .win-sheet-hl {
+  position: absolute;
+  left: 8.57%;
+  top: 61.45%;
+  width: 38.89%;
+  height: 4%;
+  border-radius: 2px;
   background: var(--highlight);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+  mix-blend-mode: multiply;
+  box-shadow: inset 0 0 0 .5px rgba(85,105,127,.22);
+  pointer-events: none;
+  animation: pv-win-hl-in .55s cubic-bezier(0.32, 0.72, 0, 1) .35s both;
+}
+@keyframes pv-win-hl-in {
+  from { opacity: 0; transform: scaleY(.85); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+.pv-landing .win-sheet-open {
+  position: absolute;
+  left: 50%; top: 42%;
+  z-index: 2;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 12px;
+  border-radius: 8px;
+  background: rgba(252,252,253,.94);
+  color: var(--ink);
+  font-size: 11px; font-weight: 600; letter-spacing: -.01em;
+  text-decoration: none;
+  box-shadow:
+    0 0 0 .5px rgba(20,22,28,.16),
+    0 10px 28px -10px rgba(12,16,28,.45);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  transform: translate(-50%, 6px);
+  pointer-events: none;
+  transition: opacity .22s cubic-bezier(0.32, 0.72, 0, 1),
+    transform .22s cubic-bezier(0.32, 0.72, 0, 1),
+    background .15s ease;
+}
+.pv-landing .win-sheet-open svg { opacity: .7; }
+.pv-landing .win-sheet::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: rgba(16, 20, 28, .0);
+  pointer-events: none;
+  transition: background .22s ease;
+  z-index: 1;
+}
+.pv-landing .win-sheet:hover::after,
+.pv-landing .win-sheet:focus-within::after {
+  background: rgba(16, 20, 28, .18);
+}
+.pv-landing .win-sheet:hover .win-sheet-open,
+.pv-landing .win-sheet:focus-within .win-sheet-open {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.pv-landing .win-sheet-open:hover {
+  background: #fff;
+}
+.pv-landing .win-sheet-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .pv-landing .win-toolbar {
   position: absolute; left: 50%; bottom: 11px;
@@ -529,7 +674,7 @@ const CSS = `
 
 /* ── Feature row ── */
 .pv-landing .features-row {
-  padding: 34px 42px 0;
+  padding: 56px 42px 0;
   max-width: 1280px; margin: 0 auto;
 }
 .pv-landing .features-grid {
@@ -959,6 +1104,12 @@ const CSS = `
     transform: scale(.85); transform-origin: top center;
   }
   .pv-landing .nav-links { display: none; }
+  .pv-landing .founding-band { margin-top: -12px; padding: 0 24px; }
+  .pv-landing .founding-band-core {
+    grid-template-columns: 1fr;
+    gap: 22px;
+    padding: 28px 24px;
+  }
 }
 @media (max-width: 900px) {
   .pv-landing .features-grid { grid-template-columns: 1fr 1fr; }
@@ -981,6 +1132,10 @@ const CSS = `
   .pv-landing .hero { min-height: auto; }
   .pv-landing .hero-title { font-size: 36px; }
   .pv-landing .hero-mock-wrap { transform: scale(.62); width: 100%; }
+  .pv-landing .founding-band { padding: 0 16px; margin-top: 8px; }
+  .pv-landing .founding-band-title { font-size: 26px; }
+  .pv-landing .founding-band-core { padding: 22px 18px; border-radius: 18px; }
+  .pv-landing .founding-band-shell { border-radius: 22px; }
   .pv-landing .win { width: 810px; }
   .pv-landing .features-row,
   .pv-landing .section { padding-left: 20px; padding-right: 20px; }
@@ -1099,8 +1254,8 @@ function GhGlassStar() {
 
 function ProductWindow() {
   return (
-    <div className="win" aria-hidden="true">
-      <div className="win-side">
+    <div className="win">
+      <div className="win-side" aria-hidden="true">
         <div className="win-lights">
           <span className="win-light r" /><span className="win-light y" /><span className="win-light g" />
         </div>
@@ -1146,7 +1301,7 @@ function ProductWindow() {
       </div>
 
       <div className="win-main">
-        <div className="win-tabs">
+        <div className="win-tabs" aria-hidden="true">
           <div className="win-tab">
             <span className="win-tab-dot" />
             <span className="win-tab-title">Comprehensive Review of AI Hallucinations</span>
@@ -1157,23 +1312,38 @@ function ProductWindow() {
         <div className="win-body">
           <div className="win-reader">
             <div className="win-sheet">
-              <div className="win-sheet-hd">
-                <span>International Journal of Computer Applications Technology and Research</span>
-                <span>Volume 14–Issue 06, 38–50, 2025</span>
+              <div className="win-sheet-page" aria-hidden="true">
+                <img
+                  className="win-sheet-img"
+                  src="/media/mock-paper-hallucinations-p1.jpg"
+                  alt=""
+                  width="720"
+                  height="1018"
+                  decoding="async"
+                />
+                <div className="win-sheet-hl" />
               </div>
-              <div className="win-sheet-title">Comprehensive Review of AI Hallucinations: Impacts and Mitigation Strategies for Financial and Business Applications</div>
-              <div className="win-sheet-author">Satyadhar Joshi<br />Independent, Alumnus, International MBA, Bar-Ilan University, Israel</div>
-              <p className="win-sheet-p"><strong>Abstract:</strong> This paper investigates the causes, implications, and mitigation strategies of AI hallucinations, with a focus on generative AI systems.</p>
-              <p className="win-sheet-p"><span className="win-sheet-hl">AI hallucinations—when artificial intelligence systems generate information that is false, misleading, or entirely fabricated—have emerged as a major concern in the growing field of generative AI.</span> These hallucinations are often presented with high confidence and fluency, making them difficult for users to detect.</p>
+              <a
+                className="win-sheet-open"
+                href={MOCK_PAPER_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Read paper
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M7 17 17 7" />
+                  <path d="M8 7h9v9" />
+                </svg>
+              </a>
             </div>
-            <div className="win-toolbar">
+            <div className="win-toolbar" aria-hidden="true">
               <span>1 <span className="muted">/ 13</span></span>
               <span className="sep" />
-              <span>140%</span>
+              <span>100%</span>
               <span className="win-hl-btn">Highlight</span>
             </div>
           </div>
-          <div className="win-chat">
+          <div className="win-chat" aria-hidden="true">
             <div className="win-chat-hd">Why models hallucinate</div>
             <div className="win-user">What makes hallucinations so hard to spot?</div>
             <div className="win-answer">
@@ -1231,6 +1401,7 @@ const FAQ_ITEMS = [
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  const auth = useAuthContext();
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -1244,9 +1415,9 @@ export default function LandingPage() {
     if (!document.querySelector('style[data-paperview-landing]')) {
       const style = document.createElement("style");
       style.setAttribute("data-paperview-landing", "1");
-      style.textContent = CSS;
       document.head.appendChild(style);
     }
+    document.querySelector('style[data-paperview-landing]').textContent = CSS;
     document.body.style.overflow = "auto";
     document.body.style.height = "auto";
     document.body.style.background = "#FAFAFA";
@@ -1287,9 +1458,17 @@ export default function LandingPage() {
               <button type="button" className="nav-link" onClick={() => scrollTo("features")}>Features</button>
               <button type="button" className="nav-link" onClick={() => scrollTo("privacy")}>Privacy</button>
               <button type="button" className="nav-link" onClick={() => scrollTo("pricing")}>Pricing</button>
+              <button type="button" className="nav-link" onClick={() => scrollTo("founding")}>Founding</button>
               <a className="nav-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">Docs</a>
             </div>
             <div className="nav-right">
+              {auth.profile?.founding ? (
+                <button type="button" className="nav-link" onClick={() => scrollTo("founding")} title="Founding member">
+                  #{auth.profile.founder_number}
+                </button>
+              ) : auth.user ? (
+                <button type="button" className="nav-link" onClick={() => scrollTo("founding")}>Waitlist</button>
+              ) : null}
               <GhGlassStar />
               <button type="button" className="nav-cta" onClick={openApp}>Open Paperview</button>
             </div>
@@ -1300,7 +1479,7 @@ export default function LandingPage() {
           <div className="hero-text">
             <div className="hero-badge">
               <span className="dot" />
-              <span>Open source · AGPL-3.0 · no account</span>
+              <span>Open source · AGPL-3.0 · local-first</span>
             </div>
             <h1 className="hero-title">Every answer walks you back to the page it came from</h1>
             <p className="hero-copy">
@@ -1315,13 +1494,41 @@ export default function LandingPage() {
               </button>
               <a className="btn-glass" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">Read the source</a>
             </div>
-            <span className="hero-caption">Free forever · Chrome &amp; Edge · nothing leaves your machine</span>
+            <button
+              type="button"
+              className="hero-caption"
+              onClick={() => scrollTo("founding")}
+            >
+              Founding members — €2 when credits launch ↓
+            </button>
           </div>
           <div className="hero-mock-wrap">
             <ProductWindow />
           </div>
         </div>
       </header>
+
+      <section className="founding-band" id="founding" aria-labelledby="founding-band-title">
+        <div className="founding-band-shell">
+          <div className="founding-band-core">
+            <div className="founding-band-copy">
+              <span className="founding-band-kicker">
+                <span className="pulse" aria-hidden="true" />
+                Founding launch
+              </span>
+              <h2 className="founding-band-title" id="founding-band-title">
+                First 100 get €2 credits when pay-per-use ships
+              </h2>
+              <p className="founding-band-lead">
+                Magic-link signup now. Founding spots get the grant at launch; after 100, you join the waitlist. BYOK stays free forever either way.
+              </p>
+            </div>
+            <div className="founding-band-form">
+              <FoundingSignup auth={auth} />
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="features-row" id="features">
         <div className="features-grid">
@@ -1468,20 +1675,20 @@ export default function LandingPage() {
             </button>
           </div>
           <div className="price-card muted">
-            <span className="price-badge grey">Coming later</span>
+            <span className="price-badge grey">Founding · limited</span>
             <h3 className="price-later-title">Top up credits instead</h3>
             <p className="price-copy">
-              If you&apos;d rather not hold an OpenAI key, load a balance and spend it as you read. Still pay-per-use — still no monthly plan.
+              Prefer not to hold an OpenAI key? Claim one of 100 founding spots for €2 credits when pay-per-use launches — or join the waitlist after. Still pay-per-use. BYOK stays free forever.
             </p>
             <div className="price-bullets">
-              <div className="price-bullet"><span className="dot" />Prepaid balance, no expiry</div>
-              <div className="price-bullet"><span className="dot" />Same local-first architecture</div>
+              <div className="price-bullet"><span className="dot" />First 100 founders get €2 at launch</div>
+              <div className="price-bullet"><span className="dot" />Prepaid balance, no expiry (when live)</div>
               <div className="price-bullet"><span className="dot" />Bring your own key stays free</div>
             </div>
-            <div className="notify-row">
-              <input type="email" placeholder="you@university.edu" readOnly aria-label="Email for notifications" />
-              <button type="button" className="notify-btn">Notify me</button>
-            </div>
+            <button type="button" className="btn-accent" onClick={() => scrollTo("founding")}>
+              Claim a founding spot
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
+            </button>
           </div>
         </div>
       </section>
@@ -1505,6 +1712,11 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <FoundingWelcome
+        auth={auth}
+        onOpenApp={openApp}
+      />
+
       <footer className="site-footer">
         <img className="footer-bg" src="/media/photo-nature.jpg" alt="" />
         <div className="footer-overlay" />
@@ -1512,8 +1724,7 @@ export default function LandingPage() {
           <div className="footer-cta-row">
             <h3 className="footer-cta-title">Open a folder. Ask the first question.</h3>
             <div className="footer-email-pill">
-              <input type="email" placeholder="you@university.edu" readOnly aria-label="Email" />
-              <button type="button" className="footer-email-btn" onClick={openApp}>Open Paperview</button>
+              <button type="button" className="footer-email-btn" onClick={openApp} style={{ marginLeft: "auto" }}>Open Paperview</button>
             </div>
           </div>
           <div className="footer-rule" />
