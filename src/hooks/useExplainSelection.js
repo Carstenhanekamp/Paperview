@@ -6,6 +6,7 @@ export function useExplainSelection({
   apiKey,
   openSettingsModal,
   selectedModel,
+  getOpenAIRequestOptions,
 }) {
   const [explainState, setExplainState] = useState(null);
   const abortRef = useRef(null);
@@ -48,7 +49,9 @@ export function useExplainSelection({
               },
             ],
           },
-          { signal: controller.signal }
+          typeof getOpenAIRequestOptions === 'function'
+            ? getOpenAIRequestOptions({ signal: controller.signal, action: 'explain' })
+            : { signal: controller.signal }
         );
 
         const answer = extractResponseOutputText(data) || 'No explanation returned.';
@@ -77,7 +80,7 @@ export function useExplainSelection({
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [apiKey, openSettingsModal, selectedModel]
+    [apiKey, openSettingsModal, selectedModel, getOpenAIRequestOptions]
   );
 
   return {

@@ -1,0 +1,46 @@
+<!--
+  Paste into Supabase → Authentication → Email Templates → Confirm signup
+  Subject: Confirm your Paperview founding spot
+  Keep {{ .ConfirmationURL }} exactly as written.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Confirm your Paperview founding spot</title>
+</head>
+<body style="margin:0;padding:0;background:#FAFAFA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#17181A;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#FAFAFA;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;background:#FFFFFF;border-radius:16px;border:1px solid rgba(20,22,28,0.10);overflow:hidden;">
+          <tr>
+            <td style="padding:28px 28px 8px;">
+              <p style="margin:0 0 16px;font-size:11px;font-weight:600;letter-spacing:0.16em;text-transform:uppercase;color:#55697F;">Paperview</p>
+              <h1 style="margin:0 0 12px;font-family:Georgia,'Times New Roman',serif;font-size:26px;line-height:1.25;font-weight:700;color:#17181A;">Confirm your founding spot</h1>
+              <p style="margin:0 0 20px;font-size:15px;line-height:1.55;color:#5D616A;">
+                Thanks for joining Paperview. Confirm your email to lock in your founding member status — the first 100 get €2 of credits when pay-per-use launches. Bring-your-own-key stays free forever.
+              </p>
+              <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#55697F;color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:999px;">
+                Confirm email
+              </a>
+              <p style="margin:20px 0 0;font-size:12px;line-height:1.5;color:#9095A0;">
+                If the button doesn’t work, paste this link into your browser:<br />
+                <span style="word-break:break-all;color:#55697F;">{{ .ConfirmationURL }}</span>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 28px 24px;">
+              <p style="margin:0;font-size:11px;line-height:1.5;color:#9CA0A7;">
+                You’re receiving this because someone used this address on Paperview. If that wasn’t you, you can ignore this email.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

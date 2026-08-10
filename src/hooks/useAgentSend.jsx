@@ -52,6 +52,7 @@ export function useAgentSend({
   selectedModel,
   apiKey,
   openSettingsModal,
+  getOpenAIRequestOptions,
   currentAgentMessages,
   agentContextPapers,
   selectedAgentTool,
@@ -350,6 +351,14 @@ export function useAgentSend({
 
     try {
       const usageTotals = createUsageTotals();
+      const openaiOpts = (extra = {}) =>
+        (typeof getOpenAIRequestOptions === 'function'
+          ? getOpenAIRequestOptions({
+              signal: controller.signal,
+              action: 'agent',
+              ...extra,
+            })
+          : { signal: controller.signal });
       const conversationHistory = currentAgentMessages.slice(-8);
       const contextPapers = agentContextPapers;
       const readyContextPapers = [];
@@ -571,7 +580,7 @@ export function useAgentSend({
                 content: "Return the final answer again from scratch as one complete JSON object only. Keep the citations and paper_results complete, and if you need to save tokens, compress the answer wording before omitting citations. Do not call any more tools.",
               },
             ],
-          }, { signal: controller.signal });
+          }, openaiOpts());
           ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, current?.usage);
           const finalReasoning = extractReasoningSummary(current);
@@ -595,7 +604,7 @@ export function useAgentSend({
           ...basePayload,
           ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           input: passInput,
-        }, { signal: controller.signal });
+        }, openaiOpts());
         ensureRequestRunActive(agentRequestRef, token);
         addUsageTotals(usageTotals, responseData?.usage);
         collectWebSources(
@@ -744,7 +753,7 @@ export function useAgentSend({
             ...basePayload,
             previous_response_id: responseData.id,
             input: toolOutputs,
-          }, { signal: controller.signal });
+          }, openaiOpts());
           ensureRequestRunActive(agentRequestRef, token);
           addUsageTotals(usageTotals, responseData?.usage);
           collectWebSources(

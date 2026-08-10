@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { IClose } from '../icons';
 import { clearRememberedApiKey } from '../apiKeyStorage';
 
@@ -28,7 +28,53 @@ export default function SettingsModal({
   handleUnlockRememberedApiKey,
   handleSaveSettingsApiKey,
   setRememberedApiKeyAvailable,
+  auth = null,
+  wallet = null,
 }) {
+  const profile = auth?.profile;
+  const userEmail = auth?.user?.email || profile?.email || '';
+  const [inviteCode, setInviteCode] = useState('');
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState('');
+
+  const creditStatusLine = () => {
+    if (wallet && typeof wallet.balanceMicrocents === 'number') {
+      if (wallet.hasCredit) return `Tryout credit · ${wallet.balanceLabel} left`;
+      if (profile?.launch_grant_status === 'granted' || wallet.balanceMicrocents === 0) {
+        return 'Tryout credit · €0.00 left — add your own OpenAI key to continue';
+      }
+    }
+    if (profile?.founding) {
+      return `Founding member #${profile.founder_number} · Credits: ${
+        profile.launch_grant_status === 'granted'
+          ? 'granted'
+          : profile.launch_grant_status === 'pending'
+            ? 'pending (€2 when invited)'
+            : profile.launch_grant_status
+      }`;
+    }
+    return 'On the credits waitlist · BYOK stays free forever';
+  };
+
+  const handleRedeemCode = async () => {
+    if (!wallet?.redeemInviteCode) return;
+    setInviteBusy(true);
+    setInviteMessage('');
+    const result = await wallet.redeemInviteCode(inviteCode);
+    setInviteBusy(false);
+    if (result?.ok && result.granted) {
+      setInviteMessage('Tryout credit added to your wallet.');
+      setInviteCode('');
+      auth?.refreshProfile?.();
+      return;
+    }
+    if (result?.ok && result.already_granted) {
+      setInviteMessage('You already have tryout credit on this account.');
+      return;
+    }
+    setInviteMessage(result?.message || wallet.walletError || 'Could not redeem code.');
+  };
+
   return (
     <div className="ov" onClick={closeSettingsModal}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -36,6 +82,61 @@ export default function SettingsModal({
           <span className="m-title">Settings</span>
           <button className="m-x" onClick={closeSettingsModal}><IClose /></button>
         </div>
+
+        {auth?.configured ? (
+          <div className="settings-field" style={{ marginBottom: 18 }}>
+            <label className="settings-label">Account</label>
+            {auth.user ? (
+              <>
+                <p className="settings-info" style={{ marginBottom: 8 }}>
+                  Signed in as <strong>{userEmail || 'your email'}</strong>
+                </p>
+                <p className="settings-info" style={{ marginBottom: 8 }}>
+                  {creditStatusLine()}
+                </p>
+                {auth.user && wallet?.redeemInviteCode ? (
+                  <div style={{ marginBottom: 12 }}>
+                    <label className="settings-label" style={{ marginBottom: 6 }}>Have an invite code?</label>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        className="settings-input"
+                        value={inviteCode}
+                        onChange={(e) => setInviteCode(e.target.value)}
+                        placeholder="TRY-…"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={inviteBusy || wallet?.walletBusy}
+                      />
+                      <button
+                        className="btn-sec"
+                        type="button"
+                        disabled={inviteBusy || wallet?.walletBusy || !inviteCode.trim()}
+                        onClick={handleRedeemCode}
+                      >
+                        {inviteBusy ? 'Redeeming…' : 'Redeem'}
+                      </button>
+                    </div>
+                    {inviteMessage ? (
+                      <p className="settings-info" style={{ marginTop: 8 }}>{inviteMessage}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+                <button
+                  className="btn-sec"
+                  type="button"
+                  disabled={auth.authBusy}
+                  onClick={() => auth.signOut()}
+                >
+                  {auth.authBusy ? 'Signing out…' : 'Sign out'}
+                </button>
+              </>
+            ) : (
+              <p className="settings-info">
+                No account in this browser. Claim a founding spot or join the waitlist from the homepage pricing section.
+              </p>
+            )}
+          </div>
+        ) : null}
 
         <div className="settings-field">
           <label className="settings-label">OpenAI API Key</label>

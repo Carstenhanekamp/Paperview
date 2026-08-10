@@ -31,6 +31,7 @@ import {
   buildFolderPath,
 } from './miscUtils';
 import SettingsModal from './components/SettingsModal';
+import FoundingWelcome from './components/FoundingWelcome';
 import LibraryView from './components/LibraryView';
 import LibraryPaperDetail from './components/LibraryPaperDetail';
 import BibtexPreviewModal from './components/BibtexPreviewModal';
@@ -42,6 +43,8 @@ import UploadModal from './components/UploadModal';
 import FolderPermModal from './components/FolderPermModal';
 import SelectionToolbar from './components/SelectionToolbar';
 import ExplainPopover from './components/ExplainPopover';
+import { useAuthContext } from './AuthContext';
+import { useWalletContext } from './WalletContext';
 import { useApiKey } from './hooks/useApiKey';
 import { useRequestRuns } from './hooks/useRequestRun';
 import { usePanelResize } from './hooks/usePanelResize';
@@ -135,6 +138,8 @@ export default function PaperviewApp() {
 
   const [privacyAccepted, setPrivacyAccepted] = useState(() => !!localStorage.getItem('pv-privacy-ok'));
   const [showFolderPermModal, setShowFolderPermModal] = useState(false);
+  const auth = useAuthContext();
+  const wallet = useWalletContext();
   const {
     apiKey,
     apiKeySource,
@@ -163,6 +168,8 @@ export default function PaperviewApp() {
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
     setRememberedApiKeyAvailable,
+    setApiKey,
+    setApiKeySource,
   } = useApiKey();
   const [edgeToast, setEdgeToast] = useState(false);
   const [debugCitations] = useState(() => {
@@ -248,6 +255,7 @@ export default function PaperviewApp() {
     apiKey,
     selectedModel,
     openSettingsModal,
+    getOpenAIRequestOptions: wallet.getRequestOptions,
     startPaperTextExtraction,
   });
 
@@ -869,6 +877,7 @@ export default function PaperviewApp() {
     selectedModel,
     apiKey,
     openSettingsModal,
+    getOpenAIRequestOptions: wallet.getRequestOptions,
     currentAgentMessages,
     agentContextPapers,
     selectedAgentTool,
@@ -1092,6 +1101,7 @@ export default function PaperviewApp() {
     selectedModel,
     apiKey,
     openSettingsModal,
+    getOpenAIRequestOptions: wallet.getRequestOptions,
     currentMessages,
     chatContextPapers,
     chatContextMode,
@@ -1128,6 +1138,7 @@ export default function PaperviewApp() {
     apiKey,
     openSettingsModal,
     selectedModel,
+    getOpenAIRequestOptions: wallet.getRequestOptions,
   });
 
   const handleExplainSelection = () => {
@@ -1485,10 +1496,30 @@ export default function PaperviewApp() {
 
             <div className="sb-footer">
               <div className="sb-key-status">
-                <span className={`sb-key-dot ${apiKey ? "" : "off"}`} />
-                <span className="sb-key-label">
-                  {apiKey ? `Your key · ••${apiKey.slice(-4)}` : rememberedApiKeyAvailable ? "Key saved (locked)" : "No API key"}
-                </span>
+                <span className={`sb-key-dot ${apiKey || wallet.hasCredit ? "" : "off"}`} />
+                {wallet.hasCredit ? (
+                  <button
+                    type="button"
+                    className="sb-key-label"
+                    onClick={() => openSettingsModal(apiKey)}
+                    title="Tryout credit remaining"
+                    style={{
+                      background: 'transparent',
+                      border: 0,
+                      padding: 0,
+                      cursor: 'pointer',
+                      font: 'inherit',
+                      color: 'inherit',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    Credit · {wallet.balanceLabel}
+                  </button>
+                ) : (
+                  <span className="sb-key-label">
+                    {apiKey ? `Your key · ••${apiKey.slice(-4)}` : rememberedApiKeyAvailable ? "Key saved (locked)" : "No API key"}
+                  </span>
+                )}
               </div>
               <button className="sb-footer-gear" onClick={() => openSettingsModal(apiKey)} title="Settings"><IGear size={14} /></button>
             </div>
@@ -1949,8 +1980,20 @@ export default function PaperviewApp() {
             handleUnlockRememberedApiKey={handleUnlockRememberedApiKey}
             handleSaveSettingsApiKey={handleSaveSettingsApiKey}
             setRememberedApiKeyAvailable={setRememberedApiKeyAvailable}
+            auth={auth}
+            wallet={wallet}
           />
         )}
+
+        <FoundingWelcome
+          auth={auth}
+          apiKey={apiKey}
+          onOpenSettings={() => openSettingsModal(apiKey)}
+          onSaveApiKey={(key) => {
+            setApiKey(key);
+            setApiKeySource('memory');
+          }}
+        />
 
         {edgeToast && (
           <div className="edge-toast">
