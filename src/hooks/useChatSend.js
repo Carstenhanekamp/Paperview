@@ -13,6 +13,7 @@ import { findPaperByName, findMatchingRemotePaper, findWorkspacePaperForSource, 
 import { createChatMessageId, hasExtractedPaperText, isAbortLikeError } from '../miscUtils';
 import { derivePageTexts } from '../chatUtils';
 import { addUsageTotals, createUsageTotals, getUsageBreakdown, formatTokenCount, formatUsd } from '../openaiPricing';
+import { formatEur } from '../walletCredits';
 import { resolveContextPapersForQuery, CORPUS_TOP_K, mapCitationFileToPaper } from '../corpusRetrieve';
 import { displayPaperTitle } from '../biblioUtils';
 
@@ -33,6 +34,7 @@ export function useChatSend({
   selectedModel,
   apiKey,
   openSettingsModal,
+  getOpenAIRequestOptions,
   currentMessages,
   chatContextPapers,
   chatContextMode = 'auto',
@@ -78,6 +80,20 @@ export function useChatSend({
 
     try {
       const usageTotals = createUsageTotals();
+      let walletActionPriceEur = null;
+      const openaiOpts = (extra = {}) =>
+        (typeof getOpenAIRequestOptions === 'function'
+          ? getOpenAIRequestOptions({
+              signal: controller.signal,
+              action: 'chat',
+              onBilling: (info) => {
+                if (info?.billed === 'wallet' && typeof info.actionPriceMicrocents === 'number') {
+                  walletActionPriceEur = info.actionPriceMicrocents / 100_000_000;
+                }
+              },
+              ...extra,
+            })
+          : { signal: controller.signal });
       const conversationHistory = currentMessages.slice(-8);
       const candidatePapers = chatContextPapers;
       if (!candidatePapers.length) {
@@ -159,7 +175,7 @@ export function useChatSend({
             content: `Available documents (use exact file names with search_document):\n${documentTitleHints}\n\nQuestion: ${text}\n\nUse the search_document tool to retrieve evidence before answering. Respond in JSON format. Citation "file" must match an exact document name.`,
           },
         ],
-      }, { signal: controller.signal });
+      }, openaiOpts());
       ensureRequestRunActive(chatRequestRef, token);
       addUsageTotals(usageTotals, data?.usage);
       console.log("[reasoning debug] first response output:", JSON.stringify(data?.output?.map(o => ({ type: o.type, summary: o.summary })), null, 2));
@@ -240,7 +256,7 @@ export function useChatSend({
           ...basePayload,
           previous_response_id: data.id,
           input: toolOutputs,
-        }, { signal: controller.signal });
+        }, openaiOpts());
         ensureRequestRunActive(chatRequestRef, token);
         addUsageTotals(usageTotals, data?.usage);
         const reasoningN = extractReasoningSummary(data);
@@ -297,9 +313,11 @@ export function useChatSend({
         outputTokens: usageBreakdown.outputTokens,
         reasoningTokens: usageBreakdown.reasoningTokens,
         totalTokens: usageBreakdown.totalTokens,
-        inputCost: usageBreakdown.inputCost,
-        outputCost: usageBreakdown.outputCost,
-        totalCost: usageBreakdown.totalCost,
+        inputCost: walletActionPriceEur != null ? null : usageBreakdown.inputCost,
+        outputCost: walletActionPriceEur != null ? null : usageBreakdown.outputCost,
+        totalCost: walletActionPriceEur != null ? walletActionPriceEur : usageBreakdown.totalCost,
+        currency: walletActionPriceEur != null ? 'EUR' : 'USD',
+        billed: walletActionPriceEur != null ? 'wallet' : 'byok',
       };
 
       ensureRequestRunActive(chatRequestRef, token);
@@ -411,6 +429,8 @@ export function useChatSend({
   const renderUsageMeta = useCallback((message) => {
     const usage = message?.usage;
     if (!usage?.model) return null;
+    const formatCost = (value) =>
+      usage.currency === 'EUR' ? formatEur(value) : formatUsd(value);
 
     if (message.role === "user" && usage.inputTokens > 0) {
       const details = [
@@ -420,21 +440,31 @@ export function useChatSend({
       if (usage.cachedInputTokens > 0) {
         details.push(`${formatTokenCount(usage.cachedInputTokens)} cached`);
       }
-      const formattedCost = formatUsd(usage.inputCost);
-      if (formattedCost) details.push(formattedCost);
+      if (usage.billed === 'wallet' && usage.totalCost != null) {
+        details.push(formatCost(usage.totalCost));
+      } else {
+        const formattedCost = formatCost(usage.inputCost);
+        if (formattedCost) details.push(formattedCost);
+      }
       return React.createElement("div", { className: "chat-usage-meta" }, details.join(" | "));
     }
 
-    if (message.role === "ai" && usage.outputTokens > 0) {
+    if (message.role === "ai" && (usage.outputTokens > 0 || usage.billed === 'wallet')) {
       const details = [
         usage.model,
-        `${formatTokenCount(usage.outputTokens)} output tok`,
       ];
+      if (usage.outputTokens > 0) {
+        details.push(`${formatTokenCount(usage.outputTokens)} output tok`);
+      }
       if (usage.reasoningTokens > 0) {
         details.push(`${formatTokenCount(usage.reasoningTokens)} reasoning`);
       }
-      const formattedCost = formatUsd(usage.outputCost);
-      if (formattedCost) details.push(formattedCost);
+      if (usage.billed === 'wallet' && usage.totalCost != null) {
+        details.push(formatCost(usage.totalCost));
+      } else {
+        const formattedCost = formatCost(usage.outputCost);
+        if (formattedCost) details.push(formattedCost);
+      }
       return React.createElement("div", { className: "chat-usage-meta" }, details.join(" | "));
     }
 

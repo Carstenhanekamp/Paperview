@@ -2,6 +2,8 @@
 
 Supabase project: **Paperview** (`wpvfaistmwtkgkqpkkrm`, `eu-west-1`).
 
+**Invite a friend + Vercel deploy walkthrough:** [`invite-tryout-deploy.md`](invite-tryout-deploy.md) (start here for getpaperview.com).
+
 ## Export emails (admin)
 
 In the Supabase SQL editor:
@@ -28,7 +30,7 @@ Dashboard → **Authentication** → **URL Configuration**:
 | Field | Value |
 |---|---|
 | **Site URL** (local) | `http://localhost:5173` |
-| **Site URL** (prod) | your production origin, e.g. `https://paperview.nl` |
+| **Site URL** (prod) | `https://getpaperview.com` |
 
 **Redirect URLs** allow list (add all that apply):
 
@@ -87,12 +89,42 @@ Templates live in [`docs/email-templates/`](email-templates/):
 
 No custom SMTP required for branding; add SMTP later only if deliverability is weak.
 
-## When to build full credits
+## Invite emails (tryout €2 now)
 
-Start [credits full structure](credits_full_structure_ed380dd7.plan.md) Phases 1–4 when:
+Money unit: **1 EUR = 100_000_000 microcents** → €2 grant = `200000000`; chat action = `2000000` (€0.02).
+
+Pre-register a friend (SQL editor / service role):
+
+```sql
+insert into public.invite_emails (email, note)
+values ('friend@example.com', 'family tryout')
+on conflict (email) do update
+set active = true,
+    note = excluded.note,
+    claimed_by = null,
+    claimed_at = null;
+```
+
+They sign up with **that same email** via the founding magic link. `/welcome` calls `claim_tryout_grant()` and credits the wallet.
+
+Backup: create **one-time** invite codes via SQL (`max_redemptions = 1`). Shared `TRY-PAPERVIEW` is disabled — prefer `invite_emails`. See [`invite-tryout-deploy.md`](invite-tryout-deploy.md).
+
+Server env for hosted debit (Vercel + local `.env.local`):
+
+```env
+OPENAI_API_KEY=...
+SUPABASE_URL=https://….supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+```
+
+## When to build paid packs (Stripe)
+
+Start paid top-ups when:
 
 - 100 founding spots are filled, **or**
 - founders + waitlist ≥ ~150–200, **or**
 - clear repeated “I won’t paste an API key” feedback
 
-Then: fulfill `launch_grant_status = 'pending'` with €2 (`+2_000_000` microcents) + ledger `grant`, wire Stripe, enable debit on `/api/openai-response`.
+Then: wire Stripe packs (`eur3` / `eur5` / `eur10`) on top of the existing wallet ledger.

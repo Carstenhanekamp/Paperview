@@ -25,6 +25,7 @@ export function usePaperMeta({
   apiKey,
   selectedModel,
   openSettingsModal,
+  getOpenAIRequestOptions,
   startPaperTextExtraction,
 }) {
   const [metaById, setMetaById] = useState({});
@@ -126,9 +127,9 @@ export function usePaperMeta({
   const extractPaperMetaWithAI = useCallback(
     async (paper) => {
       if (!paper?.id) return null;
-      if (!apiKey && !import.meta.env.VITE_OPENAI_API_KEY) {
+      if (!apiKey && !import.meta.env.VITE_OPENAI_API_KEY && !(typeof getOpenAIRequestOptions === 'function' && getOpenAIRequestOptions().preferWallet)) {
         openSettingsModal?.('');
-        throw new Error('Add an OpenAI API key in Settings to extract metadata.');
+        throw new Error('Add an OpenAI API key in Settings to extract metadata, or use tryout credit while signed in.');
       }
       if (aiJobsRef.current.has(paper.id)) return aiJobsRef.current.get(paper.id);
 
@@ -147,6 +148,10 @@ export function usePaperMeta({
             requestOpenAIResponse,
             extractResponseOutputText,
             sanitizeJsonNewlines,
+            requestOptions:
+              typeof getOpenAIRequestOptions === 'function'
+                ? getOpenAIRequestOptions({ action: 'chat' })
+                : null,
           });
 
           // Prefer CrossRef when AI found a DOI
@@ -184,7 +189,7 @@ export function usePaperMeta({
       aiJobsRef.current.set(paper.id, job);
       return job;
     },
-    [apiKey, selectedModel, openSettingsModal, startPaperTextExtraction, resolvePageTexts, upsertMeta]
+    [apiKey, selectedModel, openSettingsModal, getOpenAIRequestOptions, startPaperTextExtraction, resolvePageTexts, upsertMeta]
   );
 
   const getMeta = useCallback((paperId) => metaById[paperId] || null, [metaById]);

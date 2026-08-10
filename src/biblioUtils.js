@@ -251,6 +251,7 @@ export async function extractMetaWithAI({
   extractResponseOutputText,
   sanitizeJsonNewlines,
   signal,
+  requestOptions = null,
 } = {}) {
   const sample = (pageTexts || [])
     .slice(0, 3)
@@ -289,7 +290,7 @@ ${sample}`,
         },
       ],
     },
-    { signal }
+    requestOptions || { signal }
   );
 
   const raw = extractResponseOutputText(data) || '';

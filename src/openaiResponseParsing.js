@@ -140,13 +140,63 @@ export function isResponseIncompleteForMaxOutput(data) {
   return data?.status === "incomplete" && data?.incomplete_details?.reason === "max_output_tokens";
 }
 
-export async function requestOpenAIResponse(apiKey, payload, options = {}) {
-  const { signal } = options;
+function parseProxyError(bodyText, fallback) {
   try {
+    const parsed = JSON.parse(bodyText);
+    if (parsed?.error?.message) return parsed.error.message;
+    if (typeof parsed?.error === "string") return parsed.error;
+    if (typeof parsed?.message === "string") return parsed.message;
+  } catch {
+    /* ignore */
+  }
+  return bodyText || fallback || "OpenAI request failed";
+}
+
+/**
+ * @param {string} apiKey - optional BYOK key
+ * @param {object} payload - OpenAI Responses body
+ * @param {object} [options]
+ * @param {AbortSignal} [options.signal]
+ * @param {boolean} [options.preferWallet] - use hosted tryout credit first when signed in
+ * @param {string} [options.accessToken] - Supabase access token (fetched if missing and preferWallet)
+ * @param {'chat'|'explain'|'agent'} [options.action]
+ * @param {(info: { balanceMicrocents?: number, billed?: string, actionPriceMicrocents?: number }) => void} [options.onBilling]
+ */
+export async function requestOpenAIResponse(apiKey, payload, options = {}) {
+  const {
+    signal,
+    preferWallet = false,
+    action = "chat",
+    onBilling,
+  } = options;
+  let accessToken = options.accessToken || null;
+
+  if (preferWallet && !accessToken) {
+    try {
+      const { getSupabaseAsync } = await import("./supabaseClient.js");
+      const supabase = await getSupabaseAsync();
+      if (supabase) {
+        const { data } = await supabase.auth.getSession();
+        accessToken = data?.session?.access_token || null;
+      }
+    } catch {
+      accessToken = null;
+    }
+  }
+
+  const tryWalletFirst = Boolean(preferWallet && accessToken);
+
+  const callProxy = async ({ withWallet, withKey }) => {
     const proxyHeaders = {
       "Content-Type": "application/json",
     };
-    if (apiKey) proxyHeaders["x-openai-api-key"] = apiKey;
+    if (withWallet && accessToken) {
+      proxyHeaders.Authorization = `Bearer ${accessToken}`;
+      proxyHeaders["x-paperview-action"] = action;
+    }
+    if (withKey && apiKey) {
+      proxyHeaders["x-openai-api-key"] = apiKey;
+    }
 
     const proxyResponse = await fetch(OPENAI_PROXY_ENDPOINT, {
       method: "POST",
@@ -158,26 +208,81 @@ export async function requestOpenAIResponse(apiKey, payload, options = {}) {
     const proxyBody = await proxyResponse.text();
     const looksLikeAppShell = proxyContentType.includes("text/html") && /<!doctype html|<html/i.test(proxyBody);
 
+    const balanceHeader = proxyResponse.headers.get("x-paperview-balance-microcents");
+    const billed = proxyResponse.headers.get("x-paperview-billed");
+    const priceHeader = proxyResponse.headers.get("x-paperview-action-price-microcents");
+    if (typeof onBilling === "function") {
+      onBilling({
+        billed: billed || undefined,
+        balanceMicrocents: balanceHeader != null ? Number(balanceHeader) : undefined,
+        actionPriceMicrocents: priceHeader != null ? Number(priceHeader) : undefined,
+        status: proxyResponse.status,
+      });
+    }
+
+    return { proxyResponse, proxyBody, looksLikeAppShell };
+  };
+
+  if (tryWalletFirst) {
+    try {
+      const { proxyResponse, proxyBody, looksLikeAppShell } = await callProxy({
+        withWallet: true,
+        withKey: false,
+      });
+
+      if (proxyResponse.ok && !looksLikeAppShell) {
+        return JSON.parse(proxyBody);
+      }
+
+      if (!looksLikeAppShell && proxyResponse.status === 402 && apiKey) {
+        // Credit empty — fall through to BYOK
+      } else if (!looksLikeAppShell) {
+        if (!apiKey || (proxyResponse.status !== 401 && proxyResponse.status !== 402)) {
+          throw new Error(parseProxyError(proxyBody, "OpenAI request failed"));
+        }
+      }
+    } catch (err) {
+      if (!apiKey) {
+        if (err instanceof TypeError) {
+          throw new Error(
+            "No OpenAI API key is configured. Add one in Settings or use tryout credit while signed in.",
+          );
+        }
+        throw err;
+      }
+    }
+  }
+
+  try {
+    const { proxyResponse, proxyBody, looksLikeAppShell } = await callProxy({
+      withWallet: false,
+      withKey: Boolean(apiKey),
+    });
+
     if (proxyResponse.ok && !looksLikeAppShell) {
       return JSON.parse(proxyBody);
     }
 
     if (!looksLikeAppShell) {
       if (!apiKey) {
-        throw new Error(proxyBody || "OpenAI request failed");
+        throw new Error(parseProxyError(proxyBody, "OpenAI request failed"));
       }
     }
   } catch (err) {
     if (!apiKey) {
       if (err instanceof TypeError) {
-        throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
+        throw new Error(
+          "No OpenAI API key is configured. Add one in Settings or use tryout credit while signed in.",
+        );
       }
       throw err;
     }
   }
 
   if (!apiKey) {
-    throw new Error("No OpenAI API key is configured. Add one in Settings or set OPENAI_API_KEY on the backend.");
+    throw new Error(
+      "No OpenAI API key is configured. Add one in Settings or use tryout credit while signed in.",
+    );
   }
 
   const res = await fetch("https://api.openai.com/v1/responses", {
@@ -192,15 +297,7 @@ export async function requestOpenAIResponse(apiKey, payload, options = {}) {
 
   if (!res.ok) {
     const errText = await res.text();
-    try {
-      const parsed = JSON.parse(errText);
-      if (parsed?.error?.message) {
-        throw new Error(parsed.error.message);
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message && err.message !== errText) throw err;
-    }
-    throw new Error(errText || "OpenAI request failed");
+    throw new Error(parseProxyError(errText, "OpenAI request failed"));
   }
 
   return res.json();

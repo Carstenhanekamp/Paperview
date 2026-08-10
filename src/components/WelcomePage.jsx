@@ -1,7 +1,9 @@
 import React, { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../AuthContext';
+import { useWalletContext } from '../WalletContext';
 import { WELCOME_STORAGE_KEY } from '../supabaseClient';
+import { formatMicrocentsAsEur, TRYOUT_GRANT_MICROCENT } from '../walletCredits';
 
 const FONT_URL =
   "https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&display=swap";
@@ -217,13 +219,16 @@ const SESSION_WAIT_MS = 12000;
  */
 export default function WelcomePage() {
   const auth = useAuthContext();
+  const wallet = useWalletContext();
   const navigate = useNavigate();
   const titleId = useId();
-  const { user, profile, ready, claimBusy, configured } = auth;
+  const { user, profile, ready, claimBusy, configured, refreshProfile } = auth;
   const [step, setStep] = useState('status'); // status | byok
   const [draftKey, setDraftKey] = useState('');
   const [timedOut, setTimedOut] = useState(false);
   const [apiKeyMemory, setApiKeyMemory] = useState('');
+  const [tryoutClaim, setTryoutClaim] = useState(null);
+  const [tryoutBusy, setTryoutBusy] = useState(false);
 
   useEffect(() => {
     ensureStyles();
@@ -246,11 +251,37 @@ export default function WelcomePage() {
     return () => window.clearTimeout(t);
   }, [configured, user, profile]);
 
-  const loading = configured && !timedOut && (!ready || claimBusy || (user && !profile) || (!user && !timedOut));
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!user || !profile || !wallet?.claimTryoutGrant) return;
+      setTryoutBusy(true);
+      const result = await wallet.claimTryoutGrant();
+      if (cancelled) return;
+      setTryoutClaim(result);
+      setTryoutBusy(false);
+      if (result?.granted) {
+        await refreshProfile?.();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, profile?.user_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loading = configured && !timedOut && (!ready || claimBusy || tryoutBusy || (user && !profile) || (!user && !timedOut));
 
   const openApp = () => navigate('/app');
   const goHome = () => navigate('/');
   const goPricing = () => navigate('/#pricing');
+
+  const grantedTryout = Boolean(tryoutClaim?.granted || tryoutClaim?.already_granted || profile?.launch_grant_status === 'granted');
+  const grantAmountLabel = formatMicrocentsAsEur(
+    typeof tryoutClaim?.grant_microcents === 'number' && tryoutClaim.grant_microcents > 0
+      ? tryoutClaim.grant_microcents
+      : TRYOUT_GRANT_MICROCENT,
+  );
+  const balanceLabel = wallet?.balanceLabel || formatMicrocentsAsEur(tryoutClaim?.balance_microcents);
 
   let body = null;
 
@@ -293,9 +324,11 @@ export default function WelcomePage() {
     body = (
       <>
         <span className="wp-eyebrow">Optional</span>
-        <h1 className="wp-title" id={titleId}>Try Paperview now</h1>
+        <h1 className="wp-title" id={titleId}>Add your own key (fallback)</h1>
         <p className="wp-copy">
-          Paste an OpenAI key to ask questions today — or skip and wait for credits. The key stays in this browser unless you remember it later in Settings.
+          {grantedTryout
+            ? 'Tryout credit is used first. Optionally paste your own OpenAI key as a fallback when credit runs out. The key stays in this browser unless you remember it later in Settings.'
+            : 'Paste an OpenAI key to ask questions today — or skip for now. The key stays in this browser unless you remember it later in Settings.'}
         </p>
         <input
           className="wp-field"
@@ -343,14 +376,18 @@ export default function WelcomePage() {
           {founding ? `Founder #${profile.founder_number}` : 'Waitlist'}
         </span>
         <h1 className="wp-title" id={titleId}>
-          {founding
-            ? `Thank you — you’re founding member #${profile.founder_number}`
-            : 'Thank you — you’re on the list'}
+          {grantedTryout
+            ? `${grantAmountLabel} ready to try`
+            : founding
+              ? `Thank you — you’re founding member #${profile.founder_number}`
+              : 'Thank you — you’re on the list'}
         </h1>
         <p className="wp-copy">
-          {founding
-            ? '€2 of credits are reserved for when pay-per-use launches. Until then, open Paperview with your own OpenAI key — free forever.'
-            : 'Founding spots are full. We’ll email you when credits launch. You can still use Paperview today with your own key.'}
+          {grantedTryout
+            ? `Your tryout wallet has ${balanceLabel || grantAmountLabel} (~100 questions at €0.02 each). Open Paperview to start — or add your own OpenAI key as a fallback.`
+            : founding
+              ? 'You’re on the founding list. If you’re invited for tryout credit, it appears here automatically after sign-in. Until then, open Paperview with your own OpenAI key — free forever.'
+              : 'Founding spots are full. We’ll email you when credits launch. You can still use Paperview today with your own key.'}
         </p>
         {founding ? (
           <div className="wp-tick" aria-hidden="true">
@@ -367,14 +404,14 @@ export default function WelcomePage() {
             type="button"
             className="wp-primary"
             onClick={() => {
-              if (!apiKeyMemory) {
-                setStep('byok');
+              if (grantedTryout || apiKeyMemory) {
+                openApp();
                 return;
               }
-              openApp();
+              setStep('byok');
             }}
           >
-            {apiKeyMemory ? 'Open Paperview' : 'Continue'}
+            {grantedTryout || apiKeyMemory ? 'Open Paperview' : 'Continue'}
           </button>
           <button type="button" className="wp-secondary" onClick={goHome}>
             Back to home
