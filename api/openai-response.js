@@ -104,10 +104,8 @@ function openaiResponseIdFromBody(bodyText) {
 }
 
 function newRequestId(action) {
-  const id =
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  // Always use CSPRNG — request ids are security-sensitive (debit/refund idempotency).
+  const id = crypto.randomUUID();
   return `proxy:${action}:${id}`;
 }
 
