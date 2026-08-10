@@ -4,6 +4,7 @@ import {
   isWalletModelAllowed,
   parseWalletModelAllowlist,
   resolveBillableAction,
+  shouldSkipWalletDebitForContinuation,
   usdCostToMicrocents,
   WALLET_MAX_BODY_BYTES,
   WALLET_RATE_LIMIT_MAX,
@@ -185,9 +186,10 @@ export default {
 
     const parentResponseId = String(payload?.previous_response_id || "").trim();
     let parentAction = null;
+    let parentTier = null;
     if (billingMode === "wallet" && user?.id && parentResponseId) {
-      const tier = await getWalletProxyResponseTier(user.id, parentResponseId);
-      if (tier?.found && tier.owned === false) {
+      parentTier = await getWalletProxyResponseTier(user.id, parentResponseId);
+      if (parentTier?.found && parentTier.owned === false) {
         return json(
           {
             error: "That conversation continuation is not available on tryout credit.",
@@ -196,15 +198,18 @@ export default {
           { status: 403 },
         );
       }
-      if (tier?.found && tier.owned) {
-        parentAction = tier.action || null;
+      if (parentTier?.found && parentTier.owned) {
+        parentAction = parentTier.action || null;
       }
     }
 
     const action = resolveBillableAction(claimedAction, payload, { parentAction });
-    const priceMicrocents = actionPriceMicrocents(action);
+    const continuationSkip =
+      billingMode === "wallet" &&
+      shouldSkipWalletDebitForContinuation({ parentResponseId, parentTier });
+    const priceMicrocents = continuationSkip ? 0 : actionPriceMicrocents(action);
     const model = payload?.model || null;
-    const requestId = billingMode === "wallet" ? newRequestId(action) : null;
+    const requestId = billingMode === "wallet" && !continuationSkip ? newRequestId(action) : null;
 
     let walletPayload = payload;
     let debitBalance = null;
@@ -256,32 +261,34 @@ export default {
         max_output_tokens: clampWalletMaxOutputTokens(payload?.max_output_tokens),
       };
 
-      try {
-        const debit = await debitWalletForProxy({
-          userId: user.id,
-          amountMicrocents: priceMicrocents,
-          openaiCostMicrocents: 0,
-          model,
-          requestId,
-        });
-        debitBalance = debit?.balance_microcents ?? null;
-      } catch (debitErr) {
-        if (isInsufficientBalanceError(debitErr)) {
+      if (!continuationSkip) {
+        try {
+          const debit = await debitWalletForProxy({
+            userId: user.id,
+            amountMicrocents: priceMicrocents,
+            openaiCostMicrocents: 0,
+            model,
+            requestId,
+          });
+          debitBalance = debit?.balance_microcents ?? null;
+        } catch (debitErr) {
+          if (isInsufficientBalanceError(debitErr)) {
+            return json(
+              {
+                error:
+                  "Tryout credit is empty. Add your own OpenAI API key in Settings, or ask for more credit.",
+                code: "insufficient_balance",
+                action_price_microcents: priceMicrocents,
+              },
+              { status: 402 },
+            );
+          }
+          console.error("wallet debit failed before OpenAI", debitErr);
           return json(
-            {
-              error:
-                "Tryout credit is empty. Add your own OpenAI API key in Settings, or ask for more credit.",
-              code: "insufficient_balance",
-              action_price_microcents: priceMicrocents,
-            },
-            { status: 402 },
+            { error: "Could not reserve tryout credit for this request." },
+            { status: 500 },
           );
         }
-        console.error("wallet debit failed before OpenAI", debitErr);
-        return json(
-          { error: "Could not reserve tryout credit for this request." },
-          { status: 500 },
-        );
       }
     }
 
@@ -301,55 +308,70 @@ export default {
         "content-type": upstream.headers.get("content-type") || "application/json; charset=utf-8",
       };
 
-      if (billingMode === "wallet" && user?.id && requestId) {
-        headers["x-paperview-action-price-microcents"] = String(priceMicrocents);
+      if (billingMode === "wallet" && user?.id) {
         headers["x-paperview-action"] = action;
+        headers["x-paperview-action-price-microcents"] = String(priceMicrocents);
 
-        if (!upstream.ok) {
-          try {
-            const refund = await refundWalletForProxy({
-              userId: user.id,
-              amountMicrocents: priceMicrocents,
-              requestId,
-            });
-            headers["x-paperview-billed"] = "wallet_refunded";
-            if (refund?.balance_microcents != null) {
-              headers["x-paperview-balance-microcents"] = String(refund.balance_microcents);
+        if (continuationSkip) {
+          // Covered by the root turn debit — still chain ownership for further rounds.
+          if (upstream.ok) {
+            const responseId = openaiResponseIdFromBody(bodyText);
+            if (responseId) {
+              try {
+                await recordWalletProxyResponseTier(user.id, responseId, action);
+              } catch (tierErr) {
+                console.error("wallet response tier record failed", tierErr);
+              }
             }
-          } catch (refundErr) {
-            console.error("wallet refund failed after OpenAI error", refundErr);
-            headers["x-paperview-billed"] = "wallet_refund_failed";
+          }
+          headers["x-paperview-billed"] = "wallet_continuation";
+        } else if (requestId) {
+          if (!upstream.ok) {
+            try {
+              const refund = await refundWalletForProxy({
+                userId: user.id,
+                amountMicrocents: actionPriceMicrocents(action),
+                requestId,
+              });
+              headers["x-paperview-billed"] = "wallet_refunded";
+              if (refund?.balance_microcents != null) {
+                headers["x-paperview-balance-microcents"] = String(refund.balance_microcents);
+              }
+            } catch (refundErr) {
+              console.error("wallet refund failed after OpenAI error", refundErr);
+              headers["x-paperview-billed"] = "wallet_refund_failed";
+              if (debitBalance != null) {
+                headers["x-paperview-balance-microcents"] = String(debitBalance);
+              }
+            }
+          } else {
+            const breakdown = usageFromOpenAIBody(bodyText, model);
+            const openaiCostMicrocents = usdCostToMicrocents(breakdown?.totalCost);
+            try {
+              await annotateWalletDebitForProxy({
+                userId: user.id,
+                requestId,
+                openaiCostMicrocents,
+                model: breakdown?.model || model,
+                inputTokens: breakdown?.inputTokens ?? null,
+                outputTokens: breakdown?.outputTokens ?? null,
+              });
+            } catch (annotateErr) {
+              // Debit already committed; annotation is ops/subsidy metadata only.
+              console.error("wallet debit annotate failed", annotateErr);
+            }
+            const responseId = openaiResponseIdFromBody(bodyText);
+            if (responseId) {
+              try {
+                await recordWalletProxyResponseTier(user.id, responseId, action);
+              } catch (tierErr) {
+                console.error("wallet response tier record failed", tierErr);
+              }
+            }
+            headers["x-paperview-billed"] = "wallet";
             if (debitBalance != null) {
               headers["x-paperview-balance-microcents"] = String(debitBalance);
             }
-          }
-        } else {
-          const breakdown = usageFromOpenAIBody(bodyText, model);
-          const openaiCostMicrocents = usdCostToMicrocents(breakdown?.totalCost);
-          try {
-            await annotateWalletDebitForProxy({
-              userId: user.id,
-              requestId,
-              openaiCostMicrocents,
-              model: breakdown?.model || model,
-              inputTokens: breakdown?.inputTokens ?? null,
-              outputTokens: breakdown?.outputTokens ?? null,
-            });
-          } catch (annotateErr) {
-            // Debit already committed; annotation is ops/subsidy metadata only.
-            console.error("wallet debit annotate failed", annotateErr);
-          }
-          const responseId = openaiResponseIdFromBody(bodyText);
-          if (responseId) {
-            try {
-              await recordWalletProxyResponseTier(user.id, responseId, action);
-            } catch (tierErr) {
-              console.error("wallet response tier record failed", tierErr);
-            }
-          }
-          headers["x-paperview-billed"] = "wallet";
-          if (debitBalance != null) {
-            headers["x-paperview-balance-microcents"] = String(debitBalance);
           }
         }
       } else if (billingMode === "byok") {

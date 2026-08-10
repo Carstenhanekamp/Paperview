@@ -91,7 +91,7 @@ No custom SMTP required for branding; add SMTP later only if deliverability is w
 
 ## Invite emails (tryout €2 now)
 
-Money unit: **1 EUR = 100_000_000 microcents** → €2 grant = `200000000`; chat action = `2000000` (€0.02).
+Money unit: **1 EUR = 100_000_000 microcents** → €2 grant = `200000000`; chat/explain = `2000000` (€0.02) per user question; agent = `10000000` (€0.10) per send. Tool-loop continuations are not re-billed.
 
 Pre-register a friend (SQL editor / service role):
 

@@ -351,11 +351,22 @@ export function useAgentSend({
 
     try {
       const usageTotals = createUsageTotals();
+      let walletBilled = false;
+      let walletActionPriceEur = 0;
       const openaiOpts = (extra = {}) =>
         (typeof getOpenAIRequestOptions === 'function'
           ? getOpenAIRequestOptions({
               signal: controller.signal,
               action: 'agent',
+              onBilling: (info) => {
+                const billed = String(info?.billed || '');
+                if (billed === 'wallet' || billed === 'wallet_continuation' || billed === 'wallet_refunded') {
+                  walletBilled = true;
+                }
+                if (typeof info?.actionPriceMicrocents === 'number' && Number.isFinite(info.actionPriceMicrocents)) {
+                  walletActionPriceEur += info.actionPriceMicrocents / 100_000_000;
+                }
+              },
               ...extra,
             })
           : { signal: controller.signal });
@@ -972,9 +983,11 @@ export function useAgentSend({
         outputTokens: usageBreakdown.outputTokens,
         reasoningTokens: usageBreakdown.reasoningTokens,
         totalTokens: usageBreakdown.totalTokens,
-        inputCost: usageBreakdown.inputCost,
-        outputCost: usageBreakdown.outputCost,
-        totalCost: usageBreakdown.totalCost,
+        inputCost: walletBilled ? null : usageBreakdown.inputCost,
+        outputCost: walletBilled ? null : usageBreakdown.outputCost,
+        totalCost: walletBilled ? walletActionPriceEur : usageBreakdown.totalCost,
+        currency: walletBilled ? 'EUR' : 'USD',
+        billed: walletBilled ? 'wallet' : 'byok',
       };
 
       ensureRequestRunActive(agentRequestRef, token);

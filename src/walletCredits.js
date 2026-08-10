@@ -4,7 +4,10 @@ export const MICROCENT_PER_EUR = 100_000_000;
 export const TRYOUT_GRANT_EUR = 2;
 export const TRYOUT_GRANT_MICROCENT = TRYOUT_GRANT_EUR * MICROCENT_PER_EUR;
 
-/** Fixed action prices (wallet debit), not OpenAI×markup. */
+/**
+ * Fixed wallet prices per *user turn* (one question / explain / agent send).
+ * Tool-loop continuations that chain via previous_response_id are not re-billed.
+ */
 export const ACTION_PRICE_EUR = {
   chat: 0.02,
   explain: 0.02,
@@ -181,6 +184,18 @@ export function maxBillableAction(a, b) {
   const left = normalizeClaimedAction(a);
   const right = normalizeClaimedAction(b);
   return (rank[right] || 0) > (rank[left] || 0) ? right : left;
+}
+
+/**
+ * True when this wallet proxy call is a tool-loop continuation of a prior
+ * owned response — debit already taken on the root turn.
+ * @param {{ parentResponseId?: string|null, parentTier?: { found?: boolean, owned?: boolean }|null }} args
+ */
+export function shouldSkipWalletDebitForContinuation({ parentResponseId = null, parentTier = null } = {}) {
+  const parentId = String(parentResponseId || "").trim();
+  if (!parentId) return false;
+  if (!parentTier || parentTier.found !== true || parentTier.owned !== true) return false;
+  return true;
 }
 
 /** Match allowlisted model ids and dated snapshots (e.g. gpt-5.4-mini-2025-xx). */

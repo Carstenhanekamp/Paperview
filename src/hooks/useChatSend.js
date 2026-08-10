@@ -80,15 +80,20 @@ export function useChatSend({
 
     try {
       const usageTotals = createUsageTotals();
-      let walletActionPriceEur = null;
+      let walletBilled = false;
+      let walletActionPriceEur = 0;
       const openaiOpts = (extra = {}) =>
         (typeof getOpenAIRequestOptions === 'function'
           ? getOpenAIRequestOptions({
               signal: controller.signal,
               action: 'chat',
               onBilling: (info) => {
-                if (info?.billed === 'wallet' && typeof info.actionPriceMicrocents === 'number') {
-                  walletActionPriceEur = info.actionPriceMicrocents / 100_000_000;
+                const billed = String(info?.billed || '');
+                if (billed === 'wallet' || billed === 'wallet_continuation' || billed === 'wallet_refunded') {
+                  walletBilled = true;
+                }
+                if (typeof info?.actionPriceMicrocents === 'number' && Number.isFinite(info.actionPriceMicrocents)) {
+                  walletActionPriceEur += info.actionPriceMicrocents / 100_000_000;
                 }
               },
               ...extra,
@@ -313,11 +318,11 @@ export function useChatSend({
         outputTokens: usageBreakdown.outputTokens,
         reasoningTokens: usageBreakdown.reasoningTokens,
         totalTokens: usageBreakdown.totalTokens,
-        inputCost: walletActionPriceEur != null ? null : usageBreakdown.inputCost,
-        outputCost: walletActionPriceEur != null ? null : usageBreakdown.outputCost,
-        totalCost: walletActionPriceEur != null ? walletActionPriceEur : usageBreakdown.totalCost,
-        currency: walletActionPriceEur != null ? 'EUR' : 'USD',
-        billed: walletActionPriceEur != null ? 'wallet' : 'byok',
+        inputCost: walletBilled ? null : usageBreakdown.inputCost,
+        outputCost: walletBilled ? null : usageBreakdown.outputCost,
+        totalCost: walletBilled ? walletActionPriceEur : usageBreakdown.totalCost,
+        currency: walletBilled ? 'EUR' : 'USD',
+        billed: walletBilled ? 'wallet' : 'byok',
       };
 
       ensureRequestRunActive(chatRequestRef, token);

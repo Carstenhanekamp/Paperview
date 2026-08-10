@@ -10,6 +10,7 @@ import {
   microcentsToEur,
   payloadLooksLikeAgent,
   resolveBillableAction,
+  shouldSkipWalletDebitForContinuation,
   TRYOUT_GRANT_MICROCENT,
   usdCostToMicrocents,
 } from './walletCredits.js';
@@ -71,6 +72,28 @@ describe('walletCredits', () => {
         { parentAction: 'agent' },
       ),
     ).toBe('agent');
+  });
+
+  it('skips wallet debit for owned tool-loop continuations only', () => {
+    expect(shouldSkipWalletDebitForContinuation({})).toBe(false);
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: { found: false },
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: { found: true, owned: false },
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: { found: true, owned: true, action: 'chat' },
+      }),
+    ).toBe(true);
   });
 
   it('upgrades when input names a non-chat tool even with search_document tools', () => {

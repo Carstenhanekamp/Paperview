@@ -175,7 +175,7 @@ They never type a code on this path.
 
 1. Pick a PDF folder (File System Access)  
 2. Ask a question in chat **without** pasting an OpenAI key  
-3. Sidebar footer shows **Credit · €x.xx** and drops by **€0.02** per chat/explain call (agent turns **€0.10**)  
+3. Sidebar footer shows **Credit · €x.xx** and drops by **€0.02** per chat/explain *question* (agent turns **€0.10**) — tool-loop rounds inside one question are included
 4. When credit hits €0, Settings → paste their own key (BYOK fallback)
 
 ### Step 5 — You: confirm it worked
@@ -242,8 +242,8 @@ order by created_at desc;
 
 | Action | Debit |
 |---|---|
-| Chat / explain | €0.02 |
-| Agent turn | €0.10 |
+| Chat / explain | €0.02 per question (tool rounds included) |
+| Agent turn | €0.10 per send (tool rounds included) |
 
 €2 ≈ 100 chat questions. Wallet debit is **fixed per action** (not OpenAI × markup). The proxy reserves the debit **before** calling OpenAI and refunds if the model call fails. OpenAI token cost is stored on the ledger for your subsidy tracking only (actual usage × list rates in `openaiPricing.js`, USD≈EUR 1:1).
 
