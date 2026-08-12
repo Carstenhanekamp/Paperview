@@ -5,6 +5,7 @@ import {
   sanitizeProfileName,
   libraryChromeLabel,
   displayNameForUi,
+  documentTitleForUi,
   safeNextPath,
 } from './profileOnboarding.js';
 
@@ -90,5 +91,19 @@ describe('libraryChromeLabel / displayNameForUi', () => {
   it('prefers display_name over email local-part', () => {
     expect(displayNameForUi({ display_name: 'Ada' }, { email: 'a@b.com' })).toBe('Ada');
     expect(displayNameForUi({}, { email: 'ada@b.com' })).toBe('ada');
+  });
+});
+
+describe('documentTitleForUi', () => {
+  it('uses the named library on /app so Safari does not show Untitled', () => {
+    expect(documentTitleForUi({ library_name: 'paperview' }, '/app')).toBe('paperview');
+    expect(documentTitleForUi({ library_name: '  paperview  ' }, '/app/library')).toBe('paperview');
+  });
+
+  it('falls back to Paperview on marketing routes and when unnamed', () => {
+    expect(documentTitleForUi({ library_name: 'paperview' }, '/')).toBe('Paperview');
+    expect(documentTitleForUi({ library_name: 'paperview' }, '/login')).toBe('Paperview');
+    expect(documentTitleForUi({}, '/app')).toBe('Paperview');
+    expect(documentTitleForUi(null, '/app')).toBe('Paperview');
   });
 });

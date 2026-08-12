@@ -84,4 +84,20 @@ export function displayNameForUi(profile, user) {
   return '';
 }
 
+export const DEFAULT_DOCUMENT_TITLE = 'Paperview';
+
+/**
+ * Browser tab title. On /app, prefer the named library from onboarding so
+ * Safari does not fall back to the localized "Untitled" ("Naamloos").
+ */
+export function documentTitleForUi(profile, pathname = '') {
+  const path = String(pathname || '');
+  const onApp = path === '/app' || path.startsWith('/app/');
+  if (onApp) {
+    const library = String(profile?.library_name || '').trim();
+    if (library) return library;
+  }
+  return DEFAULT_DOCUMENT_TITLE;
+}
+
 export { PROFILE_NAME_MAX };
