@@ -139,15 +139,27 @@ GRANT EXECUTE ON FUNCTION public.claim_founding_slot() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.founding_spots_remaining() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION private.claim_founding_slot(uuid) TO service_role;
 
--- KNOWN GAP: production has an `on_auth_user_created` trigger on auth.users
--- running public.handle_new_user(), which inserts the profiles row that
--- claim_founding_slot requires (it raises 'profile_missing' rather than
--- creating one). That function's body has not been transcribed here, so a
--- database built from this repo alone will still fail to assign founder
--- numbers. Capture it with:
---
---   SELECT pg_get_functiondef(p.oid)
---   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
---   WHERE n.nspname = 'public' AND p.proname = 'handle_new_user';
---
--- and add it here rather than reconstructing it by hand.
+-- Seeds the profiles + wallets rows for a new signup. claim_founding_slot
+-- raises 'profile_missing' rather than creating a profile, so without this
+-- trigger a database built from this repo could never assign founder numbers.
+-- Transcribed from production; note it lives in `private`, not `public`.
+-- Depends on profiles.slot_resolved, added at the top of this migration.
+CREATE OR REPLACE FUNCTION private.handle_new_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  INSERT INTO public.profiles (user_id, email, founding, founder_number, launch_grant_status, slot_resolved)
+  VALUES (NEW.id, COALESCE(NEW.email, ''), false, NULL, 'n_a', false);
+  INSERT INTO public.wallets (user_id, balance_microcents)
+  VALUES (NEW.id, 0);
+  RETURN NEW;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION private.handle_new_user();
