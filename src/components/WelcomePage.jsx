@@ -1,11 +1,13 @@
 import React, { useEffect, useId, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthContext } from '../AuthContext';
 import { useWalletContext } from '../WalletContext';
 import { FOUNDING_CAP, WELCOME_STORAGE_KEY } from '../supabaseClient';
 import { useIsDesktopViewport } from '../hooks/useIsDesktopViewport';
 import { setPendingApiKey } from '../pendingApiKey';
 import { formatMicrocentsAsEur, TRYOUT_GRANT_MICROCENT } from '../walletCredits';
+import { profileNeedsOnboarding, safeNextPath } from '../profileOnboarding';
+import OnboardingProfileForm from './OnboardingProfileForm';
 
 const FONT_URL =
   "https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&display=swap";
@@ -101,6 +103,13 @@ const PAGE_CSS = `
   background: var(--accent);
   border-radius: inherit;
 }
+.pv-welcome-page .wp-field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 0 0 6px;
+}
 .pv-welcome-page .wp-field {
   width: 100%;
   border: 0;
@@ -110,6 +119,17 @@ const PAGE_CSS = `
   font: inherit;
   font-size: 14px;
   margin-bottom: 12px;
+}
+.pv-welcome-page .wp-field-hint {
+  margin: -4px 0 14px;
+  font-size: 12px;
+  color: var(--text-4);
+  line-height: 1.4;
+}
+.pv-welcome-page .wp-error {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: #9b2c2c;
 }
 .pv-welcome-page .wp-actions {
   display: flex;
@@ -134,6 +154,7 @@ const PAGE_CSS = `
 }
 .pv-welcome-page .wp-primary:hover { background: var(--accent-hover); }
 .pv-welcome-page .wp-primary:active { transform: scale(0.98); }
+.pv-welcome-page .wp-primary:disabled { opacity: 0.55; cursor: not-allowed; }
 .pv-welcome-page .wp-secondary {
   border: 0;
   background: transparent;
@@ -212,22 +233,39 @@ function markWelcomeSeen(userId) {
 const SESSION_WAIT_MS = 12000;
 
 /**
- * Dedicated post-signup thank-you page at /welcome.
+ * Post-magic-link thank-you / onboarding at /welcome.
  */
 export default function WelcomePage() {
   const auth = useAuthContext();
   const wallet = useWalletContext();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const titleId = useId();
   const isDesktop = useIsDesktopViewport();
-  const { user, profile, ready, claimBusy, configured, refreshProfile } = auth;
-  const [step, setStep] = useState('status'); // status | byok
-  // No apiKeyMemory state: saving a key navigates straight to /app, so it could
-  // never be read back here. The key is handed over via setPendingApiKey.
-  const [draftKey, setDraftKey] = useState('');
+  const {
+    user,
+    profile,
+    ready,
+    claimBusy,
+    profileBusy,
+    configured,
+    authError,
+    setAuthError,
+    refreshProfile,
+    claimFoundingSlot,
+    updateProfile,
+  } = auth;
+
+  const intentFounding = searchParams.get('intent') === 'founding';
+  const nextPath = safeNextPath(searchParams.get('next'));
+
+  const [step, setStep] = useState('status'); // profile | status | byok
   const [timedOut, setTimedOut] = useState(false);
   const [tryoutClaim, setTryoutClaim] = useState(null);
   const [tryoutBusy, setTryoutBusy] = useState(false);
+  const [draftKey, setDraftKey] = useState('');
+  const [foundingClaimed, setFoundingClaimed] = useState(false);
+  const [routedInitial, setRoutedInitial] = useState(false);
 
   useEffect(() => {
     ensureStyles();
@@ -268,11 +306,54 @@ export default function WelcomePage() {
     };
   }, [user?.id, profile?.user_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loading = configured && !timedOut && (!ready || claimBusy || tryoutBusy || (user && !profile) || (!user && !timedOut));
+  // Explicit founding claim only when arriving with intent=founding.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!intentFounding || !user || !profile || foundingClaimed) return;
+      if (profile.slot_resolved) {
+        setFoundingClaimed(true);
+        return;
+      }
+      const result = await claimFoundingSlot();
+      if (cancelled) return;
+      if (result?.ok) setFoundingClaimed(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [intentFounding, user?.id, profile?.user_id, profile?.slot_resolved, foundingClaimed, claimFoundingSlot]);
 
-  const openApp = () => navigate('/app');
+  // Choose initial step once profile is known (only once per mount).
+  useEffect(() => {
+    if (!user || !profile || routedInitial) return;
+    if (profileNeedsOnboarding(profile)) {
+      setStep('profile');
+      setRoutedInitial(true);
+      return;
+    }
+    // Returning users with a complete profile skip straight to the app unless
+    // this visit is a founding thank-you (intent=founding).
+    if (!intentFounding) {
+      navigate(nextPath, { replace: true });
+      return;
+    }
+    setStep('status');
+    setRoutedInitial(true);
+  }, [user, profile, intentFounding, nextPath, navigate, routedInitial]);
+
+  const loading = configured && !timedOut && (
+    !ready
+    || claimBusy
+    || tryoutBusy
+    || (user && !profile)
+    || (!user && !timedOut)
+    || (intentFounding && user && profile && !profile.slot_resolved && !foundingClaimed && !authError)
+  );
+
+  const openApp = () => navigate(nextPath);
   const goHome = () => navigate('/');
-  const goPricing = () => navigate('/#pricing');
+  const goLogin = () => navigate('/login');
 
   const grantedTryout = Boolean(tryoutClaim?.granted || tryoutClaim?.already_granted || profile?.launch_grant_status === 'granted');
   const grantAmountLabel = formatMicrocentsAsEur(
@@ -311,12 +392,39 @@ export default function WelcomePage() {
         <span className="wp-eyebrow">Link expired</span>
         <h1 className="wp-title" id={titleId}>We couldn’t finish sign-in</h1>
         <p className="wp-copy">
-          This link may have expired or already been used. Request a new magic link from the founding card on the homepage.
+          This link may have expired or already been used. Request a new magic link from Log in.
         </p>
         <div className="wp-actions">
-          <button type="button" className="wp-primary" onClick={goPricing}>Back to founding signup</button>
+          <button type="button" className="wp-primary" onClick={goLogin}>Log in</button>
           <Link className="wp-secondary" to="/">Home</Link>
         </div>
+      </>
+    );
+  } else if (step === 'profile') {
+    body = (
+      <>
+        <span className="wp-eyebrow">Almost there</span>
+        <h1 className="wp-title" id={titleId}>Name your library</h1>
+        <p className="wp-copy">
+          We’ll show your name while you work, and this library label in the sidebar. Folders stay on this device.
+        </p>
+        <OnboardingProfileForm
+          initialDisplayName={profile.display_name || ''}
+          initialLibraryName={profile.library_name || ''}
+          busy={profileBusy}
+          error={authError}
+          submitLabel="Save & continue"
+          onSubmit={async ({ displayName, libraryName }) => {
+            setAuthError?.('');
+            const result = await updateProfile({ displayName, libraryName });
+            if (!result?.ok) return;
+            if (intentFounding || grantedTryout) {
+              setStep('status');
+              return;
+            }
+            setStep('byok');
+          }}
+        />
       </>
     );
   } else if (step === 'byok') {
@@ -366,21 +474,25 @@ export default function WelcomePage() {
     body = (
       <>
         <span className="wp-eyebrow">
-          {founding ? `Founder #${profile.founder_number}` : 'Waitlist'}
+          {founding ? `Founder #${profile.founder_number}` : intentFounding ? 'Waitlist' : 'Welcome'}
         </span>
         <h1 className="wp-title" id={titleId}>
           {grantedTryout
             ? `${grantAmountLabel} ready to try`
             : founding
               ? `Thank you — you’re founding member #${profile.founder_number}`
-              : 'Thank you — you’re on the list'}
+              : intentFounding
+                ? 'Thank you — you’re on the list'
+                : `Welcome${profile.display_name ? `, ${profile.display_name}` : ''}`}
         </h1>
         <p className="wp-copy">
           {grantedTryout
             ? `Your tryout wallet has ${balanceLabel || grantAmountLabel} (~100 questions at €0.02 each). Open Paperview to start — or add your own OpenAI key as a fallback.`
             : founding
               ? 'You’re on the founding list. If you’re invited for tryout credit, it appears here automatically after sign-in. Until then, open Paperview with your own OpenAI key — free forever.'
-              : 'Founding spots are full. We’ll email you when credits launch. You can still use Paperview today with your own key.'}
+              : intentFounding
+                ? 'Founding spots are full. We’ll email you when credits launch. You can still use Paperview today with your own key.'
+                : 'You’re signed in. Open Paperview to keep reading — credits need this account; your own key does not.'}
         </p>
         {founding ? (
           <div className="wp-tick" aria-hidden="true">

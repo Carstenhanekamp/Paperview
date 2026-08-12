@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuthContext } from "./AuthContext";
 import FoundingSignup from "./components/FoundingSignup";
 import FoundingWelcome from "./components/FoundingWelcome";
+import { displayNameForUi } from "./profileOnboarding";
 
 const FONT_URL =
   "https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,300;0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,300;1,7..72,400;1,7..72,500;1,7..72,600;1,7..72,700&display=swap";
@@ -124,6 +125,7 @@ const CSS = `
   font-size: 13.5px; color: rgba(255,255,255,.78);
   background: none; border: 0; cursor: pointer; padding: 0;
   font-family: inherit;
+  text-decoration: none;
   transition: color .12s ease;
 }
 .pv-landing .nav-link:hover { color: #fff; }
@@ -1462,12 +1464,25 @@ export default function LandingPage() {
               <a className="nav-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">Docs</a>
             </div>
             <div className="nav-right">
+              {auth.configured && !auth.user ? (
+                <Link className="nav-link" to="/login">Log in</Link>
+              ) : null}
               {auth.profile?.founding ? (
                 <button type="button" className="nav-link" onClick={() => scrollTo("founding")} title="Founding member">
                   #{auth.profile.founder_number}
                 </button>
               ) : auth.user ? (
                 <button type="button" className="nav-link" onClick={() => scrollTo("founding")}>Waitlist</button>
+              ) : null}
+              {auth.user ? (
+                <button
+                  type="button"
+                  className="nav-link"
+                  onClick={openApp}
+                  title={auth.user.email || "Open Paperview"}
+                >
+                  {displayNameForUi(auth.profile, auth.user) || "Account"}
+                </button>
               ) : null}
               <GhGlassStar />
               <button type="button" className="nav-cta" onClick={openApp}>Open Paperview</button>
@@ -1673,6 +1688,12 @@ export default function LandingPage() {
               Open Paperview
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 12h13m0 0-5-5m5 5-5 5" /></svg>
             </button>
+            {auth.configured && !auth.user ? (
+              <p style={{ margin: "10px 0 0", fontSize: "12.5px", color: "var(--text-2)" }}>
+                Have tryout credit?{" "}
+                <Link to="/login" style={{ color: "var(--accent-on, #2F4056)", fontWeight: 600 }}>Log in</Link>
+              </p>
+            ) : null}
           </div>
           <div className="price-card muted">
             <span className="price-badge grey">Founding · limited</span>

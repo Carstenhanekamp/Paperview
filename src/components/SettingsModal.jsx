@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { IClose } from '../icons';
 import { clearRememberedApiKey } from '../apiKeyStorage';
+import { PROFILE_NAME_MAX } from '../profileOnboarding';
 
 export default function SettingsModal({
   apiKey,
@@ -36,6 +38,14 @@ export default function SettingsModal({
   const [inviteCode, setInviteCode] = useState('');
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteMessage, setInviteMessage] = useState('');
+  const [displayName, setDisplayName] = useState(profile?.display_name || '');
+  const [libraryName, setLibraryName] = useState(profile?.library_name || '');
+  const [profileMessage, setProfileMessage] = useState('');
+
+  useEffect(() => {
+    setDisplayName(profile?.display_name || '');
+    setLibraryName(profile?.library_name || '');
+  }, [profile?.display_name, profile?.library_name]);
 
   const creditStatusLine = () => {
     if (wallet && typeof wallet.balanceMicrocents === 'number') {
@@ -53,7 +63,8 @@ export default function SettingsModal({
             : profile.launch_grant_status
       }`;
     }
-    return 'On the credits waitlist · BYOK stays free forever';
+    if (auth?.user) return 'Signed in · BYOK stays free forever';
+    return 'Credits need an account · your own key does not';
   };
 
   const handleRedeemCode = async () => {
@@ -75,6 +86,18 @@ export default function SettingsModal({
     setInviteMessage(result?.message || wallet.walletError || 'Could not redeem code.');
   };
 
+  const handleSaveProfile = async () => {
+    if (!auth?.updateProfile) return;
+    setProfileMessage('');
+    auth.setAuthError?.('');
+    const result = await auth.updateProfile({ displayName, libraryName });
+    if (result?.ok) {
+      setProfileMessage('Saved.');
+      return;
+    }
+    setProfileMessage(result?.error || 'Could not save profile.');
+  };
+
   return (
     <div className="ov" onClick={closeSettingsModal}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -91,9 +114,62 @@ export default function SettingsModal({
                 <p className="settings-info" style={{ marginBottom: 8 }}>
                   Signed in as <strong>{userEmail || 'your email'}</strong>
                 </p>
-                <p className="settings-info" style={{ marginBottom: 8 }}>
+                <p className="settings-info" style={{ marginBottom: 12 }}>
                   {creditStatusLine()}
                 </p>
+                <label className="settings-label" style={{ marginBottom: 6 }}>Your name</label>
+                <input
+                  className="settings-input"
+                  value={displayName}
+                  onChange={(e) => {
+                    setDisplayName(e.target.value);
+                    setProfileMessage('');
+                  }}
+                  maxLength={PROFILE_NAME_MAX}
+                  placeholder="Ada Lovelace"
+                  autoComplete="name"
+                  disabled={auth.profileBusy}
+                />
+                <label className="settings-label" style={{ margin: '10px 0 6px' }}>Library name</label>
+                <input
+                  className="settings-input"
+                  value={libraryName}
+                  onChange={(e) => {
+                    setLibraryName(e.target.value);
+                    setProfileMessage('');
+                  }}
+                  maxLength={PROFILE_NAME_MAX}
+                  placeholder="Ada’s papers"
+                  autoComplete="off"
+                  disabled={auth.profileBusy}
+                />
+                <p className="settings-info" style={{ marginTop: 6 }}>
+                  Labels your library in the sidebar. Folders stay on this device.
+                </p>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <button
+                    className="btn-sec"
+                    type="button"
+                    disabled={auth.profileBusy}
+                    onClick={handleSaveProfile}
+                  >
+                    {auth.profileBusy ? 'Saving…' : 'Save profile'}
+                  </button>
+                  <button
+                    className="btn-sec"
+                    type="button"
+                    disabled={auth.authBusy}
+                    onClick={() => auth.signOut()}
+                  >
+                    {auth.authBusy ? 'Signing out…' : 'Sign out'}
+                  </button>
+                </div>
+                {profileMessage ? (
+                  <p className="settings-info" style={{ marginBottom: 12 }}>{profileMessage}</p>
+                ) : null}
+                {auth.authError && auth.authError !== profileMessage ? (
+                  <p className="settings-info" style={{ marginBottom: 12, color: '#9b2c2c' }}>{auth.authError}</p>
+                ) : null}
                 {auth.user && wallet?.redeemInviteCode ? (
                   <div style={{ marginBottom: 12 }}>
                     <label className="settings-label" style={{ marginBottom: 6 }}>Have an invite code?</label>
@@ -121,19 +197,21 @@ export default function SettingsModal({
                     ) : null}
                   </div>
                 ) : null}
-                <button
-                  className="btn-sec"
-                  type="button"
-                  disabled={auth.authBusy}
-                  onClick={() => auth.signOut()}
-                >
-                  {auth.authBusy ? 'Signing out…' : 'Sign out'}
-                </button>
               </>
             ) : (
-              <p className="settings-info">
-                No account in this browser. Claim a founding spot or join the waitlist from the homepage pricing section.
-              </p>
+              <>
+                <p className="settings-info" style={{ marginBottom: 10 }}>
+                  No account in this browser. Log in to use tryout credits — your own OpenAI key still works without an account.
+                </p>
+                <Link
+                  className="btn-sec"
+                  to="/login"
+                  onClick={closeSettingsModal}
+                  style={{ display: 'inline-flex', textDecoration: 'none' }}
+                >
+                  Log in
+                </Link>
+              </>
             )}
           </div>
         ) : null}

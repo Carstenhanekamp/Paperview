@@ -203,9 +203,11 @@ export default function FoundingSignup({ auth, variant = 'default' }) {
     spotsRemaining,
     foundingCap,
     authBusy,
+    claimBusy,
     authError,
     setAuthError,
     sendMagicLink,
+    claimFoundingSlot,
     signOut,
   } = auth;
 
@@ -245,11 +247,43 @@ export default function FoundingSignup({ auth, variant = 'default' }) {
   const onSubmit = async (e) => {
     e.preventDefault();
     setAuthError?.('');
-    const result = await sendMagicLink(email);
+    const result = await sendMagicLink(email, { intent: 'founding', next: '/app' });
     if (result?.ok) setSentTo(result.email);
   };
 
   if (user && profile) {
+    if (!profile.slot_resolved) {
+      return (
+        <div className={rootClass}>
+          <div className="fs-signed">
+            <strong>You’re signed in as {profile.email || user.email}</strong>
+            <p>
+              {spotsOpen
+                ? 'Claim a founding spot with this account — no second email needed.'
+                : 'Founding spots are full. Join the credits waitlist with this account.'}
+            </p>
+            <div className="fs-actions">
+              <button
+                type="button"
+                className="fs-linkish"
+                disabled={claimBusy || authBusy}
+                onClick={async () => {
+                  setAuthError?.('');
+                  await claimFoundingSlot();
+                }}
+              >
+                {claimBusy ? 'Claiming…' : ctaLabel}
+              </button>
+              <button type="button" className="fs-linkish" onClick={() => signOut()}>
+                Sign out
+              </button>
+            </div>
+            {authError ? <div className="fs-error">{authError}</div> : null}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className={rootClass}>
         <div className="fs-signed">
@@ -288,7 +322,7 @@ export default function FoundingSignup({ auth, variant = 'default' }) {
               className="fs-linkish"
               disabled={authBusy}
               onClick={async () => {
-                const result = await sendMagicLink(sentTo);
+                const result = await sendMagicLink(sentTo, { intent: 'founding', next: '/app' });
                 if (result?.ok) setSentTo(result.email);
               }}
             >

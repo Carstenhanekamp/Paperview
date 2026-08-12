@@ -38,12 +38,16 @@ Dashboard → **Authentication** → **URL Configuration**:
 http://localhost:5173/**
 http://localhost:5173/welcome
 http://localhost:5173/welcome/**
+http://localhost:5173/login
+http://localhost:5173/login/**
 https://YOUR-PRODUCTION-DOMAIN/**
 https://YOUR-PRODUCTION-DOMAIN/welcome
 https://YOUR-PRODUCTION-DOMAIN/welcome/**
+https://YOUR-PRODUCTION-DOMAIN/login
+https://YOUR-PRODUCTION-DOMAIN/login/**
 ```
 
-Magic / confirm links use `emailRedirectTo = ${origin}/welcome` (dedicated thank-you page).
+Magic / confirm links use `emailRedirectTo = ${origin}/welcome` (thank-you / onboarding page). `/login` is the dedicated magic-link request page.
 
 ## Email rate limit (“email rate limit exceeded”)
 

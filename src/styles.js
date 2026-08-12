@@ -71,11 +71,16 @@ body{font-family:var(--sans);background:var(--field);color:var(--ink);height:100
 .sb-workspace-mark::after{content:"";position:absolute;inset:9px 9px auto 9px;height:1px;background:#fff;box-shadow:0 3px 0 0 #fff,0 6px 0 0 #fff;}
 .sb-workspace-label{flex:1;min-width:0;font-size:14.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .sb-workspace-chev{color:var(--text-4);display:flex;flex-shrink:0;}
-.sb-user{display:none;}
+.sb-user{display:flex;align-items:center;gap:8px;min-width:0;flex:1;margin:0;padding:0;border:0;background:transparent;cursor:pointer;font:inherit;text-align:left;color:inherit;}
+.sb-user:hover .sb-username{color:var(--ink);}
 .sb-avatar{width:24px;height:24px;border-radius:6px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;}
 .sb-avatar::before{content:"";position:absolute;inset:5px 6px;border-radius:1px;background:#fff;}
 .sb-avatar::after{content:"";position:absolute;inset:8px 8px auto 8px;height:1px;background:var(--ink);box-shadow:0 3px 0 0 var(--ink),0 6px 0 0 var(--ink);}
-.sb-username{font-size:13.5px;font-weight:600;color:var(--ink);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sb-username{font-size:12.5px;font-weight:600;color:var(--text-2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sb-account{display:flex;align-items:center;min-width:0;flex:1 1 auto;}
+.sb-account-link{font-size:12px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;padding:4px 2px;}
+.sb-account-link:hover{color:var(--ink);text-decoration:underline;text-underline-offset:2px;}
+.sb-account-badge{font-size:10px;font-weight:700;color:var(--accent-on,#2F4056);background:var(--accent-tint,#E3E9EF);border-radius:999px;padding:2px 6px;flex-shrink:0;}
 .sb-tog{background:transparent;border:none;color:var(--text-3);cursor:pointer;padding:6px;border-radius:6px;display:flex;flex-shrink:0;transition:background .12s var(--ease);}
 .sb-tog:hover{background:var(--hover);color:var(--ink);}
 .sb-nav{padding:4px 8px 8px;display:flex;flex-direction:column;gap:1px;border-bottom:none;}
@@ -117,12 +122,13 @@ body{font-family:var(--sans);background:var(--field);color:var(--ink);height:100
 .sb-paper.active .sb-paper-title{color:var(--ink);font-weight:600;}
 .empty-upload-btn{height:24px;border-radius:7px;border:none;box-shadow:var(--sh-hairline);background:#fff;color:var(--ink);padding:0 8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;}
 .empty-upload-btn:hover{background:var(--fill-1);}
-.sb-footer{padding:12px 14px;border-top:.5px solid var(--hairline-soft);background:transparent;display:flex;align-items:center;gap:8px;}
-.sb-key-status{display:flex;align-items:center;gap:8px;flex:1;min-width:0;font-size:12px;color:var(--text-3);}
+.sb-footer{padding:10px 14px 12px;border-top:.5px solid var(--hairline-soft);background:transparent;display:flex;flex-direction:column;align-items:stretch;gap:6px;}
+.sb-footer-row{display:flex;align-items:center;gap:8px;min-width:0;}
+.sb-key-status{display:flex;align-items:center;gap:8px;min-width:0;font-size:12px;color:var(--text-3);}
 .sb-key-dot{width:7px;height:7px;border-radius:50%;background:#28C840;flex-shrink:0;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.12);}
 .sb-key-dot.off{background:var(--text-4);}
 .sb-key-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.sb-footer-gear{background:none;border:none;color:var(--text-3);cursor:pointer;padding:6px;border-radius:6px;display:flex;}
+.sb-footer-gear{background:none;border:none;color:var(--text-3);cursor:pointer;padding:6px;border-radius:6px;display:flex;flex-shrink:0;}
 .sb-footer-gear:hover{background:var(--hover);color:var(--ink);}
 .sb-upload-btn{width:100%;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12.5px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;font-family:inherit;transition:background .12s var(--ease);}
 .sb-upload-btn:hover{background:var(--accent-hover);}
