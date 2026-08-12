@@ -1496,6 +1496,10 @@ export default function PaperviewApp() {
             </div>
 
             <div className="sb-footer">
+              <div className="sb-footer-row">
+                <AccountMenu auth={auth} onOpenSettings={() => openSettingsModal(apiKey)} />
+                <button className="sb-footer-gear" onClick={() => openSettingsModal(apiKey)} title="Settings"><IGear size={14} /></button>
+              </div>
               <div className="sb-key-status">
                 <span className={`sb-key-dot ${apiKey || wallet.hasCredit ? "" : "off"}`} />
                 {wallet.hasCredit ? (
@@ -1522,8 +1526,6 @@ export default function PaperviewApp() {
                   </span>
                 )}
               </div>
-              <AccountMenu auth={auth} onOpenSettings={() => openSettingsModal(apiKey)} />
-              <button className="sb-footer-gear" onClick={() => openSettingsModal(apiKey)} title="Settings"><IGear size={14} /></button>
             </div>
           </div>
         </div>
