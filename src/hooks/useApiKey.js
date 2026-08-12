@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { ENV_API_KEY } from '../constants';
+import { takePendingApiKey } from '../pendingApiKey';
 import {
   hasRememberedApiKey,
   clearLegacyStoredApiKey,
@@ -28,17 +29,23 @@ export function useApiKey() {
     clearLegacyStoredApiKey();
     setRememberedApiKeyAvailable(hasRememberedApiKey());
     if (!ENV_API_KEY) {
-      try {
-        const fromWelcome = sessionStorage.getItem('pv.welcome.apikey');
-        if (fromWelcome) {
-          setApiKey(fromWelcome);
-          setApiKeySource('memory');
-          sessionStorage.removeItem('pv.welcome.apikey');
-        }
-      } catch {
-        /* ignore */
+      const fromWelcome = takePendingApiKey();
+      if (fromWelcome) {
+        setApiKey(fromWelcome);
+        setApiKeySource('memory');
       }
     }
+  }, []);
+
+  /**
+   * Adopt a key for this session only (no storage). Keeps apiKey and
+   * apiKeySource in step so callers cannot desync them.
+   */
+  const applyInMemoryApiKey = useCallback((key) => {
+    const trimmed = String(key || '').trim();
+    if (!trimmed) return;
+    setApiKey(trimmed);
+    setApiKeySource('memory');
   }, []);
 
   const resetSettingsInputs = useCallback(() => {
@@ -154,7 +161,6 @@ export function useApiKey() {
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
     setRememberedApiKeyAvailable,
-    setApiKey,
-    setApiKeySource,
+    applyInMemoryApiKey,
   };
 }

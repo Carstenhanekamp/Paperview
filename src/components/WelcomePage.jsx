@@ -2,7 +2,9 @@ import React, { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../AuthContext';
 import { useWalletContext } from '../WalletContext';
-import { WELCOME_STORAGE_KEY } from '../supabaseClient';
+import { FOUNDING_CAP, WELCOME_STORAGE_KEY } from '../supabaseClient';
+import { useIsDesktopViewport } from '../hooks/useIsDesktopViewport';
+import { setPendingApiKey } from '../pendingApiKey';
 import { formatMicrocentsAsEur, TRYOUT_GRANT_MICROCENT } from '../walletCredits';
 
 const FONT_URL =
@@ -207,11 +209,6 @@ function markWelcomeSeen(userId) {
   }
 }
 
-function isDesktopViewport() {
-  if (typeof window === 'undefined') return true;
-  return window.matchMedia('(min-width: 900px)').matches;
-}
-
 const SESSION_WAIT_MS = 12000;
 
 /**
@@ -222,11 +219,13 @@ export default function WelcomePage() {
   const wallet = useWalletContext();
   const navigate = useNavigate();
   const titleId = useId();
+  const isDesktop = useIsDesktopViewport();
   const { user, profile, ready, claimBusy, configured, refreshProfile } = auth;
   const [step, setStep] = useState('status'); // status | byok
+  // No apiKeyMemory state: saving a key navigates straight to /app, so it could
+  // never be read back here. The key is handed over via setPendingApiKey.
   const [draftKey, setDraftKey] = useState('');
   const [timedOut, setTimedOut] = useState(false);
-  const [apiKeyMemory, setApiKeyMemory] = useState('');
   const [tryoutClaim, setTryoutClaim] = useState(null);
   const [tryoutBusy, setTryoutBusy] = useState(false);
 
@@ -346,14 +345,8 @@ export default function WelcomePage() {
             className="wp-primary"
             onClick={() => {
               const trimmed = draftKey.trim();
-              if (trimmed) {
-                try {
-                  sessionStorage.setItem('pv.welcome.apikey', trimmed);
-                } catch {
-                  /* ignore */
-                }
-                setApiKeyMemory(trimmed);
-              }
+              if (trimmed) setPendingApiKey(trimmed);
+              setDraftKey('');
               openApp();
             }}
           >
@@ -368,7 +361,7 @@ export default function WelcomePage() {
   } else {
     const founding = Boolean(profile.founding);
     const progress = founding && profile.founder_number
-      ? Math.min(100, (Number(profile.founder_number) / 100) * 100)
+      ? Math.min(100, (Number(profile.founder_number) / FOUNDING_CAP) * 100)
       : 100;
     body = (
       <>
@@ -394,7 +387,7 @@ export default function WelcomePage() {
             <span style={{ width: `${progress}%` }} />
           </div>
         ) : null}
-        {!isDesktopViewport() ? (
+        {!isDesktop ? (
           <p className="wp-note">
             The reader works best on desktop — confirm on a larger screen when you’re ready to open a library.
           </p>
@@ -404,14 +397,14 @@ export default function WelcomePage() {
             type="button"
             className="wp-primary"
             onClick={() => {
-              if (grantedTryout || apiKeyMemory) {
+              if (grantedTryout) {
                 openApp();
                 return;
               }
               setStep('byok');
             }}
           >
-            {grantedTryout || apiKeyMemory ? 'Open Paperview' : 'Continue'}
+            {grantedTryout ? 'Open Paperview' : 'Continue'}
           </button>
           <button type="button" className="wp-secondary" onClick={goHome}>
             Back to home

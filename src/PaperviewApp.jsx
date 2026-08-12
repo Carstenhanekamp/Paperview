@@ -168,8 +168,7 @@ export default function PaperviewApp() {
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
     setRememberedApiKeyAvailable,
-    setApiKey,
-    setApiKeySource,
+    applyInMemoryApiKey,
   } = useApiKey();
   const [edgeToast, setEdgeToast] = useState(false);
   const [debugCitations] = useState(() => {
@@ -1989,10 +1988,7 @@ export default function PaperviewApp() {
           auth={auth}
           apiKey={apiKey}
           onOpenSettings={() => openSettingsModal(apiKey)}
-          onSaveApiKey={(key) => {
-            setApiKey(key);
-            setApiKeySource('memory');
-          }}
+          onSaveApiKey={applyInMemoryApiKey}
         />
 
         {edgeToast && (

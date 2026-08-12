@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { WELCOME_STORAGE_KEY } from '../supabaseClient';
+import { FOUNDING_CAP, WELCOME_STORAGE_KEY } from '../supabaseClient';
+import { useIsDesktopViewport } from '../hooks/useIsDesktopViewport';
 
 const WELCOME_CSS = `
 .pv-welcome-overlay {
@@ -175,11 +176,6 @@ function markWelcomeSeen(userId) {
   }
 }
 
-function isDesktopViewport() {
-  if (typeof window === 'undefined') return true;
-  return window.matchMedia('(min-width: 900px)').matches;
-}
-
 /**
  * One-time post-auth welcome sheet (founder vs waitlist) + optional soft BYOK.
  */
@@ -192,6 +188,7 @@ export default function FoundingWelcome({
 }) {
   const { user, profile, ready, claimBusy } = auth;
   const titleId = useId();
+  const isDesktop = useIsDesktopViewport();
   const panelRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState('status'); // status | byok
@@ -226,7 +223,7 @@ export default function FoundingWelcome({
 
   const founding = Boolean(profile.founding);
   const progress = founding && profile.founder_number
-    ? Math.min(100, (Number(profile.founder_number) / 100) * 100)
+    ? Math.min(100, (Number(profile.founder_number) / FOUNDING_CAP) * 100)
     : 100;
 
   const dismiss = () => {
@@ -279,7 +276,7 @@ export default function FoundingWelcome({
                   <span style={{ width: `${progress}%` }} />
                 </div>
               ) : null}
-              {!isDesktopViewport() ? (
+              {!isDesktop ? (
                 <p className="pv-welcome-note">
                   The reader is desktop-oriented — continue on a larger screen when you’re ready to open a library.
                 </p>
