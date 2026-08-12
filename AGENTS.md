@@ -36,6 +36,8 @@ Do not dump large feature CSS into unbounded growth of `styles.js`. Prefer a ded
 
 ## Cursor Cloud specific instructions
 
+Repo-managed Cloud Agent config lives in [`.cursor/environment.json`](.cursor/environment.json) (`npm ci` + Vite on port 5173). Saving that environment in the [Cloud Agents dashboard](https://cursor.com/dashboard/cloud-agents#environments) is what enables Desktop / Agents Window — AGENTS.md notes alone are not enough.
+
 Single product: Vite React SPA + optional local API middleware (no separate backend process).
 
 ### Run / test / build
