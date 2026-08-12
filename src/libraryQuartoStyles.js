@@ -3,7 +3,7 @@ export const LIBRARY_QUARTO_CSS = `
 .library-view{
   flex:1;min-width:0;min-height:0;width:100%;
   display:flex;gap:14px;padding:0;overflow:hidden;
-  background:transparent;
+  background:transparent;position:relative;
 }
 .library-view .library-main{
   flex:1;min-width:0;min-height:0;

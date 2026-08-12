@@ -41,6 +41,7 @@ import ViewerSearchField from './components/ViewerSearchField';
 import ChatPanel from './components/ChatPanel';
 import UploadModal from './components/UploadModal';
 import FolderPermModal from './components/FolderPermModal';
+import EmptyReaderState from './components/EmptyReaderState';
 import SelectionToolbar from './components/SelectionToolbar';
 import ExplainPopover from './components/ExplainPopover';
 import { useAuthContext } from './AuthContext';
@@ -1694,6 +1695,12 @@ export default function PaperviewApp() {
                 getMeta={getMeta}
                 exportFolderBibtex={exportFolderBibtex}
                 extractPaperMetaWithAI={extractPaperMetaWithAI}
+                canPickFolder={typeof window.showDirectoryPicker === 'function'}
+                apiKey={apiKey}
+                hasCredit={wallet.hasCredit}
+                onOpenFolder={() => setShowFolderPermModal(true)}
+                onNewFolder={startNewFolder}
+                onOpenSettings={() => openSettingsModal(apiKey)}
               />
             ) : currentView === "agent" ? (
               <AgentView
@@ -1860,35 +1867,25 @@ export default function PaperviewApp() {
                 )}
               </>
             ) : (
-              <div className="welcome">
-                {!sidebarOpen && (
-                  <button className="topbar-btn" onClick={() => setSidebarOpen(true)} style={{ marginBottom: 12 }}>
-                    <IChevronRightDouble size={14} /> Library
-                  </button>
-                )}
-                <div className="welcome-mark" aria-hidden="true"><IFile size={26} /></div>
-                <h2 className="welcome-title">Welcome to Paperview</h2>
-                <p className="welcome-sub">Open a folder of PDFs or upload individual papers, then chat with AI-powered citations grounded in the source text.</p>
-                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                  {typeof window.showDirectoryPicker === 'function' && (
-                    <button className="welcome-upload" type="button" onClick={() => setShowFolderPermModal(true)}>
-                      <IFolder size={12} /> Open Folder
-                    </button>
-                  )}
-                  <button
-                    className="welcome-upload"
-                    type="button"
-                    style={typeof window.showDirectoryPicker === 'function' ? { background: '#fff', color: '#333', border: '1px solid #d5d3cd' } : {}}
-                    onClick={() => {
-                      if (activeFolder?.id) setUpFolder(activeFolder.id);
-                      else if (folders.length) setUpFolder(folders[0].id);
-                      setShowUpload(true);
-                    }}
-                  >
-                    <IUpload size={12} /> Upload PDF
-                  </button>
-                </div>
-              </div>
+              <EmptyReaderState
+                sidebarOpen={sidebarOpen}
+                canPickFolder={typeof window.showDirectoryPicker === 'function'}
+                hasFolder={folders.some((folder) => folder.id !== UPLOADS_FOLDER_ID)}
+                apiKey={apiKey}
+                hasCredit={wallet.hasCredit}
+                onOpenSidebar={() => setSidebarOpen(true)}
+                onOpenFolder={() => setShowFolderPermModal(true)}
+                onNewFolder={() => {
+                  setSidebarOpen(true);
+                  startNewFolder();
+                }}
+                onUpload={() => {
+                  if (activeFolder?.id) setUpFolder(activeFolder.id);
+                  else if (folders.length) setUpFolder(folders[0].id);
+                  setShowUpload(true);
+                }}
+                onOpenSettings={() => openSettingsModal(apiKey)}
+              />
             )}
           </div>
         </div>

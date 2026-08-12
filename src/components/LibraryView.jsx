@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { IPlus, IChevronDown, IRight, ITrash, IFile, ICopy, IUpload } from '../icons';
 import LibraryPaperDetail from './LibraryPaperDetail';
 import BibtexPreviewModal from './BibtexPreviewModal';
+import EmptyReaderState from './EmptyReaderState';
 import { LIBRARY_QUARTO_CSS } from '../libraryQuartoStyles';
 import { useScopedStyles } from '../hooks/useScopedStyles';
+import { UPLOADS_FOLDER_ID } from '../constants';
 import '../libraryQuarto.css';
 
 const SWATCHES = ['', 's2', 's3'];
@@ -38,6 +40,12 @@ export default function LibraryView({
   getMeta,
   exportFolderBibtex,
   extractPaperMetaWithAI,
+  canPickFolder = true,
+  apiKey = '',
+  hasCredit = false,
+  onOpenFolder,
+  onNewFolder,
+  onOpenSettings,
 }) {
   useScopedStyles('pv-library-quarto', LIBRARY_QUARTO_CSS);
 
@@ -45,6 +53,17 @@ export default function LibraryView({
   const [selectedPaperId, setSelectedPaperId] = useState(null);
   const [bibtexPreview, setBibtexPreview] = useState(null);
   const [expandedIds, setExpandedIds] = useState(() => new Set());
+
+  const paperCount = useMemo(
+    () => (folders || []).reduce((sum, folder) => sum + (folder.papers?.length || 0), 0),
+    [folders]
+  );
+  const hasWorkspaceFolder = useMemo(
+    () => (folders || []).some((folder) => folder.id !== UPLOADS_FOLDER_ID),
+    [folders]
+  );
+  // Guided empty whenever the library has nothing to browse yet.
+  const showFirstRunEmpty = paperCount === 0;
 
   const sortedFolders = useMemo(() => {
     return (folders || []).map((folder) => {
@@ -108,6 +127,72 @@ export default function LibraryView({
   const openBibtexPreview = ({ title, filename, content }) => {
     setBibtexPreview({ title, filename, content });
   };
+
+  const handleUpload = () => {
+    if (selectedFolderId) setUpFolder(selectedFolderId);
+    else if (folders?.[0]?.id) setUpFolder(folders[0].id);
+    setShowUpload(true);
+  };
+
+  if (showFirstRunEmpty) {
+    return (
+      <div className="library-view">
+        {newFolder ? (
+          <div
+            className="library-main"
+            style={{
+              position: 'absolute',
+              top: 16,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 'min(420px, calc(100% - 32px))',
+              zIndex: 2,
+              flex: 'none',
+              height: 'auto',
+              overflow: 'visible',
+            }}
+          >
+            <div className="library-nf" style={{ borderBottom: 'none' }}>
+              <input
+                autoFocus
+                className="nf-input"
+                value={nfName}
+                onChange={(e) => {
+                  setNfName(e.target.value);
+                  if (folderError) setFolderError('');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') createFolder();
+                  if (e.key === 'Escape') cancelNewFolder();
+                }}
+                placeholder="Folder name…"
+              />
+              {folderError && <div className="nf-error">{folderError}</div>}
+              <div className="nf-ctrl">
+                <button className="lib-btn dark" type="button" onClick={createFolder}>
+                  <IPlus size={12} /> Create
+                </button>
+                <button className="lib-btn" type="button" onClick={cancelNewFolder}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        <EmptyReaderState
+          variant="library"
+          canPickFolder={canPickFolder}
+          hasFolder={hasWorkspaceFolder}
+          apiKey={apiKey}
+          hasCredit={hasCredit}
+          onOpenFolder={onOpenFolder}
+          onNewFolder={onNewFolder}
+          onUpload={handleUpload}
+          onOpenSettings={onOpenSettings}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="library-view library-view-with-detail">
