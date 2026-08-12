@@ -33,3 +33,22 @@ Do not dump large feature CSS into unbounded growth of `styles.js`. Prefer a ded
 - New AI paths → new hooks (do not bolt onto `useChatSend` / `useAgentSend` unless the change is a few lines of shared plumbing).
 - New library/biblio/index logic → pure utils + thin hooks.
 - Selection / explain / library search UI → components; composition root only mounts them.
+
+## Cursor Cloud specific instructions
+
+Single product: Vite React SPA + optional local API middleware (no separate backend process).
+
+### Run / test / build
+
+- Standard scripts are in [package.json](package.json) / [README.md](README.md): `npm run dev`, `npm test`, `npm run build`.
+- There is **no ESLint/prettier lint script** in this repo.
+- Dev server defaults to `http://localhost:5173/`; the reader lives at `/app`.
+- Vite mounts `api/openai-response` and `api/fetch-pdf` as middleware during `npm run dev` (see [vite.config.js](vite.config.js)). Without `OPENAI_API_KEY` in `.env.local`, `/api/openai-response` returns 401 — expected. PDF reading/folder flows work without a key.
+
+### Gotchas for cloud / automated browser testing
+
+- **Use Open Folder, not Ctrl+O / direct file open.** Opening a `.pdf` via the OS/Chrome file picker often launches Chrome’s native PDF viewer in a new tab. In-app loading uses the File System Access API: click **Open Folder** (or **Open folder** on the empty library), select a directory of PDFs, then open a paper from the sidebar.
+- First visit shows a privacy consent dialog (`I understand — open the app`). Accept it before the library UI appears.
+- `/app` gates narrow viewports below 900px (`DesktopGate`); use a desktop-sized window or click **Continue anyway**.
+- Folder access needs Chromium (Chrome/Edge). Upload-only / IndexedDB paths exist when `showDirectoryPicker` is unavailable, but prefer Open Folder for end-to-end folder workflows.
+- Copy `.env.example` → `.env.local` for local config. Prefer server-side `OPENAI_API_KEY` over `VITE_OPENAI_API_KEY` (the latter is exposed to the client bundle). Restart Vite after env changes.
