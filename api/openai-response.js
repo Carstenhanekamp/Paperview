@@ -1,6 +1,8 @@
 import {
   actionPriceMicrocents,
   clampWalletMaxOutputTokens,
+  continuationRoundsForAction,
+  findDisallowedWalletTool,
   isWalletModelAllowed,
   parseWalletModelAllowlist,
   resolveBillableAction,
@@ -189,7 +191,22 @@ export default {
     let parentTier = null;
     if (billingMode === "wallet" && user?.id && parentResponseId) {
       parentTier = await getWalletProxyResponseTier(user.id, parentResponseId);
-      if (parentTier?.found && parentTier.owned === false) {
+
+      // Fail closed. All wallet users share one server OpenAI key, so every
+      // response lives in the same org and `previous_response_id` from another
+      // user would otherwise be a valid handle onto their conversation. This
+      // table is the only thing enforcing that boundary — if we cannot read it,
+      // we must not forward the id.
+      if (!parentTier) {
+        return json(
+          {
+            error: "Could not verify that conversation. Try again in a moment.",
+            code: "previous_response_unverified",
+          },
+          { status: 503 },
+        );
+      }
+      if (parentTier.found !== true || parentTier.owned !== true) {
         return json(
           {
             error: "That conversation continuation is not available on tryout credit.",
@@ -198,18 +215,24 @@ export default {
           { status: 403 },
         );
       }
-      if (parentTier?.found && parentTier.owned) {
-        parentAction = parentTier.action || null;
-      }
+      parentAction = parentTier.action || null;
     }
 
     const action = resolveBillableAction(claimedAction, payload, { parentAction });
     const continuationSkip =
       billingMode === "wallet" &&
-      shouldSkipWalletDebitForContinuation({ parentResponseId, parentTier });
+      shouldSkipWalletDebitForContinuation({ parentResponseId, parentTier, action });
     const priceMicrocents = continuationSkip ? 0 : actionPriceMicrocents(action);
     const model = payload?.model || null;
     const requestId = billingMode === "wallet" && !continuationSkip ? newRequestId(action) : null;
+
+    // A free round spends one unit of the root turn's budget and inherits its
+    // root id; a billed turn opens a fresh budget. Either way the chain is
+    // bounded, so one debit can never fund unlimited requests.
+    const rootRequestId = continuationSkip ? parentTier?.rootRequestId || null : requestId;
+    const roundsRemaining = continuationSkip
+      ? Math.max(0, Number(parentTier?.roundsRemaining || 0) - 1)
+      : continuationRoundsForAction(action);
 
     let walletPayload = payload;
     let debitBalance = null;
@@ -251,6 +274,19 @@ export default {
               "That model is not available on tryout credit. Choose a lighter model, or add your own OpenAI API key.",
             code: "wallet_model_not_allowed",
             allowed_models: allowedModels,
+          },
+          { status: 400 },
+        );
+      }
+
+      const badTool = findDisallowedWalletTool(payload);
+      if (badTool) {
+        return json(
+          {
+            error:
+              "That tool is not available on tryout credit. Add your own OpenAI API key to use it.",
+            code: "wallet_tool_not_allowed",
+            tool: badTool.type,
           },
           { status: 400 },
         );
@@ -308,22 +344,32 @@ export default {
         "content-type": upstream.headers.get("content-type") || "application/json; charset=utf-8",
       };
 
+      // Claim ownership of the new response and carry the remaining budget onto
+      // it. Best-effort: the debit is already committed, so a failure here must
+      // not cost the user their answer. The lookup above fails closed, so an
+      // unrecorded response simply cannot be continued.
+      const recordTier = async () => {
+        if (!upstream.ok) return;
+        const responseId = openaiResponseIdFromBody(bodyText);
+        if (!responseId) return;
+        try {
+          await recordWalletProxyResponseTier(user.id, responseId, action, {
+            rootRequestId,
+            roundsRemaining,
+          });
+        } catch (tierErr) {
+          console.error("wallet response tier record failed", tierErr);
+        }
+      };
+
       if (billingMode === "wallet" && user?.id) {
         headers["x-paperview-action"] = action;
         headers["x-paperview-action-price-microcents"] = String(priceMicrocents);
+        headers["x-paperview-continuation-rounds-remaining"] = String(roundsRemaining);
 
         if (continuationSkip) {
           // Covered by the root turn debit — still chain ownership for further rounds.
-          if (upstream.ok) {
-            const responseId = openaiResponseIdFromBody(bodyText);
-            if (responseId) {
-              try {
-                await recordWalletProxyResponseTier(user.id, responseId, action);
-              } catch (tierErr) {
-                console.error("wallet response tier record failed", tierErr);
-              }
-            }
-          }
+          await recordTier();
           headers["x-paperview-billed"] = "wallet_continuation";
         } else if (requestId) {
           if (!upstream.ok) {
@@ -360,14 +406,7 @@ export default {
               // Debit already committed; annotation is ops/subsidy metadata only.
               console.error("wallet debit annotate failed", annotateErr);
             }
-            const responseId = openaiResponseIdFromBody(bodyText);
-            if (responseId) {
-              try {
-                await recordWalletProxyResponseTier(user.id, responseId, action);
-              } catch (tierErr) {
-                console.error("wallet response tier record failed", tierErr);
-              }
-            }
+            await recordTier();
             headers["x-paperview-billed"] = "wallet";
             if (debitBalance != null) {
               headers["x-paperview-balance-microcents"] = String(debitBalance);
@@ -395,12 +434,9 @@ export default {
           console.error("wallet refund failed after proxy exception", refundErr);
         }
       }
-      return json(
-        {
-          error: error?.message || "OpenAI proxy request failed.",
-        },
-        { status: 500 },
-      );
+      // Detail stays in the log — the message can carry internal proxy and
+      // Supabase failure text that the client has no business seeing.
+      return json({ error: "OpenAI proxy request failed." }, { status: 500 });
     }
   },
 };

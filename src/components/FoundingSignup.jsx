@@ -207,7 +207,6 @@ export default function FoundingSignup({ auth, variant = 'default' }) {
     setAuthError,
     sendMagicLink,
     signOut,
-    refreshSpots,
   } = auth;
 
   const [email, setEmail] = useState('');
@@ -215,8 +214,9 @@ export default function FoundingSignup({ auth, variant = 'default' }) {
 
   useEffect(() => {
     ensureStyles();
-    refreshSpots?.();
-  }, [refreshSpots]);
+    // useAuth already fetches the count on mount; refetching here just doubled
+    // the RPC on every landing-page load.
+  }, []);
 
   const rootClass =
     variant === 'hero' ? 'pv-founding-signup is-hero' : 'pv-founding-signup';
@@ -231,9 +231,16 @@ export default function FoundingSignup({ auth, variant = 'default' }) {
     );
   }
 
-  const spotsLeft = Math.max(0, Number(spotsRemaining) || 0);
-  const spotsOpen = spotsLeft > 0;
-  const ctaLabel = spotsOpen ? 'Claim founding spot' : 'Join waitlist';
+  // spotsRemaining is null until the count is known, and stays null if the
+  // lookup fails — render neither "N left" nor "full" on a number we don't have.
+  const spotsKnown = Number.isFinite(Number(spotsRemaining)) && spotsRemaining !== null;
+  const spotsLeft = spotsKnown ? Math.max(0, Number(spotsRemaining)) : null;
+  const spotsOpen = spotsKnown ? spotsLeft > 0 : true;
+  const ctaLabel = !spotsKnown
+    ? 'Join the founding list'
+    : spotsOpen
+      ? 'Claim founding spot'
+      : 'Join waitlist';
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -300,9 +307,11 @@ export default function FoundingSignup({ auth, variant = 'default' }) {
   return (
     <div className={rootClass}>
       <div className="fs-eyebrow">
-        {spotsOpen
-          ? `${spotsLeft} of ${foundingCap} founding spots left`
-          : 'Founding spots filled · waitlist open'}
+        {!spotsKnown
+          ? 'Founding launch · limited spots'
+          : spotsOpen
+            ? `${spotsLeft} of ${foundingCap} founding spots left`
+            : 'Founding spots filled · waitlist open'}
       </div>
       <form className="fs-bezel" onSubmit={onSubmit}>
         <div className="fs-inner">

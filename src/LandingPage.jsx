@@ -1415,9 +1415,9 @@ export default function LandingPage() {
     if (!document.querySelector('style[data-paperview-landing]')) {
       const style = document.createElement("style");
       style.setAttribute("data-paperview-landing", "1");
+      style.textContent = CSS;
       document.head.appendChild(style);
     }
-    document.querySelector('style[data-paperview-landing]').textContent = CSS;
     document.body.style.overflow = "auto";
     document.body.style.height = "auto";
     document.body.style.background = "#FAFAFA";

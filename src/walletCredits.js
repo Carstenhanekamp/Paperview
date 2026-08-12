@@ -17,6 +17,34 @@ export const ACTION_PRICE_EUR = {
 /** Local PDF search used by chat — allowed at chat price. */
 export const CHAT_ALLOWED_TOOL_NAMES = new Set(["search_document"]);
 
+/**
+ * Tool types the hosted proxy will forward to OpenAI. Everything else (mcp,
+ * code_interpreter, computer, file_search, image_generation, …) is refused:
+ * those bill against the *server* key at costs unbounded by our flat action
+ * price, and `mcp` additionally makes OpenAI call an attacker-chosen host.
+ */
+export const WALLET_ALLOWED_TOOL_TYPES = new Set(["function", "web_search"]);
+
+/** Function tools the app actually ships (chat + agent). */
+export const WALLET_ALLOWED_FUNCTION_TOOL_NAMES = new Set([
+  "search_document",
+  "fetch_remote_paper",
+]);
+
+/**
+ * Free tool-loop continuations allowed per paid root turn, per tier.
+ * Sized to the client's own ceilings so honest runs never re-bill:
+ *   chat    — MAX_SEARCH_TOOL_ROUNDS (20)
+ *   agent   — MAX_AGENT_RESEARCH_PASSES (3) × 20 cycles + 2 pass chains
+ *             + 2 finalize passes = 64, plus headroom
+ * Beyond the budget the next turn is billed as a fresh root.
+ */
+export const WALLET_CONTINUATION_ROUNDS = {
+  chat: 20,
+  explain: 20,
+  agent: 70,
+};
+
 /** Hosted-credit model allowlist (override with OPENAI_WALLET_MODELS). */
 export const DEFAULT_WALLET_MODELS = ["gpt-5.4-nano", "gpt-5.4-mini"];
 
@@ -178,23 +206,73 @@ export function resolveBillableAction(claimedAction = "chat", payload = null, co
   return normalized;
 }
 
+const ACTION_RANK = { chat: 1, explain: 1, agent: 2 };
+
 /** Prefer the higher-priced of two actions. */
 export function maxBillableAction(a, b) {
-  const rank = { chat: 1, explain: 1, agent: 2 };
   const left = normalizeClaimedAction(a);
   const right = normalizeClaimedAction(b);
-  return (rank[right] || 0) > (rank[left] || 0) ? right : left;
+  return (ACTION_RANK[right] || 0) > (ACTION_RANK[left] || 0) ? right : left;
+}
+
+/** Free continuation budget granted to a newly billed root turn. */
+export function continuationRoundsForAction(action = "chat") {
+  const key = normalizeClaimedAction(action);
+  return WALLET_CONTINUATION_ROUNDS[key] ?? WALLET_CONTINUATION_ROUNDS.chat;
 }
 
 /**
- * True when this wallet proxy call is a tool-loop continuation of a prior
- * owned response — debit already taken on the root turn.
- * @param {{ parentResponseId?: string|null, parentTier?: { found?: boolean, owned?: boolean }|null }} args
+ * First tool in `payload.tools` the hosted proxy refuses to forward, or null.
+ * Returns a short reason string for the client-facing error.
  */
-export function shouldSkipWalletDebitForContinuation({ parentResponseId = null, parentTier = null } = {}) {
+export function findDisallowedWalletTool(payload) {
+  for (const tool of toolEntries(payload)) {
+    if (!tool || typeof tool !== "object") return { type: String(tool), reason: "malformed_tool" };
+    const type = String(tool.type || "").trim().toLowerCase();
+    if (!WALLET_ALLOWED_TOOL_TYPES.has(type)) {
+      return { type: type || "(missing)", reason: "tool_type_not_allowed" };
+    }
+    if (type === "function") {
+      const name = String(tool.name || "").trim();
+      if (!WALLET_ALLOWED_FUNCTION_TOOL_NAMES.has(name)) {
+        return { type: `function:${name || "(unnamed)"}`, reason: "function_tool_not_allowed" };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * True when this wallet proxy call is a tool-loop continuation of a prior owned
+ * response whose root debit still has budget left — the debit was taken on the
+ * root turn and covers this round.
+ *
+ * Fails closed: an unknown, unowned, exhausted, or unreadable parent is billed.
+ * The tier must also not out-rank the parent's, so an agent-shaped payload
+ * cannot ride a cheap chat root for free.
+ *
+ * @param {{
+ *   parentResponseId?: string|null,
+ *   parentTier?: { found?: boolean, owned?: boolean, action?: string, roundsRemaining?: number }|null,
+ *   action?: string,
+ * }} args
+ */
+export function shouldSkipWalletDebitForContinuation({
+  parentResponseId = null,
+  parentTier = null,
+  action = "chat",
+} = {}) {
   const parentId = String(parentResponseId || "").trim();
   if (!parentId) return false;
   if (!parentTier || parentTier.found !== true || parentTier.owned !== true) return false;
+
+  const roundsRemaining = Number(parentTier.roundsRemaining);
+  if (!Number.isFinite(roundsRemaining) || roundsRemaining <= 0) return false;
+
+  const requested = ACTION_RANK[normalizeClaimedAction(action)] || 0;
+  const parentRank = ACTION_RANK[normalizeClaimedAction(parentTier.action || "chat")] || 0;
+  if (requested > parentRank) return false;
+
   return true;
 }
 

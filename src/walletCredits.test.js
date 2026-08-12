@@ -3,7 +3,9 @@ import {
   ACTION_PRICE_EUR,
   actionPriceMicrocents,
   clampWalletMaxOutputTokens,
+  continuationRoundsForAction,
   eurToMicrocents,
+  findDisallowedWalletTool,
   formatEur,
   formatMicrocentsAsEur,
   isWalletModelAllowed,
@@ -91,9 +93,82 @@ describe('walletCredits', () => {
     expect(
       shouldSkipWalletDebitForContinuation({
         parentResponseId: 'resp_1',
-        parentTier: { found: true, owned: true, action: 'chat' },
+        parentTier: { found: true, owned: true, action: 'chat', roundsRemaining: 20 },
+        action: 'chat',
       }),
     ).toBe(true);
+  });
+
+  it('bills again once the root turn continuation budget is spent', () => {
+    const owned = { found: true, owned: true, action: 'chat' };
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: { ...owned, roundsRemaining: 1 },
+        action: 'chat',
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: { ...owned, roundsRemaining: 0 },
+        action: 'chat',
+      }),
+    ).toBe(false);
+    // Missing budget (pre-migration row) is treated as spent, not unlimited.
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: owned,
+        action: 'chat',
+      }),
+    ).toBe(false);
+  });
+
+  it('refuses to let an agent payload ride a cheaper chat root for free', () => {
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: { found: true, owned: true, action: 'chat', roundsRemaining: 20 },
+        action: 'agent',
+      }),
+    ).toBe(false);
+    // Cheaper-or-equal tiers still ride the agent root they were paid for.
+    expect(
+      shouldSkipWalletDebitForContinuation({
+        parentResponseId: 'resp_1',
+        parentTier: { found: true, owned: true, action: 'agent', roundsRemaining: 20 },
+        action: 'chat',
+      }),
+    ).toBe(true);
+  });
+
+  it('grants a continuation budget that covers the client tool loops', () => {
+    // chat loops up to MAX_SEARCH_TOOL_ROUNDS (20)
+    expect(continuationRoundsForAction('chat')).toBeGreaterThanOrEqual(20);
+    // agent: 3 passes x 20 cycles + 2 pass chains + 2 finalize passes = 64
+    expect(continuationRoundsForAction('agent')).toBeGreaterThanOrEqual(64);
+    expect(continuationRoundsForAction('nonsense')).toBe(continuationRoundsForAction('chat'));
+  });
+
+  it('admits only the tools the app actually ships', () => {
+    expect(findDisallowedWalletTool({ tools: [{ type: 'function', name: 'search_document' }] })).toBeNull();
+    expect(
+      findDisallowedWalletTool({
+        tools: [{ type: 'web_search' }, { type: 'function', name: 'fetch_remote_paper' }],
+      }),
+    ).toBeNull();
+    expect(findDisallowedWalletTool({})).toBeNull();
+
+    // Expensive / SSRF-shaped built-ins are refused outright.
+    expect(findDisallowedWalletTool({ tools: [{ type: 'code_interpreter' }] })?.type).toBe('code_interpreter');
+    expect(
+      findDisallowedWalletTool({ tools: [{ type: 'mcp', server_url: 'https://attacker.example' }] })?.type,
+    ).toBe('mcp');
+    expect(findDisallowedWalletTool({ tools: [{ type: 'file_search' }] })?.type).toBe('file_search');
+    expect(
+      findDisallowedWalletTool({ tools: [{ type: 'function', name: 'exfiltrate' }] })?.type,
+    ).toBe('function:exfiltrate');
   });
 
   it('upgrades when input names a non-chat tool even with search_document tools', () => {
