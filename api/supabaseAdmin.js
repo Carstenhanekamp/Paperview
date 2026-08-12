@@ -175,7 +175,12 @@ export async function getWalletProxyResponseAction(userId, responseId) {
 }
 
 /**
- * @returns {Promise<{ found: boolean, owned?: boolean, action?: string }|null>}
+ * Ownership + remaining free-continuation budget for a prior response.
+ * Returns null only when the lookup itself failed — callers must treat that as
+ * "unverified" and refuse the continuation, never as "not found".
+ *
+ * @returns {Promise<{ found: boolean, owned?: boolean, action?: string,
+ *   rootRequestId?: string|null, roundsRemaining?: number }|null>}
  */
 export async function getWalletProxyResponseTier(userId, responseId) {
   const id = String(responseId || "").trim();
@@ -190,18 +195,28 @@ export async function getWalletProxyResponseTier(userId, responseId) {
       found: Boolean(row.found),
       owned: row.owned === true,
       action: typeof row.action === "string" ? row.action : undefined,
+      rootRequestId: typeof row.root_request_id === "string" ? row.root_request_id : null,
+      roundsRemaining: Number(row.rounds_remaining) || 0,
     };
-  } catch {
+  } catch (err) {
+    console.error("wallet response tier lookup failed", err);
     return null;
   }
 }
 
-export async function recordWalletProxyResponseTier(userId, responseId, action) {
+export async function recordWalletProxyResponseTier(
+  userId,
+  responseId,
+  action,
+  { rootRequestId = null, roundsRemaining = 0 } = {},
+) {
   const id = String(responseId || "").trim();
   if (!userId || !id || !action) return;
   await rpc("record_wallet_proxy_response_tier", {
     p_user_id: userId,
     p_response_id: id,
     p_action: action,
+    p_root_request_id: rootRequestId,
+    p_rounds_remaining: Math.max(0, Number(roundsRemaining) || 0),
   });
 }
