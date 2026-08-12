@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { FOUNDING_CAP, WELCOME_STORAGE_KEY } from '../supabaseClient';
 import { useIsDesktopViewport } from '../hooks/useIsDesktopViewport';
+import { profileNeedsOnboarding } from '../profileOnboarding';
 
 const WELCOME_CSS = `
 .pv-welcome-overlay {
@@ -203,6 +204,10 @@ export default function FoundingWelcome({
     if (!user || !profile) return;
     const params = new URLSearchParams(window.location.search);
     const force = params.get('welcome') === '1';
+    // WelcomePage owns incomplete onboarding.
+    if (profileNeedsOnboarding(profile) && !force) return;
+    // Returning users with a name already set — only show when forced.
+    if (!force && String(profile.display_name || '').trim()) return;
     if (force || shouldShowWelcome(user)) {
       setOpen(true);
       setStep('status');

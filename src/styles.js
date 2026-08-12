@@ -71,11 +71,16 @@ body{font-family:var(--sans);background:var(--field);color:var(--ink);height:100
 .sb-workspace-mark::after{content:"";position:absolute;inset:9px 9px auto 9px;height:1px;background:#fff;box-shadow:0 3px 0 0 #fff,0 6px 0 0 #fff;}
 .sb-workspace-label{flex:1;min-width:0;font-size:14.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .sb-workspace-chev{color:var(--text-4);display:flex;flex-shrink:0;}
-.sb-user{display:none;}
+.sb-user{display:flex;align-items:center;gap:8px;min-width:0;flex:1;margin:0;padding:0;border:0;background:transparent;cursor:pointer;font:inherit;text-align:left;color:inherit;}
+.sb-user:hover .sb-username{color:var(--ink);}
 .sb-avatar{width:24px;height:24px;border-radius:6px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;}
 .sb-avatar::before{content:"";position:absolute;inset:5px 6px;border-radius:1px;background:#fff;}
 .sb-avatar::after{content:"";position:absolute;inset:8px 8px auto 8px;height:1px;background:var(--ink);box-shadow:0 3px 0 0 var(--ink),0 6px 0 0 var(--ink);}
-.sb-username{font-size:13.5px;font-weight:600;color:var(--ink);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sb-username{font-size:12.5px;font-weight:600;color:var(--text-2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sb-account{display:flex;align-items:center;min-width:0;flex-shrink:0;max-width:42%;}
+.sb-account-link{font-size:12px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;padding:4px 2px;}
+.sb-account-link:hover{color:var(--ink);text-decoration:underline;text-underline-offset:2px;}
+.sb-account-badge{font-size:10px;font-weight:700;color:var(--accent-on,#2F4056);background:var(--accent-tint,#E3E9EF);border-radius:999px;padding:2px 6px;flex-shrink:0;}
 .sb-tog{background:transparent;border:none;color:var(--text-3);cursor:pointer;padding:6px;border-radius:6px;display:flex;flex-shrink:0;transition:background .12s var(--ease);}
 .sb-tog:hover{background:var(--hover);color:var(--ink);}
 .sb-nav{padding:4px 8px 8px;display:flex;flex-direction:column;gap:1px;border-bottom:none;}

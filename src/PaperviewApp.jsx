@@ -32,6 +32,8 @@ import {
 } from './miscUtils';
 import SettingsModal from './components/SettingsModal';
 import FoundingWelcome from './components/FoundingWelcome';
+import AccountMenu from './components/AccountMenu';
+import { libraryChromeLabel } from './profileOnboarding';
 import LibraryView from './components/LibraryView';
 import LibraryPaperDetail from './components/LibraryPaperDetail';
 import BibtexPreviewModal from './components/BibtexPreviewModal';
@@ -1384,9 +1386,9 @@ export default function PaperviewApp() {
         <div className={`sb ${sidebarOpen ? "" : "closed"}`} style={sidebarOpen ? { width: sidebarWidth, minWidth: sidebarWidth } : undefined}>
           <div className="sb-inner" style={{ width: sidebarWidth }}>
             <div className="sb-chrome">
-              <button type="button" className="sb-workspace" onClick={() => setCurrentView("library")} title="Workspace">
+              <button type="button" className="sb-workspace" onClick={() => setCurrentView("library")} title="Library">
                 <span className="sb-workspace-mark" aria-hidden="true" />
-                <span className="sb-workspace-label">{activeFolder?.name || "Thesis library"}</span>
+                <span className="sb-workspace-label">{libraryChromeLabel(auth.profile, activeFolder?.name)}</span>
                 <span className="sb-workspace-chev"><IChevronDown size={12} /></span>
               </button>
               <button className="sb-tog" onClick={() => setSidebarOpen(false)} title="Collapse">
@@ -1520,6 +1522,7 @@ export default function PaperviewApp() {
                   </span>
                 )}
               </div>
+              <AccountMenu auth={auth} onOpenSettings={() => openSettingsModal(apiKey)} />
               <button className="sb-footer-gear" onClick={() => openSettingsModal(apiKey)} title="Settings"><IGear size={14} /></button>
             </div>
           </div>
