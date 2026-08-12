@@ -47,6 +47,7 @@ export function useAuth() {
   // Claiming a founding slot is a once-per-user write. Without this the RPC
   // could re-fire from double-clicks / remounts while a claim is in flight.
   const claimedForUserRef = useRef(null);
+  const claimInFlightRef = useRef(null);
 
   const user = session?.user ?? null;
   const configured = isSupabaseConfigured;
@@ -199,41 +200,55 @@ export function useAuth() {
         founder_number: profile.founder_number,
       };
     }
-    setClaimBusy(true);
-    setAuthError('');
-    try {
-      const data = await claimFoundingSlotRpc(supabase);
-      claimedForUserRef.current = uid;
-      const next = await fetchProfile(supabase, uid);
-      setProfile(next);
-      await refreshSpots();
-      return { ok: true, ...(data && typeof data === 'object' ? data : {}) };
-    } catch (err) {
+    // This callback is re-created whenever `profile` changes, and the effect
+    // that drives it depends on that identity — so a profile update landing
+    // mid-claim used to fire a second RPC before the ref below was set. Share
+    // the in-flight promise instead of starting a new request.
+    if (claimInFlightRef.current?.uid === uid) return claimInFlightRef.current.promise;
+
+    const run = (async () => {
+      setClaimBusy(true);
+      setAuthError('');
       try {
+        const data = await claimFoundingSlotRpc(supabase);
+        claimedForUserRef.current = uid;
         const next = await fetchProfile(supabase, uid);
         setProfile(next);
-      } catch {
-        /* ignore secondary failure */
+        await refreshSpots();
+        return { ok: true, ...(data && typeof data === 'object' ? data : {}) };
+      } catch (err) {
+        try {
+          const next = await fetchProfile(supabase, uid);
+          setProfile(next);
+        } catch {
+          /* ignore secondary failure */
+        }
+        setAuthError(err?.message || 'Could not claim founding spot.');
+        return { ok: false };
+      } finally {
+        setClaimBusy(false);
+        claimInFlightRef.current = null;
       }
-      setAuthError(err?.message || 'Could not claim founding spot.');
-      return { ok: false };
-    } finally {
-      setClaimBusy(false);
-    }
+    })();
+
+    claimInFlightRef.current = { uid, promise: run };
+    return run;
   }, [session, profile, refreshSpots]);
 
   const updateProfile = useCallback(async ({ displayName, libraryName } = {}) => {
     const supabase = await getSupabaseAsync();
     const uid = session?.user?.id;
     if (!supabase || !uid) {
-      setAuthError('Sign in to update your profile.');
-      return { ok: false };
+      const message = 'Sign in to update your profile.';
+      setAuthError(message);
+      return { ok: false, error: message };
     }
     const display = sanitizeProfileName(displayName);
     const library = sanitizeProfileName(libraryName);
     if (!display.ok || !library.ok) {
-      setAuthError('Enter a name and library label (max 80 characters).');
-      return { ok: false };
+      const message = 'Enter a name and library label (max 80 characters).';
+      setAuthError(message);
+      return { ok: false, error: message };
     }
     setProfileBusy(true);
     setAuthError('');
@@ -252,8 +267,11 @@ export function useAuth() {
       }
       return { ok: true };
     } catch (err) {
-      setAuthError(err?.message || 'Could not save profile.');
-      return { ok: false };
+      // Returned as well as pushed to state: callers that read `authError`
+      // straight after awaiting this would see the previous render's value.
+      const message = err?.message || 'Could not save profile.';
+      setAuthError(message);
+      return { ok: false, error: message };
     } finally {
       setProfileBusy(false);
     }
@@ -269,6 +287,7 @@ export function useAuth() {
       setSession(null);
       setProfile(null);
       claimedForUserRef.current = null;
+      claimInFlightRef.current = null;
     } catch (err) {
       setAuthError(err?.message || 'Could not sign out.');
     } finally {

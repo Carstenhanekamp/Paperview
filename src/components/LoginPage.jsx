@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthContext } from '../AuthContext';
-import { profileNeedsOnboarding } from '../profileOnboarding';
+import { profileNeedsOnboarding, safeNextPath } from '../profileOnboarding';
 
 const FONT_URL =
   "https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&display=swap";
@@ -197,11 +197,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [sentTo, setSentTo] = useState('');
 
-  const nextPath = (() => {
-    const next = searchParams.get('next');
-    if (next && next.startsWith('/') && !next.startsWith('//')) return next;
-    return '/app';
-  })();
+  const nextPath = safeNextPath(searchParams.get('next'));
 
   useEffect(() => {
     ensureStyles();

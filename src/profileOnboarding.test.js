@@ -5,7 +5,40 @@ import {
   sanitizeProfileName,
   libraryChromeLabel,
   displayNameForUi,
+  safeNextPath,
 } from './profileOnboarding.js';
+
+describe('safeNextPath', () => {
+  it('keeps ordinary in-app paths', () => {
+    expect(safeNextPath('/app')).toBe('/app');
+    expect(safeNextPath('/app/library?tab=all')).toBe('/app/library?tab=all');
+  });
+
+  it('falls back for absolute and protocol-relative targets', () => {
+    expect(safeNextPath('https://evil.test')).toBe('/app');
+    expect(safeNextPath('//evil.test')).toBe('/app');
+    expect(safeNextPath('/%2Fevil.test')).toBe('/app');
+  });
+
+  it('rejects backslashes, which the URL parser folds into slashes', () => {
+    // '/\evil.test' resolves to https://evil.test — the leading-'//' check
+    // alone lets this through (GHSA-wrjc-x8rr-h8h6).
+    expect(safeNextPath('/\\evil.test')).toBe('/app');
+    expect(safeNextPath('/\\\\evil.test')).toBe('/app');
+    expect(safeNextPath('/%5Cevil.test')).toBe('/app');
+  });
+
+  it('rejects control characters and malformed escapes', () => {
+    expect(safeNextPath('/\tevil.test')).toBe('/app');
+    expect(safeNextPath('/%09evil.test')).toBe('/app');
+    expect(safeNextPath('/%ZZ')).toBe('/app');
+  });
+
+  it('honours an explicit fallback', () => {
+    expect(safeNextPath('', '')).toBe('');
+    expect(safeNextPath('//evil.test', '/')).toBe('/');
+  });
+});
 
 describe('buildWelcomeRedirectUrl', () => {
   it('builds /welcome with founding intent and safe next', () => {
@@ -15,6 +48,11 @@ describe('buildWelcomeRedirectUrl', () => {
 
   it('rejects protocol-relative next', () => {
     expect(buildWelcomeRedirectUrl('http://localhost:5173', { next: '//evil.test' }))
+      .toBe('http://localhost:5173/welcome');
+  });
+
+  it('rejects backslash-smuggled next', () => {
+    expect(buildWelcomeRedirectUrl('http://localhost:5173', { next: '/\\evil.test' }))
       .toBe('http://localhost:5173/welcome');
   });
 });

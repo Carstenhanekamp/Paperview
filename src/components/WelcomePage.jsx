@@ -6,7 +6,7 @@ import { FOUNDING_CAP, WELCOME_STORAGE_KEY } from '../supabaseClient';
 import { useIsDesktopViewport } from '../hooks/useIsDesktopViewport';
 import { setPendingApiKey } from '../pendingApiKey';
 import { formatMicrocentsAsEur, TRYOUT_GRANT_MICROCENT } from '../walletCredits';
-import { profileNeedsOnboarding } from '../profileOnboarding';
+import { profileNeedsOnboarding, safeNextPath } from '../profileOnboarding';
 import OnboardingProfileForm from './OnboardingProfileForm';
 
 const FONT_URL =
@@ -231,11 +231,6 @@ function markWelcomeSeen(userId) {
 }
 
 const SESSION_WAIT_MS = 12000;
-
-function safeNextPath(raw) {
-  if (raw && raw.startsWith('/') && !raw.startsWith('//')) return raw;
-  return '/app';
-}
 
 /**
  * Post-magic-link thank-you / onboarding at /welcome.

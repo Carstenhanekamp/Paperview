@@ -95,7 +95,7 @@ export default function SettingsModal({
       setProfileMessage('Saved.');
       return;
     }
-    setProfileMessage(auth.authError || 'Could not save profile.');
+    setProfileMessage(result?.error || 'Could not save profile.');
   };
 
   return (
@@ -167,7 +167,7 @@ export default function SettingsModal({
                 {profileMessage ? (
                   <p className="settings-info" style={{ marginBottom: 12 }}>{profileMessage}</p>
                 ) : null}
-                {auth.authError ? (
+                {auth.authError && auth.authError !== profileMessage ? (
                   <p className="settings-info" style={{ marginBottom: 12, color: '#9b2c2c' }}>{auth.authError}</p>
                 ) : null}
                 {auth.user && wallet?.redeemInviteCode ? (
