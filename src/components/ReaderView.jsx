@@ -209,10 +209,12 @@ export default function ReaderView({
   };
 
   const zoomLabel = Math.round(zoom * pinchFactor * 100);
-  const pagesStyle =
-    Math.abs(pinchFactor - 1) > 0.001
-      ? { transform: `scale(${pinchFactor})`, transformOrigin: 'top center' }
-      : undefined;
+  const pinching = Math.abs(pinchFactor - 1) > 0.001;
+  const pagesStyle = pinching
+    ? { transform: `scale(${pinchFactor})`, transformOrigin: 'top center', willChange: 'transform' }
+    : undefined;
+  // Wait for the scroll container width so the first fit-scale isn't computed against 0.
+  const viewerReady = viewerWidth > 0;
 
   return (
     <>
@@ -220,21 +222,23 @@ export default function ReaderView({
         <div className="viewer-frame">
           <div ref={pdfScrollRef} className={`pdf-scroll ${debugCitations ? "debug-text-layer" : ""}`}>
             {activePaper.pdfBytes ? (
-              <div className="pdf-pages-zoom" style={pagesStyle}>
-                <PdfViewer
-                  paperId={activePaper.id}
-                  pdfBytes={activePaper.pdfBytes}
-                  fileSize={activePaper.fileSize}
-                  fileLastModified={activePaper.fileLastModified}
-                  scale={scale}
-                  onReady={handlePdfReady}
-                  onDocumentLoad={onDocumentLoad}
-                  onPageChange={setCurrentPage}
-                  debugCitations={debugCitations}
-                  annotations={annotations}
-                  onAnnotationClick={handleAnnotationClick}
-                />
-              </div>
+              viewerReady ? (
+                <div className="pdf-pages-zoom" style={pagesStyle}>
+                  <PdfViewer
+                    paperId={activePaper.id}
+                    pdfBytes={activePaper.pdfBytes}
+                    fileSize={activePaper.fileSize}
+                    fileLastModified={activePaper.fileLastModified}
+                    scale={scale}
+                    onReady={handlePdfReady}
+                    onDocumentLoad={onDocumentLoad}
+                    onPageChange={setCurrentPage}
+                    debugCitations={debugCitations}
+                    annotations={annotations}
+                    onAnnotationClick={handleAnnotationClick}
+                  />
+                </div>
+              ) : null
             ) : (
               <TextFallback text={materializeFullText(searchablePageTexts)} />
             )}

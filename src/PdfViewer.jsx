@@ -9,6 +9,24 @@ function waitForLayout() {
   return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
+/** Yield past React's commit so parent fit-scale can settle before first page layout. */
+function waitForParentScale() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(resolve, 0);
+      });
+    });
+  });
+}
+
+function makePagePlaceholder() {
+  const placeholder = document.createElement('div');
+  placeholder.className = 'page-placeholder';
+  placeholder.style.cssText = 'position:absolute;inset:0;border-radius:8px;background:linear-gradient(180deg,#fff 0%,#fbfbfa 100%);';
+  return placeholder;
+}
+
 function normalizeMatchText(value) {
   return (value || '')
     .normalize('NFKD')
@@ -269,6 +287,9 @@ export default function PdfViewer({
   const onDocumentLoadRef = useRef(onDocumentLoad);
   const annotationsRef = useRef(annotations);
   const onAnnotationClickRef = useRef(onAnnotationClick);
+  const debugCitationsRef = useRef(debugCitations);
+  const scaleRef = useRef(scale);
+  const applyScaleRef = useRef(null);
   const loadGenRef = useRef(0);
   const [pdfReady, setPdfReady] = useState(0);
 
@@ -290,6 +311,15 @@ export default function PdfViewer({
   }, [annotations, onAnnotationClick]);
 
   useEffect(() => {
+    debugCitationsRef.current = debugCitations;
+  }, [debugCitations]);
+
+  useEffect(() => {
+    scaleRef.current = scale;
+    applyScaleRef.current?.(scale);
+  }, [scale]);
+
+  useEffect(() => {
     let cancelled = false;
     const loadGen = ++loadGenRef.current;
     const isActive = () => !cancelled && loadGenRef.current === loadGen;
@@ -305,6 +335,7 @@ export default function PdfViewer({
     mountedWindowRef.current = { startPage: 1, endPage: 0 };
     ocrDoneRef.current = new Set();
     ocrInFlightRef.current = new Set();
+    applyScaleRef.current = null;
     setPdfReady(0);
 
     const getScrollContainer = () => el.closest('.pdf-scroll');
@@ -313,6 +344,11 @@ export default function PdfViewer({
         pageStatesRef.current[pageNum] = { ensurePromise: null, renderTask: null, canvas: null, textLayer: null, mounted: false };
       }
       return pageStatesRef.current[pageNum];
+    };
+
+    const ensurePlaceholder = (wrap) => {
+      if (!wrap || wrap.querySelector('.page-placeholder')) return;
+      wrap.appendChild(makePagePlaceholder());
     };
 
     const clearMountedPage = (pageNum) => {
@@ -336,6 +372,7 @@ export default function PdfViewer({
       wrap?.querySelector('.ocrLayer')?.remove();
       wrap?.querySelector('.cit-svg')?.remove();
       clearAnnotationHighlights(wrap);
+      ensurePlaceholder(wrap);
     };
 
     const renderTextLayer = async (textContent, container, viewport) => {
@@ -358,78 +395,98 @@ export default function PdfViewer({
     const ensurePageMounted = async (pageNum) => {
       const state = getPageState(pageNum);
       if (state.ensurePromise) return state.ensurePromise;
-      state.ensurePromise = (async () => {
-        const wrap = wrappersRef.current[pageNum - 1];
-        const metric = pageMetricsRef.current[pageNum - 1];
-        if (!wrap || !metric || !pdfRef.current || !isActive()) return null;
-
-        if (!state.canvas) {
-          wrap.querySelector('.page-placeholder')?.remove();
-          state.canvas = document.createElement('canvas');
-          state.canvas.style.cssText = `display:block;width:${metric.width}px;height:${metric.height}px;border-radius:8px;`;
-          wrap.appendChild(state.canvas);
-        }
-        if (!state.textLayer) {
-          state.textLayer = document.createElement('div');
-          state.textLayer.className = 'textLayer';
-          state.textLayer.style.cssText = `position:absolute;top:0;left:0;width:${metric.width}px;height:${metric.height}px;overflow:hidden;line-height:1;user-select:text;`;
-          wrap.appendChild(state.textLayer);
-        }
-
-        // Already rendered at this scale — keep existing text layer.
-        if (state.renderedScale === scale && state.textLayer.childElementCount > 0 && state.canvas?.width) {
-          return { wrap, viewport: null };
-        }
-
-        state.mounted = true;
-        const page = await pdfRef.current.getPage(pageNum);
-        if (!isActive() || !state.mounted) return null;
-        const viewport = page.getViewport({ scale });
-        const dpr = window.devicePixelRatio || 1;
-        state.canvas.width = Math.ceil(viewport.width * dpr);
-        state.canvas.height = Math.ceil(viewport.height * dpr);
-        state.canvas.style.width = `${viewport.width}px`;
-        state.canvas.style.height = `${viewport.height}px`;
-        state.textLayer.style.width = `${viewport.width}px`;
-        state.textLayer.style.height = `${viewport.height}px`;
-        state.textLayer.style.setProperty('--scale-factor', String(viewport.scale));
-        wrap.style.width = `${viewport.width}px`;
-        wrap.style.height = `${viewport.height}px`;
-        wrap.style.setProperty('--scale-factor', String(viewport.scale));
-        state.textLayer.innerHTML = '';
-
-        const ctx = state.canvas.getContext('2d');
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.scale(dpr, dpr);
-        const renderTask = page.render({ canvasContext: ctx, viewport });
-        state.renderTask = renderTask;
-
+      let renderTask = null;
+      const pending = (async () => {
         try {
-          await renderTask.promise;
-          if (!isActive() || !state.mounted) return null;
-          const textContent = await page.getTextContent({ includeMarkedContent: true });
-          if (!isActive() || !state.mounted) return null;
-          const spanCount = await renderTextLayer(textContent, state.textLayer, viewport);
-          if (!isActive() || !state.mounted) return null;
-          if (!spanCount && textContent?.items?.length) {
-            console.warn(`Paperview: text layer empty after render (page ${pageNum}, items=${textContent.items.length})`);
+          const wrap = wrappersRef.current[pageNum - 1];
+          const metric = pageMetricsRef.current[pageNum - 1];
+          if (!wrap || !metric || !pdfRef.current || !isActive()) return null;
+
+          const activeScale = scaleRef.current;
+          // Already rendered at this scale — keep existing bitmap + text layer.
+          if (state.renderedScale === activeScale && state.textLayer?.childElementCount > 0 && state.canvas?.width) {
+            return { wrap, viewport: null };
           }
-          state.renderedScale = scale;
-          applyAnnotationHighlights(wrap, annotationsRef.current.filter((ann) => ann.pageNum === pageNum));
-          if (!ocrDoneRef.current.has(pageNum)) {
-            ensureOcr(pageNum, page, wrap, viewport).catch(() => {});
+
+          state.mounted = true;
+          ensurePlaceholder(wrap);
+
+          const page = await pdfRef.current.getPage(pageNum);
+          if (!isActive() || !state.mounted || state.ensurePromise !== pending) return null;
+
+          // Re-read scale after await — fit-width may have settled.
+          const renderScale = scaleRef.current;
+          if (state.renderedScale === renderScale && state.canvas?.width) {
+            return { wrap, viewport: null };
           }
-          return { wrap, viewport };
-        } catch (error) {
-          if (error?.name !== 'RenderingCancelledException') console.warn(error);
-          return null;
+
+          const viewport = page.getViewport({ scale: renderScale });
+          const dpr = window.devicePixelRatio || 1;
+          wrap.style.width = `${viewport.width}px`;
+          wrap.style.height = `${viewport.height}px`;
+          wrap.style.setProperty('--scale-factor', String(viewport.scale));
+          metric.width = viewport.width;
+          metric.height = viewport.height;
+
+          // Render off-DOM so Chromium never paints a cleared live canvas.
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.ceil(viewport.width * dpr);
+          canvas.height = Math.ceil(viewport.height * dpr);
+          canvas.style.cssText = `display:block;width:${viewport.width}px;height:${viewport.height}px;border-radius:8px;`;
+          const ctx = canvas.getContext('2d');
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.scale(dpr, dpr);
+          renderTask = page.render({ canvasContext: ctx, viewport });
+          state.renderTask = renderTask;
+
+          const textLayer = document.createElement('div');
+          textLayer.className = 'textLayer';
+          textLayer.style.cssText = `position:absolute;top:0;left:0;width:${viewport.width}px;height:${viewport.height}px;overflow:hidden;line-height:1;user-select:text;`;
+          textLayer.style.setProperty('--scale-factor', String(viewport.scale));
+
+          try {
+            await renderTask.promise;
+            if (!isActive() || !state.mounted || state.ensurePromise !== pending || scaleRef.current !== renderScale) return null;
+            const textContent = await page.getTextContent({ includeMarkedContent: true });
+            if (!isActive() || !state.mounted || state.ensurePromise !== pending || scaleRef.current !== renderScale) return null;
+            const spanCount = await renderTextLayer(textContent, textLayer, viewport);
+            if (!isActive() || !state.mounted || state.ensurePromise !== pending || scaleRef.current !== renderScale) return null;
+            if (!spanCount && textContent?.items?.length) {
+              console.warn(`Paperview: text layer empty after render (page ${pageNum}, items=${textContent.items.length})`);
+            }
+
+            const prevCanvas = state.canvas;
+            const prevTextLayer = state.textLayer;
+            if (prevCanvas) {
+              prevCanvas.replaceWith(canvas);
+              prevCanvas.width = 0;
+              prevCanvas.height = 0;
+            } else {
+              wrap.appendChild(canvas);
+            }
+            if (prevTextLayer) prevTextLayer.replaceWith(textLayer);
+            else wrap.appendChild(textLayer);
+            state.canvas = canvas;
+            state.textLayer = textLayer;
+            wrap.querySelector('.page-placeholder')?.remove();
+
+            state.renderedScale = renderScale;
+            applyAnnotationHighlights(wrap, annotationsRef.current.filter((ann) => ann.pageNum === pageNum));
+            if (!ocrDoneRef.current.has(pageNum)) {
+              ensureOcr(pageNum, page, wrap, viewport).catch(() => {});
+            }
+            return { wrap, viewport };
+          } catch (error) {
+            if (error?.name !== 'RenderingCancelledException') console.warn(error);
+            return null;
+          }
         } finally {
-          state.renderTask = null;
-          state.ensurePromise = null;
+          if (state.renderTask === renderTask) state.renderTask = null;
+          if (state.ensurePromise === pending) state.ensurePromise = null;
         }
       })();
-
-      return state.ensurePromise;
+      state.ensurePromise = pending;
+      return pending;
     };
 
     const ensureOcr = async (pageNum, page, wrap, viewport) => {
@@ -443,7 +500,7 @@ export default function PdfViewer({
           width: viewport.width,
           height: viewport.height,
           pageNum,
-          scale,
+          scale: scaleRef.current,
           paperId,
           fileSize,
           fileLastModified,
@@ -499,6 +556,40 @@ export default function PdfViewer({
       onPageChangeRef.current?.(bestPage);
     };
 
+    const applyScaleLayout = (nextScale) => {
+      if (!wrappersRef.current.length || !pdfRef.current) return;
+      const activeScale = Number(nextScale);
+      if (!Number.isFinite(activeScale) || activeScale <= 0) return;
+
+      wrappersRef.current.forEach((wrap, index) => {
+        const metric = pageMetricsRef.current[index];
+        if (!wrap || !metric?.baseWidth || !metric?.baseHeight) return;
+        const width = metric.baseWidth * activeScale;
+        const height = metric.baseHeight * activeScale;
+        metric.width = width;
+        metric.height = height;
+        wrap.style.width = `${width}px`;
+        wrap.style.height = `${height}px`;
+        wrap.style.setProperty('--scale-factor', String(activeScale));
+
+        const pageNum = index + 1;
+        const state = getPageState(pageNum);
+        if (state.renderedScale === activeScale) return;
+        state.renderTask?.cancel?.();
+        state.renderTask = null;
+        state.ensurePromise = null;
+        state.renderedScale = null;
+        // Keep the previous canvas visible until the offscreen re-render swaps in.
+        if (!state.canvas) ensurePlaceholder(wrap);
+      });
+
+      updateOffsets();
+      ocrDoneRef.current = new Set();
+      ocrInFlightRef.current = new Set();
+      updateWindow();
+    };
+    applyScaleRef.current = applyScaleLayout;
+
     const jumpToCitation = async (pageNum, searchText, occurrenceIndex) => {
       const wrap = wrappersRef.current[pageNum - 1];
       const scrollContainer = getScrollContainer();
@@ -538,14 +629,14 @@ export default function PdfViewer({
       let matches = collectMatches();
       if (!matches.length && !ocrDoneRef.current.has(pageNum)) {
         const page = await pdfRef.current.getPage(pageNum);
-        const viewport = page.getViewport({ scale });
+        const viewport = page.getViewport({ scale: scaleRef.current });
         await ensureOcr(pageNum, page, targetWrap, viewport);
         await waitForLayout();
         matches = collectMatches();
       }
 
       if (!matches.length) {
-        if (debugCitations) {
+        if (debugCitationsRef.current) {
           const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
           svg.setAttribute('width', targetWrap.offsetWidth);
           svg.setAttribute('height', targetWrap.offsetHeight);
@@ -643,25 +734,38 @@ export default function PdfViewer({
         pageHeight: baseViewport.height,
       });
 
+      // Let ReaderView commit fit-width scale before we size page shells.
+      await waitForParentScale();
+      if (!isActive()) return;
+      const activeScale = scaleRef.current;
+
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
         if (!isActive()) return;
         const page = await pdf.getPage(pageNum);
         if (!isActive()) return;
-        const viewport = page.getViewport({ scale });
+        const pageBase = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: activeScale });
         const wrap = document.createElement('div');
         wrap.dataset.page = String(pageNum);
         wrap.style.cssText = `position:relative;margin:0 auto ${PAGE_GAP}px;width:${viewport.width}px;height:${viewport.height}px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.08);border:1px solid #ececec;border-radius:8px;`;
-        const placeholder = document.createElement('div');
-        placeholder.className = 'page-placeholder';
-        placeholder.style.cssText = 'position:absolute;inset:0;border-radius:8px;background:linear-gradient(180deg,#fff 0%,#fbfbfa 100%);';
-        wrap.appendChild(placeholder);
+        wrap.appendChild(makePagePlaceholder());
         wrappersRef.current.push(wrap);
-        pageMetricsRef.current.push({ width: viewport.width, height: viewport.height, top: 0 });
+        pageMetricsRef.current.push({
+          width: viewport.width,
+          height: viewport.height,
+          baseWidth: pageBase.width,
+          baseHeight: pageBase.height,
+          top: 0,
+        });
         el.appendChild(wrap);
         try { page.cleanup?.(); } catch { /* ignore */ }
       }
 
       if (!isActive()) return;
+      // If fit-scale arrived during the page loop, resize shells once before paint.
+      if (Math.abs(scaleRef.current - activeScale) > 0.0005) {
+        applyScaleLayout(scaleRef.current);
+      }
       await waitForLayout();
       if (!isActive()) return;
       updateOffsets();
@@ -698,6 +802,7 @@ export default function PdfViewer({
 
     return () => {
       cancelled = true;
+      applyScaleRef.current = null;
       cleanupScroll();
       cleanupResize();
       Object.keys(pageStatesRef.current).forEach((pageNum) => clearMountedPage(Number(pageNum)));
@@ -709,7 +814,7 @@ export default function PdfViewer({
       pageStatesRef.current = {};
       el.innerHTML = '';
     };
-  }, [debugCitations, fileLastModified, fileSize, paperId, pdfBytes, scale]);
+  }, [fileLastModified, fileSize, paperId, pdfBytes]);
 
   useEffect(() => {
     wrappersRef.current.forEach((wrap, index) => {
