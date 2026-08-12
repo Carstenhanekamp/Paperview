@@ -230,9 +230,9 @@ body{font-family:var(--sans);background:var(--field);color:var(--ink);height:100
 .vt-page-input{width:2.6ch;min-width:2.6ch;border:none;outline:none;background:var(--fill-1);border-radius:4px;padding:1px 3px;font:inherit;font-variant-numeric:tabular-nums;font-size:12.5px;font-weight:600;color:var(--ink);text-align:center;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent);}
 .vt-page-sep{color:var(--text-4);font-weight:500;}
 .vt-page-total{font-size:12.5px;color:var(--text-4);font-weight:500;}
-.pdf-scroll{flex:1;overflow:auto;background:var(--desk);padding:20px 18px 72px;position:relative;}
+.pdf-scroll{flex:1;overflow:auto;background:var(--desk);padding:20px 18px 72px;position:relative;scrollbar-gutter:stable;}
 .pdf-pages{display:flex;flex-direction:column;align-items:center;width:100%;min-width:0;}
-.pdf-pages-zoom{width:100%;min-width:0;display:flex;flex-direction:column;align-items:center;will-change:transform;}
+.pdf-pages-zoom{width:100%;min-width:0;display:flex;flex-direction:column;align-items:center;}
 .pdf-pages > div{border-radius:4px !important;border:none !important;box-shadow:var(--sh-sheet) !important;max-width:none;}
 .textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;-webkit-text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;z-index:2;pointer-events:auto;mix-blend-mode:multiply;}
 .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0;font-kerning:none;font-variant-ligatures:none;-webkit-user-modify:read-only;}
