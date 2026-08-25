@@ -53,9 +53,10 @@ Keys entered in Settings are kept in memory by default. If you choose to remembe
 
 ### Prerequisites
 
-- Node.js 20.19+
+- Node.js 22.13+
 - npm
-- Chrome or Edge for folder access through the File System Access API
+- Chrome/Edge for web folder access, or macOS 12+ for the native app
+- Rust 1.88+ and Xcode Command Line Tools when building the macOS app
 - An OpenAI API key for AI Q&A, web research, and agent features
 
 ### Setup
@@ -78,6 +79,7 @@ OPENAI_API_KEY=your_openai_api_key
 VITE_OPENAI_API_KEY=
 VITE_OPENAI_MODEL=gpt-5.4-mini
 VITE_OPENAI_MODELS=gpt-5.4-nano,gpt-5.4-mini,gpt-5.4
+VITE_PAPERVIEW_API_BASE_URL=https://your-paperview-deployment.example
 ```
 
 Use `OPENAI_API_KEY` for local development and deployed environments when you want requests to go through the backend proxy. The Vite dev server mounts the local API middleware from `api/`, so OpenAI requests can stay server-side during `npm run dev`.
@@ -86,19 +88,43 @@ Use `OPENAI_API_KEY` for local development and deployed environments when you wa
 
 `VITE_OPENAI_MODEL` sets the default model. `VITE_OPENAI_MODELS` controls the comma-separated list shown in model pickers.
 
+`VITE_PAPERVIEW_API_BASE_URL` is required in distributable desktop builds that use hosted wallet credit or the hosted PDF proxy. BYOK OpenAI requests and direct PDF downloads use Tauri's native HTTPS client.
+
 ## Scripts
 
 ```bash
 npm run dev
+npm run dev:desktop
 npm test
 npm run build
+npm run build:desktop
 npm run preview
 ```
 
 - `npm run dev`: start the Vite app with local API middleware
+- `npm run dev:desktop`: start the Vite app inside the Tauri development shell
 - `npm test`: run the Vitest suite
 - `npm run build`: create a production build
+- `npm run build:desktop`: create the native app and `.dmg` on macOS
 - `npm run preview`: preview the production build locally
+
+### macOS desktop development
+
+The native target shares the React UI with the web app. Native folder selection, file I/O, HTTPS, external links, deep links, and Keychain access are provided through Tauri 2.
+
+```bash
+cp .env.example .env.local
+npm ci
+npm run dev:desktop
+```
+
+For Supabase email sign-in, add `paperview://auth/callback` to the project's allowed redirect URLs. Unsigned local bundles can be built with:
+
+```bash
+npm run tauri build -- --target universal-apple-darwin --bundles app,dmg --no-sign
+```
+
+Signed release builds use [`.github/workflows/tauri-macos.yml`](.github/workflows/tauri-macos.yml). Configure repository variables `PAPERVIEW_API_BASE_URL`, `SUPABASE_URL`, and `SUPABASE_ANON_KEY`, plus Apple secrets `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, and `APPLE_API_KEY_CONTENT`.
 
 ## Project Structure
 
@@ -126,6 +152,18 @@ src/
 api/
 |- openai-response.js
 `- fetch-pdf.js
+
+src/platform/
+|- fs/
+|- deepLinks.js
+|- http.js
+`- secrets.js
+
+src-tauri/
+|- capabilities/
+|- src/
+|- Cargo.toml
+`- tauri.conf.json
 ```
 
 ## Data Storage
@@ -136,8 +174,9 @@ Paperview stores state locally using IndexedDB and folder snapshots:
 - **agentChats**: Workspace-level agent threads tied to a root folder
 - **annotations**: Highlights and notes with page numbers and timestamps
 - **folderHandles**: Persisted File System Access API handles for local folders
+- **folderRoots**: Persisted native folder paths; Tauri restores their runtime scopes
 - **.paperview.json**: Folder snapshot containing chats, agent chats, and annotations
-- **remembered API key**: Optional encrypted browser-storage record, only when a user enables "remember this key" and provides a passphrase
+- **remembered API key**: Optional passphrase-encrypted browser record on the web or macOS Keychain item in the native app
 
 Imported PDFs are written as real files into the selected folder, or into an `Imported Papers` subfolder under the active root.
 
@@ -176,7 +215,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full w
 ### Guidelines
 
 - Respect the local-first model: user data should stay on the user's machine
-- PDF.js and Tesseract.js stay on CDNs rather than being bundled through npm
+- PDF.js, Tesseract.js, OCR workers, and English OCR data are versioned npm dependencies bundled with the app
 - `PaperviewApp.jsx` is large, so read surrounding context carefully before editing
 - Prefer direct, readable code over unnecessary abstraction
 

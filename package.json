@@ -20,7 +20,7 @@
     "rag"
   ],
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "sync:ocr-assets": "node scripts/sync-ocr-assets.mjs",

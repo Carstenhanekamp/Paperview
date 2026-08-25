@@ -43,6 +43,7 @@ Single product: Vite React SPA + optional local API middleware (no separate back
 ### Run / test / build
 
 - Standard scripts are in [package.json](package.json) / [README.md](README.md): `npm run dev`, `npm test`, `npm run build`.
+- Native macOS scripts are `npm run dev:desktop` and `npm run build:desktop`; they require Rust 1.88+, Xcode Command Line Tools, and macOS for app/DMG bundling.
 - There is **no ESLint/prettier lint script** in this repo.
 - Dev server defaults to `http://localhost:5173/`; the reader lives at `/app`.
 - Vite mounts `api/openai-response` and `api/fetch-pdf` as middleware during `npm run dev` (see [vite.config.js](vite.config.js)). Without `OPENAI_API_KEY` in `.env.local`, `/api/openai-response` returns 401 — expected. PDF reading/folder flows work without a key.
