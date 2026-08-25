@@ -10,7 +10,7 @@ export default function FolderPermModal({ onCancel, onConfirm }) {
         <div style={{ fontSize:18,fontWeight:800,letterSpacing:'-0.4px',marginBottom:10 }}>Folder access needed</div>
         <p style={{ fontSize:13,color:'#4e4b45',lineHeight:1.7,marginBottom:20,fontWeight:500 }}>
           {nativeDesktop
-            ? "macOS will ask you to choose a folder that Paperview may read and update."
+            ? "Your operating system will ask you to choose a folder that Paperview may read and update."
             : "To open your PDF folder, your browser will ask you to pick a folder and grant Paperview permission to read and write files in it."}
         </p>
         <ul style={{ fontSize:13,color:'#4e4b45',lineHeight:1.8,paddingLeft:20,marginBottom:24,fontWeight:500 }}>

@@ -12,11 +12,11 @@ fn entry() -> Result<keyring::Entry, String> {
 pub fn keychain_get() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
-        return match entry()?.get_password() {
+        match entry()?.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(error.to_string()),
-        };
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -29,9 +29,9 @@ pub fn keychain_get() -> Result<Option<String>, String> {
 pub fn keychain_set(value: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        return entry()?
+        entry()?
             .set_password(&value)
-            .map_err(|error| error.to_string());
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -45,10 +45,10 @@ pub fn keychain_set(value: String) -> Result<(), String> {
 pub fn keychain_delete() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        return match entry()?.delete_credential() {
+        match entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(error.to_string()),
-        };
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
