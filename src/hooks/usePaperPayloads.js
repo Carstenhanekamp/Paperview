@@ -4,6 +4,7 @@ import { loadPaperTextCache, loadUploadedPdf } from '../db';
 import { mergePaperWithPayload, stripPaperPayload } from '../paperPayloadUtils';
 import { hasExtractedPaperText, isPaperTextCacheValid } from '../miscUtils';
 import { materializeFullText } from '../chatUtils';
+import { readPaperFile } from '../platform/fs';
 
 export function usePaperPayloads({
   setFolders,
@@ -98,9 +99,9 @@ export function usePaperPayloads({
       let nextFileSize = hydrated?.fileSize ?? null;
       let nextFileLastModified = hydrated?.fileLastModified ?? null;
 
-      if (paper?.fileHandle) {
-        const file = await paper.fileHandle.getFile();
-        uint8 = new Uint8Array(await file.arrayBuffer());
+      if (paper?.fileRef || paper?.fileHandle) {
+        const file = await readPaperFile(paper);
+        uint8 = file.bytes;
         nextFileSize = file.size;
         nextFileLastModified = file.lastModified;
       } else {

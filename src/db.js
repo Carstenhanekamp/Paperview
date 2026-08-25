@@ -56,6 +56,19 @@ db.version(7).stores({
   paperChunks: 'id, paperId, folderId, updatedAt',
 });
 
+db.version(8).stores({
+  chats: 'id, paperId, updatedAt, scopeType, scopeId',
+  agentChats: 'id, rootFolderId, updatedAt',
+  folderHandles: 'id',
+  folderRoots: 'id, path, updatedAt',
+  annotations: 'id, paperId, pageNum, createdAt',
+  paperTextCache: 'paperId, updatedAt',
+  ocrPages: 'id, paperId, pageNum, scale, updatedAt',
+  uploadedPdfs: 'paperId, updatedAt',
+  paperMeta: 'paperId, updatedAt, doi, year',
+  paperChunks: 'id, paperId, folderId, updatedAt',
+});
+
 function makeOcrPageId(paperId, pageNum, scale) {
   return `${paperId}:${pageNum}:${scale}`;
 }
@@ -98,6 +111,22 @@ export async function loadFolderHandles() {
 
 export async function clearFolderHandles() {
   return db.folderHandles.clear();
+}
+
+export async function saveFolderRoot(root) {
+  return db.folderRoots.put(root);
+}
+
+export async function loadFolderRoots() {
+  return db.folderRoots.orderBy('updatedAt').reverse().toArray();
+}
+
+export async function deleteFolderRoot(id) {
+  return db.folderRoots.delete(id);
+}
+
+export async function clearFolderRoots() {
+  return db.folderRoots.clear();
 }
 
 export async function saveAnnotation(annotation) {

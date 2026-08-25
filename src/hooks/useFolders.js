@@ -9,6 +9,10 @@ import {
   saveFolderHandle,
   loadFolderHandles,
   clearFolderHandles,
+  saveFolderRoot,
+  loadFolderRoots,
+  deleteFolderRoot,
+  clearFolderRoots,
   saveAnnotation,
   loadAllAnnotations,
   deleteAnnotationsByPaperIds,
@@ -31,6 +35,9 @@ import {
   buildFolderPath,
   mergeFoldersByRoot,
 } from '../miscUtils';
+import { getFileSystem, serializeDesktopRoot } from '../platform/fs';
+
+const fileSystem = getFileSystem();
 
 export function useFolders({
   folders,
@@ -61,7 +68,7 @@ export function useFolders({
   const [folderError, setFolderError] = useState("");
 
   const scanDirHandleRef = useRef(null);
-  const folderHandlesMapRef = useRef(new Map()); // folderId → root FileSystemDirectoryHandle
+  const folderHandlesMapRef = useRef(new Map()); // folderId → platform root reference
   const foldersRef = useRef([]);
   const syncRootFolderSnapshotRef = useRef(null);
   const folderRefreshStateRef = useRef({ rootFolderId: null, lastRunAt: 0 });
@@ -88,6 +95,8 @@ export function useFolders({
       expanded: true,
       papers: [],
       depth: 0,
+      directoryRef: null,
+      rootRef: null,
       directoryHandle: null,
       rootHandle: null,
       rootFolderId: newId,
@@ -181,72 +190,26 @@ export function useFolders({
     deleteAnnotationsByPaperIds([...ids]).catch(() => {});
     deletePaperCachesByPaperIds([...ids]).catch(() => {});
     [...ids].forEach((paperId) => evictPaperPayload(paperId));
-    if (!remainingFolders.length) clearFolderHandles().catch(() => {});
+    if (isRootFolder && folder.rootRef?.kind === "tauri") {
+      const record = serializeDesktopRoot(folder.rootRef);
+      if (record) deleteFolderRoot(record.id).catch(() => {});
+    }
+    if (!remainingFolders.length) {
+      clearFolderHandles().catch(() => {});
+      clearFolderRoots().catch(() => {});
+    }
     if (!isRootFolder && folder.rootFolderId) {
       syncRootFolderSnapshotRef.current?.(folder.rootFolderId)?.catch(() => {});
     }
   };
 
-  const scanDirHandle = async (dirHandle) => {
-    const rootFolderPath = buildFolderPath(dirHandle.name);
-    const rootFolderId = makeStableId('f', rootFolderPath);
-
-    async function scanDir(handle, relativePath = "", depth = 0) {
-      const folderName = relativePath.split("/").filter(Boolean).pop() || handle.name;
-      const folderPath = buildFolderPath(dirHandle.name, relativePath);
-      const folderId = makeStableId('f', folderPath);
-      const folder = {
-        id: folderId,
-        name: folderName,
-        expanded: true,
-        papers: [],
-        depth,
-        directoryHandle: handle,
-        rootHandle: dirHandle,
-        rootFolderId,
-        relativePath,
-        folderPath,
-      };
-      const nested = [];
-
-      for await (const entry of handle.values()) {
-        if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.pdf')) {
-          folder.papers.push({
-            id: makeStableId('p', `${folderPath}/${entry.name}`),
-            name: stripPdfExtension(entry.name),
-            authors: '',
-            year: '',
-            pages: null,
-            fileSize: null,
-            fileLastModified: null,
-            textStatus: "idle",
-            textProgress: 0,
-            textError: null,
-            textStatusText: "",
-            fileHandle: entry,
-            folderId,
-            rootFolderId,
-          });
-        } else if (entry.kind === 'directory') {
-          const childRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-          const children = await scanDir(entry, childRelativePath, depth + 1);
-          if (children.length) nested.push(...children);
-        }
-      }
-
-      return [folder, ...nested];
-    }
-
-    return scanDir(dirHandle, '', 0);
-  };
+  const scanDirHandle = async (rootRef) => fileSystem.scanRoot(rootRef);
   scanDirHandleRef.current = scanDirHandle;
 
-  // Read .paperview.json from a folder's root directory handle
-  const readFolderSnapshot = async (dirHandle) => {
+  // Read .paperview.json from a platform root reference.
+  const readFolderSnapshot = async (rootRef) => {
     try {
-      const fileHandle = await dirHandle.getFileHandle('.paperview.json');
-      const file = await fileHandle.getFile();
-      return JSON.parse(await file.text());
+      return JSON.parse(await fileSystem.readText(rootRef, '.paperview.json'));
     } catch {
       return null;
     }
@@ -256,8 +219,8 @@ export function useFolders({
   const syncRootFolderSnapshot = async (rootFolderId) => {
     if (!rootFolderId) return;
     const rootFolder = foldersRef.current.find((folder) => folder.id === rootFolderId && folder.rootFolderId === rootFolderId);
-    const dirHandle = rootFolder?.rootHandle || rootFolder?.directoryHandle;
-    if (!dirHandle) return;
+    const rootRef = rootFolder?.rootRef;
+    if (!rootRef) return;
     try {
       const paperIds = new Set();
       for (const folder of foldersRef.current) {
@@ -271,16 +234,13 @@ export function useFolders({
       const agentChats = allAgentChats.filter((thread) => thread.rootFolderId === rootFolderId);
       const allAnns = await loadAllAnnotations();
       const annotations = allAnns.filter((a) => paperIds.has(a.paperId));
-      const fileHandle = await dirHandle.getFileHandle('.paperview.json', { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(JSON.stringify({
+      await fileSystem.writeText(rootRef, '.paperview.json', JSON.stringify({
         version: 2,
         exportedAt: new Date().toISOString(),
         chats,
         agentChats,
         annotations,
       }, null, 2));
-      await writable.close();
     } catch (err) {
       console.warn('Paperview: could not write .paperview.json:', err);
     }
@@ -315,21 +275,19 @@ export function useFolders({
   // Restore previously opened folders from IndexedDB (runs after scanDirHandle is defined)
   useEffect(() => {
     if (!scanDirHandleRef.current) return;
-    loadFolderHandles().then(async (entries) => {
+    const loadRoots = fileSystem.kind === "tauri" ? loadFolderRoots : loadFolderHandles;
+    loadRoots().then(async (entries) => {
       if (!entries.length) return;
       const allFolders = [];
       for (const entry of entries) {
-        const handle = entry.handle;
-        if (!handle) continue;
-        const perm = await handle.queryPermission({ mode: 'readwrite' });
-        if (perm !== 'granted') {
-          const req = await handle.requestPermission({ mode: 'readwrite' });
-          if (req !== 'granted') continue;
-        }
         try {
-          const scanned = await scanDirHandleRef.current(handle);
-          for (const f of scanned) folderHandlesMapRef.current.set(f.id, handle);
-          const snapshot = await readFolderSnapshot(handle);
+          const rootRef = await fileSystem.restoreRoot(
+            fileSystem.kind === "tauri" ? entry : entry.handle
+          );
+          if (!rootRef) continue;
+          const scanned = await scanDirHandleRef.current(rootRef);
+          for (const f of scanned) folderHandlesMapRef.current.set(f.id, rootRef);
+          const snapshot = await readFolderSnapshot(rootRef);
           if (snapshot) await applyFolderSnapshot(snapshot);
           allFolders.push(...scanned);
         } catch { /* folder may no longer exist */ }
@@ -342,17 +300,16 @@ export function useFolders({
     }).catch(() => {});
   }, []);
 
-  const getAvailablePdfFileName = useCallback(async (dirHandle, desiredFileName) => {
+  const getAvailablePdfFileName = useCallback(async (directoryRef, desiredFileName) => {
     const safeFileName = ensurePdfFileName(desiredFileName);
     const stem = stripPdfExtension(safeFileName);
     let attempt = 0;
 
     while (attempt < 1000) {
       const candidate = attempt === 0 ? safeFileName : `${stem} (${attempt}).pdf`;
-      try {
-        await dirHandle.getFileHandle(candidate);
+      if (await fileSystem.fileExists(directoryRef, candidate)) {
         attempt += 1;
-      } catch {
+      } else {
         return candidate;
       }
     }
@@ -362,12 +319,12 @@ export function useFolders({
 
   const ensureImportedFolder = useCallback(async (rootFolderId) => {
     const rootFolder = foldersRef.current.find((folder) => folder.id === rootFolderId && folder.rootFolderId === rootFolderId);
-    if (!rootFolder?.rootHandle) {
+    if (!rootFolder?.rootRef) {
       throw new Error("Open a writable Paperview folder before importing papers.");
     }
 
     const selectedWritableFolder = foldersRef.current.find(
-      (folder) => folder.id === selectedFolderId && folder.rootFolderId === rootFolderId && folder.directoryHandle
+      (folder) => folder.id === selectedFolderId && folder.rootFolderId === rootFolderId && folder.directoryRef
     );
     if (selectedWritableFolder) {
       return selectedWritableFolder;
@@ -376,11 +333,11 @@ export function useFolders({
     const existingImportedFolder = foldersRef.current.find(
       (folder) => folder.rootFolderId === rootFolderId && folder.relativePath === AGENT_IMPORTS_FOLDER_NAME
     );
-    if (existingImportedFolder?.directoryHandle) {
+    if (existingImportedFolder?.directoryRef) {
       return existingImportedFolder;
     }
 
-    const directoryHandle = await rootFolder.rootHandle.getDirectoryHandle(AGENT_IMPORTS_FOLDER_NAME, { create: true });
+    const directoryRef = await fileSystem.ensureDirectory(rootFolder.rootRef, AGENT_IMPORTS_FOLDER_NAME);
     const folderPath = buildFolderPath(rootFolder.name, AGENT_IMPORTS_FOLDER_NAME);
     const nextFolder = {
       id: makeStableId('f', folderPath),
@@ -388,14 +345,16 @@ export function useFolders({
       expanded: true,
       papers: existingImportedFolder?.papers || [],
       depth: 1,
-      directoryHandle,
-      rootHandle: rootFolder.rootHandle,
+      directoryRef,
+      rootRef: rootFolder.rootRef,
+      directoryHandle: directoryRef.handle || null,
+      rootHandle: rootFolder.rootRef.handle || null,
       rootFolderId,
       relativePath: AGENT_IMPORTS_FOLDER_NAME,
       folderPath,
     };
 
-    folderHandlesMapRef.current.set(nextFolder.id, rootFolder.rootHandle);
+    folderHandlesMapRef.current.set(nextFolder.id, rootFolder.rootRef);
     setFolders((prev) => {
       const existingIndex = prev.findIndex((folder) => folder.id === nextFolder.id);
       if (existingIndex >= 0) {
@@ -490,6 +449,8 @@ export function useFolders({
               expanded: true,
               papers: [paper],
               depth: 0,
+              directoryRef: null,
+              rootRef: null,
               directoryHandle: null,
               rootHandle: null,
               rootFolderId: uploadsId,
@@ -509,13 +470,8 @@ export function useFolders({
       }
 
       const targetFolder = await ensureImportedFolder(rootFolderId);
-      const fileName = await getAvailablePdfFileName(targetFolder.directoryHandle, result?.title || "Imported paper");
-      const fileHandle = await targetFolder.directoryHandle.getFileHandle(fileName, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(pdfBytes);
-      await writable.close();
-
-      const savedFile = await fileHandle.getFile();
+      const fileName = await getAvailablePdfFileName(targetFolder.directoryRef, result?.title || "Imported paper");
+      const savedFile = await fileSystem.writeFile(targetFolder.directoryRef, fileName, pdfBytes);
       const paper = {
         id: makeStableId('p', `${targetFolder.folderPath}/${fileName}`),
         name: stripPdfExtension(fileName),
@@ -529,7 +485,8 @@ export function useFolders({
         textProgress: 0,
         textError: null,
         textStatusText: "",
-        fileHandle,
+        fileRef: savedFile.fileRef,
+        fileHandle: savedFile.fileRef.handle || null,
         folderId: targetFolder.id,
         rootFolderId,
       };
@@ -566,16 +523,16 @@ export function useFolders({
     }
 
     const rootFolder = foldersRef.current.find((folder) => folder.id === rootFolderId && folder.rootFolderId === rootFolderId);
-    const dirHandle = rootFolder?.rootHandle || rootFolder?.directoryHandle;
-    if (!dirHandle) {
+    const rootRef = rootFolder?.rootRef;
+    if (!rootRef) {
       throw new Error("This workspace folder is not currently available.");
     }
 
-    const scannedFolders = await scanDirHandleRef.current(dirHandle);
+    const scannedFolders = await scanDirHandleRef.current(rootRef);
     for (const folder of scannedFolders) {
-      folderHandlesMapRef.current.set(folder.id, dirHandle);
+      folderHandlesMapRef.current.set(folder.id, rootRef);
     }
-    const snapshot = await readFolderSnapshot(dirHandle);
+    const snapshot = await readFolderSnapshot(rootRef);
     if (snapshot) await applyFolderSnapshot(snapshot);
 
     setFolders((prev) => mergeFoldersByRoot(prev, scannedFolders, rootFolderId));
@@ -610,13 +567,14 @@ export function useFolders({
   }, [hasWritableAgentContext, refreshRootFolderContents, selectedRootFolderId]);
 
   const handleOpenFolder = async () => {
-    if (typeof window.showDirectoryPicker !== 'function') return;
+    if (!fileSystem.canPickFolder()) return;
     try {
-      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      const flatFolders = await scanDirHandle(dirHandle);
+      const rootRef = await fileSystem.pickRoot();
+      if (!rootRef) return;
+      const flatFolders = await scanDirHandle(rootRef);
       const rootFolderId = flatFolders[0]?.rootFolderId || null;
-      for (const f of flatFolders) folderHandlesMapRef.current.set(f.id, dirHandle);
-      const snapshot = await readFolderSnapshot(dirHandle);
+      for (const f of flatFolders) folderHandlesMapRef.current.set(f.id, rootRef);
+      const snapshot = await readFolderSnapshot(rootRef);
       if (snapshot) await applyFolderSnapshot(snapshot);
       setFolders((prev) => (
         rootFolderId ? mergeFoldersByRoot(prev, flatFolders, rootFolderId) : prev
@@ -624,7 +582,12 @@ export function useFolders({
       setSelectedFolderId(flatFolders[0]?.id || null);
       setUpFolder(flatFolders[0]?.id || '');
       setCurrentView('library');
-      saveFolderHandle(dirHandle).catch(() => {});
+      if (rootRef.kind === "tauri") {
+        const record = serializeDesktopRoot(rootRef);
+        if (record) saveFolderRoot(record).catch(() => {});
+      } else {
+        saveFolderHandle(rootRef.handle).catch(() => {});
+      }
     } catch (err) {
       if (err.name !== 'AbortError') console.error('Open folder failed:', err);
     }
