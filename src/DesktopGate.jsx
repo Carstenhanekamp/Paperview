@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { isTauri } from "./platform/runtime";
 
 const FONT_URL =
   "https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,300;0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,300;1,7..72,400;1,7..72,500;1,7..72,600;1,7..72,700&display=swap";
@@ -304,7 +305,7 @@ export default function DesktopGate({ children }) {
     };
   }, []);
 
-  const shouldGate = narrow && !override;
+  const shouldGate = !isTauri() && narrow && !override;
   useInjectStyles();
 
   if (!shouldGate) return children;

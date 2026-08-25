@@ -102,8 +102,9 @@ async function fetchRepoSnapshot() {
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   Object.assign(process.env, env);
+  const isTauriBuild = mode === "tauri" || Boolean(process.env.TAURI_ENV_PLATFORM);
 
-  const repoSnapshot = await fetchRepoSnapshot();
+  const repoSnapshot = isTauriBuild ? null : await fetchRepoSnapshot();
 
   return {
     define: {
@@ -112,7 +113,7 @@ export default defineConfig(async ({ mode }) => {
     plugins: [
       react(),
       createDevApiPlugin(),
-      VitePWA({
+      !isTauriBuild && VitePWA({
         registerType: "autoUpdate",
         includeAssets: ["icon.svg", "apple-touch-icon.png"],
         manifest: {
@@ -145,6 +146,22 @@ export default defineConfig(async ({ mode }) => {
           ],
         },
       }),
-    ],
+    ].filter(Boolean),
+    server: {
+      port: 5173,
+      strictPort: true,
+      watch: {
+        ignored: ["**/src-tauri/**"],
+      },
+    },
+    clearScreen: false,
+    envPrefix: ["VITE_", "TAURI_ENV_*"],
+    build: isTauriBuild
+      ? {
+          target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
+          minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
+          sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
+        }
+      : undefined,
   };
 });

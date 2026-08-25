@@ -8,8 +8,11 @@ import LoginPage from './components/LoginPage';
 import { AuthProvider } from './AuthContext';
 import { WalletProvider } from './WalletContext';
 import DocumentTitle from './components/DocumentTitle';
+import { isTauri } from './platform/runtime';
 
 export default function App() {
+  const desktopApp = isTauri();
+
   return (
     <AuthProvider>
       <WalletProvider>
@@ -21,7 +24,7 @@ export default function App() {
           <Route path="/app" element={<DesktopGate><PaperviewApp /></DesktopGate>} />
           <Route path="/app/*" element={<DesktopGate><PaperviewApp /></DesktopGate>} />
         </Routes>
-        <Analytics />
+        {!desktopApp && <Analytics />}
       </WalletProvider>
     </AuthProvider>
   );

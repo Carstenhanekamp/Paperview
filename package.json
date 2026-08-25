@@ -24,19 +24,33 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:desktop:web": "vite --mode tauri",
     "build": "vite build",
+    "build:desktop:web": "vite build --mode tauri",
+    "dev:desktop": "tauri dev",
+    "build:desktop": "tauri build",
+    "tauri": "tauri",
     "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-deep-link": "^2.4.9",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-http": "^2.5.9",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "@vercel/analytics": "^2.0.1",
     "dexie": "^4.3.0",
+    "pdfjs-dist": "^6.2.108",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.18.2"
+    "react-router-dom": "^7.18.2",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^5.4.10",
     "vite-plugin-pwa": "^1.2.0",
