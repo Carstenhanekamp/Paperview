@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { IClose } from '../icons';
-import { clearRememberedApiKey } from '../apiKeyStorage';
 import { PROFILE_NAME_MAX } from '../profileOnboarding';
 
 export default function SettingsModal({
   apiKey,
   apiKeySource,
+  nativeKeychain,
   rememberedApiKeyAvailable,
   settingsKey,
   setSettingsKey,
@@ -29,7 +29,7 @@ export default function SettingsModal({
   handleRemoveApiKey,
   handleUnlockRememberedApiKey,
   handleSaveSettingsApiKey,
-  setRememberedApiKeyAvailable,
+  handleForgetRememberedApiKey,
   auth = null,
   wallet = null,
 }) {
@@ -242,9 +242,9 @@ export default function SettingsModal({
                         setSettingsError("");
                       }}
                     />
-                    <span>Remember this key on this device with passphrase encryption.</span>
+                    <span>{nativeKeychain ? "Remember this key securely in macOS Keychain." : "Remember this key on this device with passphrase encryption."}</span>
                   </label>
-                  {rememberApiKey && (
+                  {rememberApiKey && !nativeKeychain && (
                     <div className="settings-subfield">
                       <label className="settings-label">Encryption passphrase</label>
                       <div className="settings-input-wrap">
@@ -273,9 +273,9 @@ export default function SettingsModal({
             <>
               {rememberedApiKeyAvailable && (
                 <div className="settings-panel">
-                  <div className="settings-panel-title">Encrypted key saved on this device</div>
-                  <p className="settings-info">Enter the passphrase you used when saving it. The passphrase is not stored and cannot be recovered.</p>
-                  <div className="settings-input-wrap">
+                  <div className="settings-panel-title">{nativeKeychain ? "Key saved in macOS Keychain" : "Encrypted key saved on this device"}</div>
+                  <p className="settings-info">{nativeKeychain ? "Paperview can load this key using your macOS login keychain." : "Enter the passphrase you used when saving it. The passphrase is not stored and cannot be recovered."}</p>
+                  {!nativeKeychain && <div className="settings-input-wrap">
                     <input
                       className="settings-input"
                       type={unlockPassphraseVisible ? "text" : "password"}
@@ -290,17 +290,12 @@ export default function SettingsModal({
                     <button className="settings-toggle-vis" onClick={() => setUnlockPassphraseVisible((v) => !v)} type="button">
                       {unlockPassphraseVisible ? "Hide" : "Show"}
                     </button>
-                  </div>
+                  </div>}
                   <div className="settings-inline-actions">
                     <button className="btn-sec" type="button" onClick={handleUnlockRememberedApiKey} disabled={settingsBusy}>
-                      {settingsBusy ? "Unlocking..." : "Unlock"}
+                      {settingsBusy ? "Loading..." : (nativeKeychain ? "Load key" : "Unlock")}
                     </button>
-                    <button className="btn-sec" type="button" onClick={() => {
-                      clearRememberedApiKey();
-                      setRememberedApiKeyAvailable(false);
-                      setUnlockPassphrase("");
-                      setSettingsError("");
-                    }} disabled={settingsBusy}>Forget saved key</button>
+                    <button className="btn-sec" type="button" onClick={handleForgetRememberedApiKey} disabled={settingsBusy}>Forget saved key</button>
                   </div>
                 </div>
               )}
@@ -327,9 +322,9 @@ export default function SettingsModal({
                     setSettingsError("");
                   }}
                 />
-                <span>Remember this key on this device with passphrase encryption.</span>
+                <span>{nativeKeychain ? "Remember this key securely in macOS Keychain." : "Remember this key on this device with passphrase encryption."}</span>
               </label>
-              {rememberApiKey && (
+              {rememberApiKey && !nativeKeychain && (
                 <div className="settings-subfield">
                   <label className="settings-label">Encryption passphrase</label>
                   <div className="settings-input-wrap">
@@ -350,7 +345,7 @@ export default function SettingsModal({
               )}
             </>
           )}
-          <p className="settings-info">To use AI features, add your own OpenAI API key. By default it is kept in memory only. If you choose to remember it, Paperview stores an encrypted copy in this browser and you should only use that on trusted devices. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
+          <p className="settings-info">To use AI features, add your own OpenAI API key. By default it is kept in memory only. If you choose to remember it, Paperview stores it {nativeKeychain ? "in macOS Keychain" : "as an encrypted copy in this browser"}. We recommend setting a <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>spending limit</a> on your key.</p>
           {settingsError && <div className="settings-error">{settingsError}</div>}
         </div>
 

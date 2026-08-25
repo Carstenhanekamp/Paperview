@@ -61,8 +61,11 @@ import { useAgentSend } from './hooks/useAgentSend';
 import { useExplainSelection } from './hooks/useExplainSelection';
 import { usePaperMeta } from './hooks/usePaperMeta';
 import { useLibraryIndex } from './hooks/useLibraryIndex';
+import { getFileSystem } from './platform/fs';
+import { openExternalUrl } from './platform/external';
 
 export default function PaperviewApp() {
+  const canPickFolder = getFileSystem().canPickFolder();
   // Vite can strip mix-blend-mode from JSX <style>{CSS}</style>; inject critically for PDF highlights.
   useScopedStyles(
     'pv-pdf-highlight',
@@ -146,6 +149,7 @@ export default function PaperviewApp() {
   const {
     apiKey,
     apiKeySource,
+    nativeKeychain,
     rememberedApiKeyAvailable,
     showSettings,
     settingsKey,
@@ -170,7 +174,7 @@ export default function PaperviewApp() {
     handleRemoveApiKey,
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
-    setRememberedApiKeyAvailable,
+    handleForgetRememberedApiKey,
     applyInMemoryApiKey,
   } = useApiKey();
   const [edgeToast, setEdgeToast] = useState(false);
@@ -286,7 +290,7 @@ export default function PaperviewApp() {
   const totalPaperCount = folders.reduce((sum, folder) => sum + folder.papers.length, 0);
   const selectedRootFolderId = selectedFolder?.rootFolderId || null;
   const selectedRootFolder = folders.find((folder) => folder.id === selectedRootFolderId) || null;
-  const hasWritableAgentContext = Boolean(selectedRootFolder?.directoryHandle && selectedRootFolder?.rootHandle);
+  const hasWritableAgentContext = Boolean(selectedRootFolder?.directoryRef && selectedRootFolder?.rootRef);
   const browserAgentFolder = folders.find((folder) => folder.id === UPLOADS_FOLDER_ID) || null;
   const agentRootFolderId = hasWritableAgentContext
     ? selectedRootFolderId
@@ -785,6 +789,8 @@ export default function PaperviewApp() {
           expanded: true,
           papers: [],
           depth: 0,
+          directoryRef: null,
+          rootRef: null,
           directoryHandle: null,
           rootHandle: null,
           rootFolderId: UPLOADS_FOLDER_ID,
@@ -1174,7 +1180,7 @@ export default function PaperviewApp() {
             const localPaper = findWorkspacePaperForSource(agentWorkspacePapers, source);
             const openPdfInBrowser = () => {
               const targetUrl = normalizeAgentSourceUrl(source.pdfUrl || source.sourceUrl || "");
-              if (targetUrl) window.open(targetUrl, "_blank", "noopener,noreferrer");
+              if (targetUrl) openExternalUrl(targetUrl).catch(() => {});
             };
             const checkFolderForPaper = async () => {
               if (!selectedRootFolderId) return;
@@ -1315,6 +1321,8 @@ export default function PaperviewApp() {
             expanded: true,
             papers: [readyPaper],
             depth: 0,
+            directoryRef: null,
+            rootRef: null,
             directoryHandle: null,
             rootHandle: null,
             rootFolderId: uploadsId,
@@ -1636,7 +1644,7 @@ export default function PaperviewApp() {
                   <button
                     type="button"
                     className="topbar-btn primary"
-                    onClick={() => (typeof window.showDirectoryPicker === "function" ? setShowFolderPermModal(true) : setShowUpload(true))}
+                    onClick={() => (canPickFolder ? setShowFolderPermModal(true) : setShowUpload(true))}
                   >
                     Open folder
                   </button>
@@ -1700,7 +1708,7 @@ export default function PaperviewApp() {
                 getMeta={getMeta}
                 exportFolderBibtex={exportFolderBibtex}
                 extractPaperMetaWithAI={extractPaperMetaWithAI}
-                canPickFolder={typeof window.showDirectoryPicker === 'function'}
+                canPickFolder={canPickFolder}
                 apiKey={apiKey}
                 hasCredit={wallet.hasCredit}
                 onOpenFolder={() => setShowFolderPermModal(true)}
@@ -1874,7 +1882,7 @@ export default function PaperviewApp() {
             ) : (
               <EmptyReaderState
                 sidebarOpen={sidebarOpen}
-                canPickFolder={typeof window.showDirectoryPicker === 'function'}
+                canPickFolder={canPickFolder}
                 hasFolder={folders.some((folder) => folder.id !== UPLOADS_FOLDER_ID)}
                 apiKey={apiKey}
                 hasCredit={wallet.hasCredit}
@@ -1958,6 +1966,7 @@ export default function PaperviewApp() {
           <SettingsModal
             apiKey={apiKey}
             apiKeySource={apiKeySource}
+            nativeKeychain={nativeKeychain}
             rememberedApiKeyAvailable={rememberedApiKeyAvailable}
             settingsKey={settingsKey}
             setSettingsKey={setSettingsKey}
@@ -1980,7 +1989,7 @@ export default function PaperviewApp() {
             handleRemoveApiKey={handleRemoveApiKey}
             handleUnlockRememberedApiKey={handleUnlockRememberedApiKey}
             handleSaveSettingsApiKey={handleSaveSettingsApiKey}
-            setRememberedApiKeyAvailable={setRememberedApiKeyAvailable}
+            handleForgetRememberedApiKey={handleForgetRememberedApiKey}
             auth={auth}
             wallet={wallet}
           />

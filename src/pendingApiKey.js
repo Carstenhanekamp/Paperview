@@ -5,8 +5,9 @@
  * Deliberately NOT sessionStorage: apiKeyStorage.js keeps keys encrypted at
  * rest behind a passphrase, and clearLegacyStoredApiKey() exists specifically
  * to purge plaintext keys from web storage. A key parked in sessionStorage is
- * readable by any script on the origin — including the PDF.js and Tesseract.js
- * bundles we load from a CDN — for the life of the tab.
+ * readable by any script on the origin for the life of the tab. PDF.js and
+ * Tesseract are bundled locally, but avoiding plaintext web storage remains
+ * the correct boundary for every first- and third-party dependency.
  *
  * Module state lives as long as the JS context, which covers the SPA navigation
  * from /welcome to /app. A full reload drops it, which is the safe failure:

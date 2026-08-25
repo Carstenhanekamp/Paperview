@@ -1,0 +1,128 @@
+name: Tauri macOS
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/tauri-macos.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "rust-toolchain.toml"
+      - "scripts/**"
+      - "src/**"
+      - "src-tauri/**"
+      - "vite.config.js"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      signed_release:
+        description: Build a signed and notarized DMG
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify universal macOS bundle
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Lint native shell
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test native shell
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build unsigned universal app and DMG
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app,dmg --no-sign --ci
+        env:
+          VITE_PAPERVIEW_API_BASE_URL: ${{ vars.PAPERVIEW_API_BASE_URL }}
+          VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+
+      - name: Upload unsigned macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperview-macos-universal-unsigned
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Sign and notarize universal DMG
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.signed_release == true
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
+
+      - name: Build signed and notarized universal DMG
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app,dmg --ci
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+          VITE_PAPERVIEW_API_BASE_URL: ${{ vars.PAPERVIEW_API_BASE_URL }}
+          VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+
+      - name: Verify signature and notarization
+        run: |
+          APP_PATH="$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+
+      - name: Upload signed macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperview-macos-universal-signed
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error

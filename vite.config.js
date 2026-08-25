@@ -102,8 +102,9 @@ async function fetchRepoSnapshot() {
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   Object.assign(process.env, env);
+  const isTauriBuild = mode === "tauri" || Boolean(process.env.TAURI_ENV_PLATFORM);
 
-  const repoSnapshot = await fetchRepoSnapshot();
+  const repoSnapshot = isTauriBuild ? null : await fetchRepoSnapshot();
 
   return {
     define: {
@@ -112,7 +113,7 @@ export default defineConfig(async ({ mode }) => {
     plugins: [
       react(),
       createDevApiPlugin(),
-      VitePWA({
+      !isTauriBuild && VitePWA({
         registerType: "autoUpdate",
         includeAssets: ["icon.svg", "apple-touch-icon.png"],
         manifest: {
@@ -130,21 +131,28 @@ export default defineConfig(async ({ mode }) => {
           ],
         },
         workbox: {
-          // Hero/media assets are large and should not be precached (Workbox default max is 2 MiB).
-          globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+          // OCR assets are packaged for offline desktop/web use and exceed Workbox's 2 MiB default.
+          maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
+          globPatterns: ["**/*.{js,mjs,css,html,svg,png,woff2,gz}"],
           globIgnores: ["**/media/**"],
-          runtimeCaching: [
-            {
-              urlPattern: /^https:\/\/cdnjs\.cloudflare\.com\/.*/i,
-              handler: "CacheFirst",
-              options: {
-                cacheName: "cdn-cache",
-                expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              },
-            },
-          ],
         },
       }),
-    ],
+    ].filter(Boolean),
+    server: {
+      port: 5173,
+      strictPort: true,
+      watch: {
+        ignored: ["**/src-tauri/**"],
+      },
+    },
+    clearScreen: false,
+    envPrefix: ["VITE_", "TAURI_ENV_*"],
+    build: isTauriBuild
+      ? {
+          target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
+          minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
+          sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
+        }
+      : undefined,
   };
 });

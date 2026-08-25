@@ -8,12 +8,19 @@ import LoginPage from './components/LoginPage';
 import { AuthProvider } from './AuthContext';
 import { WalletProvider } from './WalletContext';
 import DocumentTitle from './components/DocumentTitle';
+import { isTauri } from './platform/runtime';
+import DesktopDeepLinkBridge from './components/DesktopDeepLinkBridge';
+import DesktopExternalLinks from './components/DesktopExternalLinks';
 
 export default function App() {
+  const desktopApp = isTauri();
+
   return (
     <AuthProvider>
       <WalletProvider>
         <DocumentTitle />
+        {desktopApp && <DesktopDeepLinkBridge />}
+        {desktopApp && <DesktopExternalLinks />}
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
@@ -21,7 +28,7 @@ export default function App() {
           <Route path="/app" element={<DesktopGate><PaperviewApp /></DesktopGate>} />
           <Route path="/app/*" element={<DesktopGate><PaperviewApp /></DesktopGate>} />
         </Routes>
-        <Analytics />
+        {!desktopApp && <Analytics />}
       </WalletProvider>
     </AuthProvider>
   );

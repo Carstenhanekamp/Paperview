@@ -42,6 +42,7 @@ import { extractPdfText, validatePdfBytes } from '../pdfUtils';
 import { mergePaperWithPayload, pickPaperPayload, stripPaperPayload } from '../paperPayloadUtils';
 import { IClose, IZoomIn, IZoomOut } from '../icons';
 import PdfViewer from '../PdfViewer';
+import { openExternalUrl } from '../platform/external';
 
 export function useAgentSend({
   agentInput,
@@ -320,7 +321,7 @@ export function useAgentSend({
         descriptor?.pdfUrl || descriptor?.pdf_url || descriptor?.sourceUrl || descriptor?.source_url || descriptor?.url || ""
       );
       if (fallbackUrl) {
-        window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+        openExternalUrl(fallbackUrl).catch(() => {});
       } else {
         throw error;
       }
@@ -1092,7 +1093,7 @@ export function useAgentSend({
               <button
                 className="chat-history-btn"
                 type="button"
-                onClick={() => window.open(previewSourceUrl, "_blank", "noopener,noreferrer")}
+                onClick={() => openExternalUrl(previewSourceUrl).catch(() => {})}
               >
                 Open source
               </button>
