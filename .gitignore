@@ -1,5 +1,6 @@
 node_modules
 dist
+public/vendor/tesseract/
 .env
 .env.*
 !.env.example

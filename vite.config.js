@@ -134,16 +134,6 @@ export default defineConfig(async ({ mode }) => {
           // Hero/media assets are large and should not be precached (Workbox default max is 2 MiB).
           globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
           globIgnores: ["**/media/**"],
-          runtimeCaching: [
-            {
-              urlPattern: /^https:\/\/cdnjs\.cloudflare\.com\/.*/i,
-              handler: "CacheFirst",
-              options: {
-                cacheName: "cdn-cache",
-                expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              },
-            },
-          ],
         },
       }),
     ].filter(Boolean),

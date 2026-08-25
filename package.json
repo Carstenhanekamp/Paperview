@@ -23,10 +23,11 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "vite",
-    "dev:desktop:web": "vite --mode tauri",
-    "build": "vite build",
-    "build:desktop:web": "vite build --mode tauri",
+    "sync:ocr-assets": "node scripts/sync-ocr-assets.mjs",
+    "dev": "npm run sync:ocr-assets && vite",
+    "dev:desktop:web": "npm run sync:ocr-assets && vite --mode tauri",
+    "build": "npm run sync:ocr-assets && vite build",
+    "build:desktop:web": "npm run sync:ocr-assets && vite build --mode tauri",
     "dev:desktop": "tauri dev",
     "build:desktop": "tauri build",
     "tauri": "tauri",
@@ -41,6 +42,7 @@
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tesseract.js-data/eng": "^1.0.0",
     "@vercel/analytics": "^2.0.1",
     "dexie": "^4.3.0",
     "pdfjs-dist": "^6.2.108",

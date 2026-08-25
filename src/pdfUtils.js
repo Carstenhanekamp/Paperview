@@ -1,31 +1,27 @@
 import { loadOcrPage, saveOcrPage, savePaperTextCache } from "./db";
 import { materializeFullText } from "./chatUtils";
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 
+let _pdfLibPromise = null;
 async function loadPdfJs() {
-  if (window.pdfjsLib) return window.pdfjsLib;
-  await new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-    s.onload = res;
-    s.onerror = rej;
-    document.head.appendChild(s);
-  });
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  return window.pdfjsLib;
+  if (!_pdfLibPromise) {
+    _pdfLibPromise = import("pdfjs-dist/legacy/build/pdf.mjs").then((pdfjsLib) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+      return pdfjsLib;
+    });
+  }
+  return _pdfLibPromise;
 }
 
+let _tesseractLibPromise = null;
 async function loadTesseract() {
-  if (window.Tesseract) return window.Tesseract;
-  await new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-    s.onload = res;
-    s.onerror = rej;
-    document.head.appendChild(s);
-  });
-  return window.Tesseract;
+  if (!_tesseractLibPromise) {
+    _tesseractLibPromise = import("tesseract.js").then((module) => module.default || module);
+  }
+  return _tesseractLibPromise;
 }
+
+const OCR_ASSET_BASE = `${import.meta.env.BASE_URL}vendor/tesseract`;
 
 let _tesseractWorker = null;
 let _tesseractWorkerBusy = 0;
@@ -57,7 +53,12 @@ function setOcrMemoryCache(cacheKey, record) {
 async function getTesseractWorker() {
   const Tesseract = await loadTesseract();
   if (!_tesseractWorker) {
-    _tesseractWorker = await Tesseract.createWorker("eng", 1, { logger: () => {} });
+    _tesseractWorker = await Tesseract.createWorker("eng", 1, {
+      logger: () => {},
+      workerPath: `${OCR_ASSET_BASE}/worker.min.js`,
+      corePath: `${OCR_ASSET_BASE}/tesseract-core-simd-lstm.wasm.js`,
+      langPath: `${OCR_ASSET_BASE}/lang`,
+    });
   }
   _tesseractWorkerBusy++;
   if (_tesseractWorkerTerminateTimer) {

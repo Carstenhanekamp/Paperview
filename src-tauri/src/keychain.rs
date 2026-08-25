@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 const SERVICE: &str = "com.paperview.app";
 
 #[cfg(target_os = "macos")]
