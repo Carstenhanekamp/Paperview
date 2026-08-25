@@ -300,23 +300,6 @@ export function useFolders({
     }).catch(() => {});
   }, []);
 
-  const getAvailablePdfFileName = useCallback(async (directoryRef, desiredFileName) => {
-    const safeFileName = ensurePdfFileName(desiredFileName);
-    const stem = stripPdfExtension(safeFileName);
-    let attempt = 0;
-
-    while (attempt < 1000) {
-      const candidate = attempt === 0 ? safeFileName : `${stem} (${attempt}).pdf`;
-      if (await fileSystem.fileExists(directoryRef, candidate)) {
-        attempt += 1;
-      } else {
-        return candidate;
-      }
-    }
-
-    throw new Error("Could not find an available filename for this import.");
-  }, []);
-
   const ensureImportedFolder = useCallback(async (rootFolderId) => {
     const rootFolder = foldersRef.current.find((folder) => folder.id === rootFolderId && folder.rootFolderId === rootFolderId);
     if (!rootFolder?.rootRef) {
@@ -339,8 +322,9 @@ export function useFolders({
 
     const directoryRef = await fileSystem.ensureDirectory(rootFolder.rootRef, AGENT_IMPORTS_FOLDER_NAME);
     const folderPath = buildFolderPath(rootFolder.name, AGENT_IMPORTS_FOLDER_NAME);
+    const identityPath = `${rootFolder.identityPath || rootFolder.folderPath}/${AGENT_IMPORTS_FOLDER_NAME}`;
     const nextFolder = {
-      id: makeStableId('f', folderPath),
+      id: makeStableId('f', identityPath),
       name: AGENT_IMPORTS_FOLDER_NAME,
       expanded: true,
       papers: existingImportedFolder?.papers || [],
@@ -352,6 +336,7 @@ export function useFolders({
       rootFolderId,
       relativePath: AGENT_IMPORTS_FOLDER_NAME,
       folderPath,
+      identityPath,
     };
 
     folderHandlesMapRef.current.set(nextFolder.id, rootFolder.rootRef);
@@ -470,10 +455,11 @@ export function useFolders({
       }
 
       const targetFolder = await ensureImportedFolder(rootFolderId);
-      const fileName = await getAvailablePdfFileName(targetFolder.directoryRef, result?.title || "Imported paper");
-      const savedFile = await fileSystem.writeFile(targetFolder.directoryRef, fileName, pdfBytes);
+      const desiredFileName = ensurePdfFileName(result?.title || "Imported paper");
+      const savedFile = await fileSystem.writeUniqueFile(targetFolder.directoryRef, desiredFileName, pdfBytes);
+      const fileName = savedFile.fileName;
       const paper = {
-        id: makeStableId('p', `${targetFolder.folderPath}/${fileName}`),
+        id: makeStableId('p', `${targetFolder.identityPath || targetFolder.folderPath}/${fileName}`),
         name: stripPdfExtension(fileName),
         authors: Array.isArray(result?.authors) ? result.authors.join(", ") : "",
         year: result?.year || "",
@@ -515,7 +501,7 @@ export function useFolders({
         [importKey]: { status: "error", label: message },
       }));
     }
-  }, [activeAgentChat?.rootFolderId, ensureImportedFolder, getAvailablePdfFileName, hasWritableAgentContext, openAgentPaper, selectedRootFolderId, setAgentImportStates, setSelectedFolderId, setUpFolder]);
+  }, [activeAgentChat?.rootFolderId, ensureImportedFolder, hasWritableAgentContext, openAgentPaper, selectedRootFolderId, setAgentImportStates, setSelectedFolderId, setUpFolder]);
 
   const refreshRootFolderContents = useCallback(async (rootFolderId) => {
     if (!rootFolderId || !scanDirHandleRef.current) {
@@ -618,7 +604,6 @@ export function useFolders({
     syncRootFolderSnapshot,
     applyFolderSnapshot,
     refreshRootFolderContents,
-    getAvailablePdfFileName,
     ensureImportedFolder,
     importPaperResult,
     handleOpenFolder,

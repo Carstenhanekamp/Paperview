@@ -1,4 +1,5 @@
 import {
+  buildFileNameCandidate,
   createFolderDescriptor,
   createPaperDescriptor,
   joinRelativePath,
@@ -121,6 +122,18 @@ export const webFileSystem = {
       size: file.size,
       lastModified: file.lastModified,
     };
+  },
+
+  async writeUniqueFile(directoryRef, desiredFileName, bytes) {
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const fileName = buildFileNameCandidate(desiredFileName, attempt);
+      if (await webFileSystem.fileExists(directoryRef, fileName)) continue;
+      return {
+        ...await webFileSystem.writeFile(directoryRef, fileName, bytes),
+        fileName,
+      };
+    }
+    throw new Error("Could not find an available filename for this import.");
   },
 
   async readFile(fileRef) {

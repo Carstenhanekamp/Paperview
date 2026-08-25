@@ -56,7 +56,7 @@ async function getTesseractWorker() {
     _tesseractWorker = await Tesseract.createWorker("eng", 1, {
       logger: () => {},
       workerPath: `${OCR_ASSET_BASE}/worker.min.js`,
-      corePath: `${OCR_ASSET_BASE}/tesseract-core-simd-lstm.wasm.js`,
+      corePath: `${OCR_ASSET_BASE}/core`,
       langPath: `${OCR_ASSET_BASE}/lang`,
     });
   }
@@ -201,14 +201,23 @@ async function runOcrPageWithTesseract(page, scale = 2) {
   const worker = await getTesseractWorker();
   let result;
   try {
-    result = await worker.recognize(canvas);
+    result = await worker.recognize(canvas, {}, { blocks: true });
   } finally {
     canvas.width = 0;
     canvas.height = 0;
     releaseTesseractWorker();
   }
 
-  return (result?.data?.lines || [])
+  return extractOcrSegments(result?.data);
+}
+
+export function extractOcrSegments(data) {
+  const nestedLines = (data?.blocks || [])
+    .flatMap((block) => block?.paragraphs || [])
+    .flatMap((paragraph) => paragraph?.lines || []);
+  const lines = data?.lines?.length ? data.lines : nestedLines;
+
+  return lines
     .flatMap((line) => {
       const words = (line.words || [])
         .filter((word) => String(word.text || "").trim())

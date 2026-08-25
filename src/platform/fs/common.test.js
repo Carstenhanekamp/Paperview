@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFileNameCandidate,
   createFolderDescriptor,
   createPaperDescriptor,
   joinRelativePath,
@@ -33,6 +34,34 @@ describe("platform file references", () => {
     expect(paper.name).toBe("Example");
     expect(paper.folderId).toBe(folder.id);
     expect(paper.rootFolderId).toBe(folder.rootFolderId);
+  });
+
+  it("keeps same-named native roots and their papers distinct", () => {
+    const makeFolder = (rootIdentity) => createFolderDescriptor({
+      rootName: "Papers",
+      rootIdentity,
+      directoryRef: { kind: "tauri", path: rootIdentity },
+      rootRef: { kind: "tauri", path: rootIdentity, name: "Papers" },
+    });
+    const first = makeFolder("/Users/alice/Papers");
+    const second = makeFolder("/Volumes/archive/Papers");
+
+    expect(first.id).not.toBe(second.id);
+    expect(first.rootFolderId).not.toBe(second.rootFolderId);
+    expect(createPaperDescriptor({
+      fileName: "Shared.pdf",
+      folder: first,
+      fileRef: {},
+    }).id).not.toBe(createPaperDescriptor({
+      fileName: "Shared.pdf",
+      folder: second,
+      fileRef: {},
+    }).id);
+  });
+
+  it("builds collision-safe filename candidates", () => {
+    expect(buildFileNameCandidate("Paper.pdf", 0)).toBe("Paper.pdf");
+    expect(buildFileNameCandidate("Paper.pdf", 2)).toBe("Paper (2).pdf");
   });
 
   it("serializes only desktop roots", () => {

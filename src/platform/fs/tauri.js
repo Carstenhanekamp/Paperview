@@ -1,6 +1,7 @@
 import { basename, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  buildFileNameCandidate,
   exists,
   mkdir,
   readDir,
@@ -33,6 +34,7 @@ async function scanDirectory(rootRef, directoryPath, relativePath = "", depth = 
   };
   const folder = createFolderDescriptor({
     rootName: rootRef.name,
+    rootIdentity: rootRef.path,
     relativePath,
     depth,
     directoryRef,
@@ -121,6 +123,30 @@ export const tauriFileSystem = {
       size: info.size,
       lastModified: info.mtime?.getTime() ?? Date.now(),
     };
+  },
+
+  async writeUniqueFile(directoryRef, desiredFileName, bytes) {
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const fileName = buildFileNameCandidate(desiredFileName, attempt);
+      const path = await join(directoryRef.path, fileName);
+      if (await exists(path)) continue;
+      try {
+        await writeFile(path, bytes, { createNew: true });
+        const info = await stat(path);
+        return {
+          fileName,
+          fileRef: { kind: "tauri", path, name: fileName },
+          size: info.size,
+          lastModified: info.mtime?.getTime() ?? Date.now(),
+        };
+      } catch (error) {
+        if (/already exists|file exists|os error 17/i.test(String(error?.message || error))) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error("Could not find an available filename for this import.");
   },
 
   async readFile(fileRef) {

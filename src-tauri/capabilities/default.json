@@ -23,7 +23,8 @@
         "https://*"
       ]
     },
-    "opener:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     "deep-link:default"
   ]
 }

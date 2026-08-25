@@ -16,8 +16,17 @@ export function joinRelativePath(...parts) {
   return normalizeRelativePath(parts.filter(Boolean).join("/"));
 }
 
+export function buildFileNameCandidate(fileName, attempt) {
+  if (!attempt) return fileName;
+  const dot = fileName.lastIndexOf(".");
+  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+  const extension = dot > 0 ? fileName.slice(dot) : "";
+  return `${stem} (${attempt})${extension}`;
+}
+
 export function createFolderDescriptor({
   rootName,
+  rootIdentity = rootName,
   relativePath = "",
   depth = 0,
   directoryRef,
@@ -26,9 +35,12 @@ export function createFolderDescriptor({
 }) {
   const normalizedPath = normalizeRelativePath(relativePath);
   const folderPath = buildFolderPath(rootName, normalizedPath);
-  const rootFolderId = makeStableId("f", buildFolderPath(rootName));
+  const usesLegacyIdentity = !rootIdentity || rootIdentity === rootName;
+  const rootKey = usesLegacyIdentity ? buildFolderPath(rootName) : String(rootIdentity);
+  const identityPath = normalizedPath ? `${rootKey}/${normalizedPath}` : rootKey;
+  const rootFolderId = makeStableId("f", rootKey);
   return {
-    id: makeStableId("f", folderPath),
+    id: makeStableId("f", identityPath),
     name: normalizedPath.split("/").filter(Boolean).pop() || rootName,
     expanded: true,
     papers,
@@ -38,12 +50,13 @@ export function createFolderDescriptor({
     rootFolderId,
     relativePath: normalizedPath,
     folderPath,
+    identityPath,
   };
 }
 
 export function createPaperDescriptor({ fileName, folder, fileRef }) {
   return {
-    id: makeStableId("p", `${folder.folderPath}/${fileName}`),
+    id: makeStableId("p", `${folder.identityPath || folder.folderPath}/${fileName}`),
     name: stripPdfExtension(fileName),
     authors: "",
     year: "",
