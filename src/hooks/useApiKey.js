@@ -8,11 +8,20 @@ import {
   rememberApiKeyEncrypted,
   unlockRememberedApiKey,
 } from '../apiKeyStorage';
+import {
+  deleteNativeApiKey,
+  loadNativeApiKey,
+  saveNativeApiKey,
+  usesNativeKeychain,
+} from '../platform/secrets';
 
 export function useApiKey() {
+  const nativeKeychain = usesNativeKeychain();
   const [apiKey, setApiKey] = useState(() => ENV_API_KEY);
   const [apiKeySource, setApiKeySource] = useState(() => (ENV_API_KEY ? "env" : "none"));
-  const [rememberedApiKeyAvailable, setRememberedApiKeyAvailable] = useState(() => hasRememberedApiKey());
+  const [rememberedApiKeyAvailable, setRememberedApiKeyAvailable] = useState(
+    () => !nativeKeychain && hasRememberedApiKey()
+  );
 
   const [showSettings, setShowSettings] = useState(false);
   const [settingsKey, setSettingsKey] = useState('');
@@ -27,15 +36,25 @@ export function useApiKey() {
 
   useEffect(() => {
     clearLegacyStoredApiKey();
-    setRememberedApiKeyAvailable(hasRememberedApiKey());
-    if (!ENV_API_KEY) {
-      const fromWelcome = takePendingApiKey();
-      if (fromWelcome) {
-        setApiKey(fromWelcome);
-        setApiKeySource('memory');
-      }
+    const fromWelcome = !ENV_API_KEY ? takePendingApiKey() : null;
+    if (nativeKeychain) {
+      loadNativeApiKey()
+        .then((remembered) => {
+          setRememberedApiKeyAvailable(Boolean(remembered));
+          if (remembered && !ENV_API_KEY && !fromWelcome) {
+            setApiKey(remembered);
+            setApiKeySource("remembered");
+          }
+        })
+        .catch(() => setRememberedApiKeyAvailable(false));
+    } else {
+      setRememberedApiKeyAvailable(hasRememberedApiKey());
     }
-  }, []);
+    if (fromWelcome) {
+      setApiKey(fromWelcome);
+      setApiKeySource('memory');
+    }
+  }, [nativeKeychain]);
 
   /**
    * Adopt a key for this session only (no storage). Keeps apiKey and
@@ -71,15 +90,33 @@ export function useApiKey() {
     resetSettingsInputs();
   }, [resetSettingsInputs, settingsBusy]);
 
-  const handleRemoveApiKey = useCallback(() => {
+  const handleRemoveApiKey = useCallback(async () => {
     setApiKey("");
     setApiKeySource("none");
-    clearRememberedApiKey();
+    if (nativeKeychain) await deleteNativeApiKey().catch(() => {});
+    else clearRememberedApiKey();
     setRememberedApiKeyAvailable(false);
     resetSettingsInputs();
-  }, [resetSettingsInputs]);
+  }, [nativeKeychain, resetSettingsInputs]);
 
   const handleUnlockRememberedApiKey = useCallback(async () => {
+    if (nativeKeychain) {
+      setSettingsBusy(true);
+      setSettingsError("");
+      try {
+        const remembered = await loadNativeApiKey();
+        if (!remembered) throw new Error("No saved key was found.");
+        setApiKey(remembered);
+        setApiKeySource("remembered");
+        setShowSettings(false);
+        resetSettingsInputs();
+      } catch (error) {
+        setSettingsError(error?.message || "Could not read the key from macOS Keychain.");
+      } finally {
+        setSettingsBusy(false);
+      }
+      return;
+    }
     const passphrase = unlockPassphrase.trim();
     if (!passphrase) {
       setSettingsError("Enter the passphrase used to remember this key.");
@@ -98,7 +135,7 @@ export function useApiKey() {
     } finally {
       setSettingsBusy(false);
     }
-  }, [resetSettingsInputs, unlockPassphrase]);
+  }, [nativeKeychain, resetSettingsInputs, unlockPassphrase]);
 
   const handleSaveSettingsApiKey = useCallback(async () => {
     const trimmed = settingsKey.trim();
@@ -107,7 +144,7 @@ export function useApiKey() {
       setSettingsError("Enter an OpenAI API key first.");
       return;
     }
-    if (rememberApiKey && passphrase.length < 8) {
+    if (rememberApiKey && !nativeKeychain && passphrase.length < 8) {
       setSettingsError("Use at least 8 characters for the encryption passphrase.");
       return;
     }
@@ -115,11 +152,13 @@ export function useApiKey() {
     setSettingsError("");
     try {
       if (rememberApiKey) {
-        await rememberApiKeyEncrypted(trimmed, passphrase);
+        if (nativeKeychain) await saveNativeApiKey(trimmed);
+        else await rememberApiKeyEncrypted(trimmed, passphrase);
         setRememberedApiKeyAvailable(true);
         setApiKeySource("remembered");
       } else {
-        clearRememberedApiKey();
+        if (nativeKeychain) await deleteNativeApiKey().catch(() => {});
+        else clearRememberedApiKey();
         setRememberedApiKeyAvailable(false);
         setApiKeySource("memory");
       }
@@ -131,11 +170,20 @@ export function useApiKey() {
     } finally {
       setSettingsBusy(false);
     }
-  }, [rememberApiKey, resetSettingsInputs, settingsKey, settingsPassphrase]);
+  }, [nativeKeychain, rememberApiKey, resetSettingsInputs, settingsKey, settingsPassphrase]);
+
+  const handleForgetRememberedApiKey = useCallback(async () => {
+    if (nativeKeychain) await deleteNativeApiKey().catch(() => {});
+    else clearRememberedApiKey();
+    setRememberedApiKeyAvailable(false);
+    setUnlockPassphrase("");
+    setSettingsError("");
+  }, [nativeKeychain]);
 
   return {
     apiKey,
     apiKeySource,
+    nativeKeychain,
     rememberedApiKeyAvailable,
     showSettings,
     settingsKey,
@@ -160,6 +208,7 @@ export function useApiKey() {
     handleRemoveApiKey,
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
+    handleForgetRememberedApiKey,
     setRememberedApiKeyAvailable,
     applyInMemoryApiKey,
   };

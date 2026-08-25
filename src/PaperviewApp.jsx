@@ -62,6 +62,7 @@ import { useExplainSelection } from './hooks/useExplainSelection';
 import { usePaperMeta } from './hooks/usePaperMeta';
 import { useLibraryIndex } from './hooks/useLibraryIndex';
 import { getFileSystem } from './platform/fs';
+import { openExternalUrl } from './platform/external';
 
 export default function PaperviewApp() {
   const canPickFolder = getFileSystem().canPickFolder();
@@ -148,6 +149,7 @@ export default function PaperviewApp() {
   const {
     apiKey,
     apiKeySource,
+    nativeKeychain,
     rememberedApiKeyAvailable,
     showSettings,
     settingsKey,
@@ -172,7 +174,7 @@ export default function PaperviewApp() {
     handleRemoveApiKey,
     handleUnlockRememberedApiKey,
     handleSaveSettingsApiKey,
-    setRememberedApiKeyAvailable,
+    handleForgetRememberedApiKey,
     applyInMemoryApiKey,
   } = useApiKey();
   const [edgeToast, setEdgeToast] = useState(false);
@@ -1178,7 +1180,7 @@ export default function PaperviewApp() {
             const localPaper = findWorkspacePaperForSource(agentWorkspacePapers, source);
             const openPdfInBrowser = () => {
               const targetUrl = normalizeAgentSourceUrl(source.pdfUrl || source.sourceUrl || "");
-              if (targetUrl) window.open(targetUrl, "_blank", "noopener,noreferrer");
+              if (targetUrl) openExternalUrl(targetUrl).catch(() => {});
             };
             const checkFolderForPaper = async () => {
               if (!selectedRootFolderId) return;
@@ -1964,6 +1966,7 @@ export default function PaperviewApp() {
           <SettingsModal
             apiKey={apiKey}
             apiKeySource={apiKeySource}
+            nativeKeychain={nativeKeychain}
             rememberedApiKeyAvailable={rememberedApiKeyAvailable}
             settingsKey={settingsKey}
             setSettingsKey={setSettingsKey}
@@ -1986,7 +1989,7 @@ export default function PaperviewApp() {
             handleRemoveApiKey={handleRemoveApiKey}
             handleUnlockRememberedApiKey={handleUnlockRememberedApiKey}
             handleSaveSettingsApiKey={handleSaveSettingsApiKey}
-            setRememberedApiKeyAvailable={setRememberedApiKeyAvailable}
+            handleForgetRememberedApiKey={handleForgetRememberedApiKey}
             auth={auth}
             wallet={wallet}
           />

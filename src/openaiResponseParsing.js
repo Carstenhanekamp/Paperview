@@ -1,4 +1,6 @@
 import { OPENAI_PROXY_ENDPOINT, REMOTE_PDF_PROXY_ENDPOINT } from './constants';
+import { fetchExternal, fetchHostedApi } from './platform/http';
+import { isTauri } from './platform/runtime';
 
 // Escape literal newlines/carriage-returns that appear inside JSON string values.
 // Models sometimes output unescaped newlines inside strings, making the JSON invalid.
@@ -20,8 +22,19 @@ export function sanitizeJsonNewlines(str) {
 
 // Fetch a URL, preferring the app backend and falling back to browser fetches when needed.
 export async function fetchWithCorsProxy(url) {
+  if (isTauri()) {
+    try {
+      const directResponse = await fetchExternal(url, {
+        headers: { Accept: "application/pdf" },
+      });
+      if (directResponse.ok) return directResponse;
+    } catch {
+      // Fall through to the hosted SSRF-protected proxy.
+    }
+  }
+
   try {
-    const proxyResponse = await fetch(`${REMOTE_PDF_PROXY_ENDPOINT}?url=${encodeURIComponent(url)}`, {
+    const proxyResponse = await fetchHostedApi(`${REMOTE_PDF_PROXY_ENDPOINT}?url=${encodeURIComponent(url)}`, {
       headers: {
         Accept: "application/pdf",
       },
@@ -40,7 +53,7 @@ export async function fetchWithCorsProxy(url) {
 
   let directError = null;
   try {
-    const res = await fetch(url);
+    const res = await fetchExternal(url);
     if (res.ok) return res;
     // Non-2xx but not a CORS block — throw so the proxy isn't used needlessly
     directError = new Error(`Remote PDF download failed (${res.status}).`);
@@ -49,7 +62,7 @@ export async function fetchWithCorsProxy(url) {
     directError = err;
   }
   const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-  const res = await fetch(proxyUrl);
+  const res = await fetchExternal(proxyUrl);
   if (!res.ok) throw directError || new Error(`Remote PDF download failed (${res.status}).`);
   return res;
 }
@@ -198,7 +211,7 @@ export async function requestOpenAIResponse(apiKey, payload, options = {}) {
       proxyHeaders["x-openai-api-key"] = apiKey;
     }
 
-    const proxyResponse = await fetch(OPENAI_PROXY_ENDPOINT, {
+    const proxyResponse = await fetchHostedApi(OPENAI_PROXY_ENDPOINT, {
       method: "POST",
       headers: proxyHeaders,
       body: JSON.stringify(payload),
@@ -285,7 +298,7 @@ export async function requestOpenAIResponse(apiKey, payload, options = {}) {
     );
   }
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
+  const res = await fetchExternal("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

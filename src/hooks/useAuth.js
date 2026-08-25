@@ -5,6 +5,8 @@ import {
   profileNeedsOnboarding,
   sanitizeProfileName,
 } from '../profileOnboarding';
+import { buildDesktopAuthRedirect } from '../platform/deepLinks';
+import { isTauri } from '../platform/runtime';
 
 async function fetchProfile(supabase, userId) {
   const { data, error } = await supabase
@@ -164,10 +166,13 @@ export function useAuth() {
     setAuthBusy(true);
     setAuthError('');
     try {
-      const redirectTo = buildWelcomeRedirectUrl(window.location.origin, {
+      const redirectOptions = {
         intent: options.intent,
         next: options.next || '/app',
-      });
+      };
+      const redirectTo = isTauri()
+        ? buildDesktopAuthRedirect(redirectOptions)
+        : buildWelcomeRedirectUrl(window.location.origin, redirectOptions);
       const { error } = await supabase.auth.signInWithOtp({
         email: trimmed,
         options: {

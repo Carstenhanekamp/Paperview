@@ -16,6 +16,7 @@ import { addUsageTotals, createUsageTotals, getUsageBreakdown, formatTokenCount,
 import { formatEur } from '../walletCredits';
 import { resolveContextPapersForQuery, CORPUS_TOP_K, mapCitationFileToPaper } from '../corpusRetrieve';
 import { displayPaperTitle } from '../biblioUtils';
+import { openExternalUrl } from '../platform/external';
 
 function paperDisplayName(paper, getMeta) {
   if (!paper) return 'Unknown';
@@ -399,7 +400,7 @@ export function useChatSend({
         }).catch(() => {});
         return;
       }
-      if (sourceUrl) window.open(sourceUrl, "_blank", "noopener,noreferrer");
+      if (sourceUrl) openExternalUrl(sourceUrl).catch(() => {});
       return;
     }
 
