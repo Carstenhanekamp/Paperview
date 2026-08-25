@@ -1,5 +1,5 @@
 #[cfg(target_os = "macos")]
-const SERVICE: &str = "com.paperview.app";
+const SERVICE: &str = "com.carstenhanekamp.paperview";
 #[cfg(target_os = "macos")]
 const ACCOUNT: &str = "openai-api-key";
 
