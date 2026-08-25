@@ -131,8 +131,9 @@ export default defineConfig(async ({ mode }) => {
           ],
         },
         workbox: {
-          // Hero/media assets are large and should not be precached (Workbox default max is 2 MiB).
-          globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+          // OCR assets are packaged for offline desktop/web use and exceed Workbox's 2 MiB default.
+          maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
+          globPatterns: ["**/*.{js,mjs,css,html,svg,png,woff2,gz}"],
           globIgnores: ["**/media/**"],
         },
       }),
